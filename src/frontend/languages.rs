@@ -21,10 +21,18 @@ pub enum SourceLanguage {
     Zig,
     Sql,
     Bash,
+    GoMod,
 }
 
 impl SourceLanguage {
     pub fn from_path(path: &str) -> Option<Self> {
+        let basename = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path);
+        if basename == "go.mod" {
+            return Some(Self::GoMod);
+        }
         let ext = path.rsplit('.').next()?;
         match ext {
             "rs" => Some(Self::Rust),
@@ -69,6 +77,7 @@ impl SourceLanguage {
             Self::Zig => tree_sitter_zig::LANGUAGE.into(),
             Self::Sql => tree_sitter_sequel::LANGUAGE.into(),
             Self::Bash => tree_sitter_bash::LANGUAGE.into(),
+            Self::GoMod => tree_sitter_gomod_orchard::LANGUAGE.into(),
         }
     }
 
@@ -92,6 +101,7 @@ impl SourceLanguage {
             Self::Zig => "zig",
             Self::Sql => "sql",
             Self::Bash => "bash",
+            Self::GoMod => "gomod",
         }
     }
 }
@@ -102,6 +112,11 @@ pub fn supported_extensions() -> &'static [&'static str] {
         "tsx", "cpp", "cc", "cxx", "hpp", "hh", "java", "cs", "swift", "kt", "kts", "zig", "sql",
         "sh", "bash",
     ]
+}
+
+/// Basename paths parsed with a dedicated frontend (not extension-based).
+pub fn supported_special_paths() -> &'static [&'static str] {
+    &["go.mod"]
 }
 
 /// Paths that are intentionally stored as text blobs without a user-facing warning.
@@ -228,6 +243,14 @@ mod tests {
         assert_eq!(
             SourceLanguage::from_path("script.sh"),
             Some(SourceLanguage::Bash)
+        );
+        assert_eq!(
+            SourceLanguage::from_path("go.mod"),
+            Some(SourceLanguage::GoMod)
+        );
+        assert_eq!(
+            SourceLanguage::from_path("subdir/go.mod"),
+            Some(SourceLanguage::GoMod)
         );
         assert_eq!(
             SourceLanguage::from_path("header.h"),

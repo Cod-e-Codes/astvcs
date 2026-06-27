@@ -27,16 +27,17 @@ Add the `tree-sitter-<lang>` dependency. Pin a crates.io version that builds wit
 
 - Add a variant.
 - Map extensions in `from_path` (case-sensitive; use substring after the last `.`).
+- For basename-only manifests (for example `go.mod`), match `file_name()` before the extension rule and list the path in `supported_special_paths()`.
 - Return the grammar in `tree_sitter_language()`.
 - Extend unit tests in the same file for extension detection.
 
 ### 3. Translator (`treesitter.rs`)
 
-Wire the grammar into the existing visitor. Reuse `NodeKind` mappings where the AST shape matches an existing language. Add kind mappings only when tree-sitter node types differ.
+Wire the grammar into the existing visitor. Reuse `NodeKind` mappings where the AST shape matches an existing language. Add kind mappings only when tree-sitter node types differ. Leading trivia gaps use the previous sibling's rightmost leaf end byte (see `last_leaf_end_byte` in `treesitter.rs`).
 
 ### 4. Public API (`lib.rs`)
 
-Add the extension string to `supported_extensions()`.
+Add the extension string to `supported_extensions()`, or the basename to `supported_special_paths()` when there is no stable extension.
 
 ### 5. Docs
 
@@ -44,7 +45,7 @@ Add the extension and language to the table in [docs/architecture.md](../../../d
 
 ### 6. Integration test (`tests/integration.rs`)
 
-Add a `(path, source)` sample to `parse_all_supported_languages`. Every extension from `supported_extensions()` must have a sample or the test fails.
+Add a `(path, source)` sample to `parse_all_supported_languages`. Every extension from `supported_extensions()` and every path from `supported_special_paths()` must have a sample or the test fails.
 
 Example entry:
 
@@ -69,5 +70,5 @@ cargo clippy --all-targets --all-features -- -D warnings
 Round-trip check when unparser coverage exists:
 
 ```powershell
-cargo test rust_unparse_roundtrip
+cargo test rust_unparse_roundtrip go_unparse_roundtrip
 ```

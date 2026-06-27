@@ -65,6 +65,23 @@ fn last_child(node: TsNode) -> Option<TsNode> {
     last
 }
 
+/// End byte of the rightmost leaf under `node`.
+///
+/// Named tree-sitter nodes often extend their span through trailing whitespace
+/// that belongs before a following sibling (for example Go `statement_list`
+/// through the newline before `}`). Leading trivia must start after that leaf,
+/// not after the named node's extended end byte.
+fn last_leaf_end_byte(mut node: TsNode) -> usize {
+    loop {
+        let mut cursor = node.walk();
+        if cursor.goto_last_child() {
+            node = cursor.node();
+        } else {
+            return node.end_byte();
+        }
+    }
+}
+
 fn translate(
     source: &str,
     ts_node: TsNode,
@@ -91,7 +108,7 @@ fn translate(
         loop {
             let child_ts = cursor.node();
             let leading_start = if let Some(prev) = child_ts.prev_sibling() {
-                prev.end_byte()
+                last_leaf_end_byte(prev)
             } else {
                 ts_node.start_byte()
             };
@@ -149,6 +166,13 @@ mod tests {
     fn parses_javascript() {
         let src = "function add(a, b) { return a + b; }\n";
         let graph = parse_language(SourceLanguage::JavaScript, src).unwrap();
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_go_mod() {
+        let src = "module example.com/demo\n\ngo 1.22\n";
+        let graph = parse_source("go.mod", src).unwrap();
         graph.validate().unwrap();
     }
 

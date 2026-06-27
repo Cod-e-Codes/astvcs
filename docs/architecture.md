@@ -33,6 +33,7 @@ Supported extensions are parsed with tree-sitter into an `AstGraph` DAG. Each no
 | `.py`, `.pyw` | Python |
 | `.js`, `.mjs`, `.cjs` | JavaScript |
 | `.go` | Go |
+| `go.mod` | Go module manifest |
 | `.c`, `.h` | C |
 | `.json` | JSON |
 | `.toml` | TOML |
@@ -52,7 +53,7 @@ All other paths use line-oriented text blob storage. Parse failures on supported
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
-Checkout and merge call `materialize_state` to write the state manifest to disk and sync `index.json`. AST materialization uses trivia-aware unparsing so whitespace and comments from the original parse are preserved through record, merge, and checkout.
+Checkout and merge call `materialize_state` to write the state manifest to disk and sync `index.json`. AST materialization uses trivia-aware unparsing: leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte.
 
 ## Structural diff
 
@@ -142,9 +143,10 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 
 | Test | What it guards |
 |------|----------------|
-| `parse_all_supported_languages` | Every `supported_extensions()` entry parses and validates |
-| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial `EditPayload` diff, apply, unparse, re-parse: no structural drift; text matches canonical `unparse` of the target graph (Rust, Python, JS, JSON, TS, Go) |
+| `parse_all_supported_languages` | Every `supported_extensions()` entry and `supported_special_paths()` basename parses and validates |
+| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial `EditPayload` diff, apply, unparse, re-parse: no structural drift; text matches edited source (Rust, Python, JS, JSON, TS, Go with multiline block returns) |
 | `rust_unparse_roundtrip_via_repo` | Record and reload preserves Rust source bytes |
+| `go_unparse_roundtrip_via_repo` | Record, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Sibling literal merge and rename conflicts |
 

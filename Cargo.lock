@@ -88,6 +88,7 @@ dependencies = [
  "tree-sitter-c-sharp",
  "tree-sitter-cpp",
  "tree-sitter-go",
+ "tree-sitter-gomod-orchard",
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-json",
@@ -1769,6 +1770,16 @@ name = "tree-sitter-go"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-gomod-orchard"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8755c634adc6dafdd0c622920be61facd377b6583949ff7904eee577ce01645d"
 dependencies = [
  "cc",
  "tree-sitter-language",

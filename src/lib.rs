@@ -12,7 +12,7 @@ pub use diff::TextEdit;
 pub use diff::{DiffResult, diff_graphs, diff_text};
 pub use frontend::{
     FileContent, SourceLanguage, TextBlob, parse_language, parse_rust, parse_source,
-    parse_text_or_blob, supported_extensions,
+    parse_text_or_blob, supported_extensions, supported_special_paths,
 };
 pub use graph::{AstGraph, Mutation, Node, NodeId, NodeKind, TriviaSlot};
 pub use merge::{

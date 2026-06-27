@@ -10,8 +10,9 @@
 | `history_walk_and_log_order` | Timeline ordering |
 | `blob_deduplication_across_states` | Content-addressed storage |
 | `rust_unparse_roundtrip_via_repo` | Parse, record, checkout round-trip |
-| `parse_all_supported_languages` | Every supported extension parses |
-| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural and textual stability (Rust, Python, JS, JSON, TS, Go) |
+| `go_unparse_roundtrip_via_repo` | Go parse, record, checkout round-trip (block closing newlines) |
+| `parse_all_supported_languages` | Every supported extension and special path parses |
+| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural stability and text matches edited source (Rust, Python, JS, JSON, TS, Go) |
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
 | `merge_demo_add_add_and_deletion` | Add/add and deletion cases |

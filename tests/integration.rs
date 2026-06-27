@@ -435,6 +435,24 @@ fn blob_deduplication_across_states() {
 }
 
 #[test]
+fn go_unparse_roundtrip_via_repo() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    let src = "package main\n\nimport \"fmt\"\n\nfunc greet(name string) string {\n    return fmt.Sprintf(\"Hi, %s!\", name)\n}\n\nfunc main() {\n    fmt.Println(greet(\"world\"))\n}\n";
+    fs::write(dir.path().join("hello.go"), src).unwrap();
+    let id = repo.record("hello").unwrap().state_id;
+    let files = repo.load_state_files(&id).unwrap();
+    if let astvcs::FileContent::Ast(graph) = &files["hello.go"] {
+        assert_eq!(unparse(graph).as_bytes(), src.as_bytes());
+    } else {
+        panic!("expected ast");
+    }
+    repo.checkout_branch("main").unwrap();
+    let disk = fs::read_to_string(dir.path().join("hello.go")).unwrap();
+    assert_eq!(normalize_newlines(&disk), normalize_newlines(src));
+}
+
+#[test]
 fn rust_unparse_roundtrip_via_repo() {
     let dir = TempDir::new().unwrap();
     let repo = Repo::init(dir.path()).unwrap();
@@ -459,6 +477,7 @@ fn parse_all_supported_languages() {
         ("index.mjs", "export function main() {}\n"),
         ("index.cjs", "module.exports = {};\n"),
         ("main.go", "package main\nfunc main() {}\n"),
+        ("go.mod", "module example.com/demo\n\ngo 1.22\n"),
         ("main.c", "int main() { return 0; }\n"),
         ("main.h", "int x;\n"),
         ("data.json", "{\"k\": 1}\n"),
@@ -499,6 +518,13 @@ fn parse_all_supported_languages() {
         assert!(
             covered.contains(ext),
             "parse sample missing extension: {ext}"
+        );
+    }
+    for path in astvcs::supported_special_paths() {
+        let ext = path.rsplit('.').next().unwrap_or(path);
+        assert!(
+            covered.contains(ext),
+            "parse sample missing special path: {path}"
         );
     }
 }
@@ -606,8 +632,8 @@ fn assert_edit_roundtrip(path: &str, before: &str, after: &str) {
     );
     assert_eq!(
         normalize_newlines(&text),
-        normalize_newlines(&unparse(&target)),
-        "{path}: roundtrip text should match canonical unparse of target"
+        normalize_newlines(after),
+        "{path}: roundtrip text should match edited source"
     );
 }
 
@@ -637,8 +663,8 @@ fn edit_roundtrip_preserves_structure_across_languages() {
         ),
         (
             "main.go",
-            "package main\n\nfunc foo() int {\n    return 1\n}\n",
-            "package main\n\nfunc foo() int {\n    return 2\n}\n",
+            "package main\n\nimport \"fmt\"\n\nfunc foo() string {\n    return fmt.Sprintf(\"%d\", 1)\n}\n",
+            "package main\n\nimport \"fmt\"\n\nfunc foo() string {\n    return fmt.Sprintf(\"%d\", 2)\n}\n",
         ),
     ];
     for (path, before, after) in cases {

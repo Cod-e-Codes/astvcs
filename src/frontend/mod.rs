@@ -2,7 +2,7 @@ mod languages;
 mod textblob;
 mod treesitter;
 
-pub use languages::{SourceLanguage, is_text_only_path, supported_extensions};
+pub use languages::{SourceLanguage, is_text_only_path, supported_extensions, supported_special_paths};
 pub use textblob::{TextBlob, parse_text_or_blob};
 pub use treesitter::{parse_language, parse_rust, parse_source};
 

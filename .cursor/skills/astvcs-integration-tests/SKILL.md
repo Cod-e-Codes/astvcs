@@ -49,8 +49,8 @@ assert!(out.status.success());
 - `repo.working_tree_is_clean()` after successful merge.
 - No `MoveNode` mutations on prepend-only edits (see `workflow_demo_prepend_and_disjoint_merge`).
 - Merge conflicts leave repo unchanged (see `merge_conflict_diagnostics_without_side_effects`).
-- `parse_all_supported_languages` covers every `supported_extensions()` entry.
-- `edit_roundtrip_preserves_structure_across_languages` checks parse → apply trivial edit → unparse → re-parse for several languages.
+- `parse_all_supported_languages` covers every `supported_extensions()` entry and `supported_special_paths()` basename (for example `go.mod`).
+- `edit_roundtrip_preserves_structure_across_languages` checks parse → apply trivial edit → unparse → re-parse; roundtrip text must match edited source bytes.
 - `same_file_demo_disjoint_merge` is the main stress test for same-file alignment heuristics; watch overlapping cases when changing diff/merge.
 
 ### What to avoid

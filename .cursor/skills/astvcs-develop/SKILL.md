@@ -50,7 +50,7 @@ cargo build --release
 | `merge/` | three-way merge, conflict detection |
 | `store/` | blobs, timeline, repo CLI backend, working-tree scan |
 | `network/` | remotes, fetch/push/clone, HTTP serve |
-| `unparser.rs` | AST back to source text |
+| `unparser.rs` | AST back to source text (leading trivia between siblings) |
 
 ## Verify
 

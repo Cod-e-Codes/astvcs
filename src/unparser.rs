@@ -62,4 +62,14 @@ mod tests {
         let out = unparse(&graph);
         assert_eq!(src.as_bytes(), out.as_bytes());
     }
+
+    #[test]
+    fn roundtrip_go_multiline_return() {
+        use crate::SourceLanguage;
+
+        let src = "package main\n\nfunc greet(name string) string {\n    return fmt.Sprintf(\"Hi, %s!\", name)\n}\n";
+        let graph = crate::frontend::parse_language(SourceLanguage::Go, src).unwrap();
+        let out = unparse(&graph);
+        assert_eq!(src.as_bytes(), out.as_bytes());
+    }
 }
