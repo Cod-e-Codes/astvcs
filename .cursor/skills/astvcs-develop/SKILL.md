@@ -1,7 +1,7 @@
 ---
 name: astvcs-develop
 description: Builds, tests, and validates the astvcs Rust CLI. Use when changing astvcs source, fixing CI, running cargo test or clippy, or when the user asks about project layout, build requirements, or release binaries.
-compatibility: Requires Rust 1.96+ (edition 2024), cargo, and a working C toolchain for tree-sitter native deps.
+compatibility: Requires Rust 1.96+ (edition 2024), cargo, and a working C toolchain for tree-sitter native deps. CI runs on push/PR via `.github/workflows/ci.yml`.
 metadata:
   project: astvcs
 ---

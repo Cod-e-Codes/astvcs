@@ -44,6 +44,8 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
+CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request.
+
 Binary: `target\release\astvcs.exe`
 
 ## Scope
