@@ -1,0 +1,996 @@
+use astvcs::diff::diff_graphs;
+use astvcs::frontend::parse_source;
+use astvcs::graph::Mutation;
+use astvcs::store::Repo;
+use astvcs::trace;
+use astvcs::unparse;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::TempDir;
+
+fn astvcs_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_astvcs"))
+}
+
+fn run_astvcs(repo: Option<&Path>, args: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new(astvcs_bin());
+    if let Some(root) = repo {
+        cmd.arg("--repo").arg(root);
+    }
+    cmd.args(args).output().expect("spawn astvcs")
+}
+
+fn workflow_demo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/workflow-demo")
+}
+
+fn merge_demo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/merge-demo")
+}
+
+fn identity_demo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/identity-demo")
+}
+
+fn copy_fixture(dir: &TempDir, src: &PathBuf) -> std::io::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".astvcs" {
+            continue;
+        }
+        let dest = dir.path().join(name);
+        if entry.path().is_dir() {
+            fs::create_dir_all(&dest)?;
+            for file in fs::read_dir(entry.path())? {
+                let file = file?;
+                fs::copy(file.path(), dest.join(file.file_name()))?;
+            }
+        } else {
+            fs::copy(entry.path(), dest)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_workflow_demo(dir: &TempDir) -> std::io::Result<()> {
+    copy_fixture(dir, &workflow_demo_root())
+}
+
+fn copy_merge_demo(dir: &TempDir) -> std::io::Result<()> {
+    copy_fixture(dir, &merge_demo_root())
+}
+
+fn copy_identity_demo(dir: &TempDir) -> std::io::Result<()> {
+    copy_fixture(dir, &identity_demo_root())
+}
+
+#[test]
+fn workflow_demo_prepend_and_disjoint_merge() {
+    let dir = TempDir::new().unwrap();
+    copy_workflow_demo(&dir).unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+
+    fs::write(dir.path().join("lib.rs"), "pub mod core;\npub mod util;\n").unwrap();
+    repo.record("baseline").unwrap();
+
+    let with_doc = "//! workflow demo crate\npub mod core;\npub mod util;\n";
+    fs::write(dir.path().join("lib.rs"), with_doc).unwrap();
+    let head = repo.head_state().unwrap();
+    let base_files = repo.load_state_files(&head).unwrap();
+    let old_graph = match &base_files["lib.rs"] {
+        astvcs::FileContent::Ast(g) => g,
+        _ => panic!("expected ast"),
+    };
+    let new_graph = parse_source("lib.rs", with_doc).unwrap();
+    let diff = diff_graphs(old_graph, &new_graph);
+    assert!(
+        !diff
+            .mutations
+            .iter()
+            .any(|m| matches!(m, Mutation::MoveNode { .. })),
+        "prepend should not cascade moves: {:?}",
+        diff.mutations
+    );
+    repo.record("prepend doc comment").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("util.rs"),
+        "pub fn label() -> &'static str {\n    \"feature-branch\"\n}\n",
+    )
+    .unwrap();
+    repo.record("feature util label").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("core.rs"),
+        "pub fn answer() -> i32 {\n    43\n}\n",
+    )
+    .unwrap();
+    repo.record("main core answer").unwrap();
+
+    let merged = repo
+        .merge_branch("feature", "merge feature into main")
+        .unwrap();
+    assert!(
+        repo.working_tree_is_clean().unwrap(),
+        "working tree dirty after merge"
+    );
+
+    let util_disk = fs::read_to_string(dir.path().join("util.rs")).unwrap();
+    assert!(
+        util_disk.contains("feature-branch"),
+        "util.rs on disk after merge: {util_disk}"
+    );
+
+    let files = repo.load_state_files(&merged).unwrap();
+    let lib_text = match &files["lib.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    assert!(lib_text.contains("workflow demo crate"));
+    let core_text = match &files["core.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    assert!(core_text.contains('3'));
+    let util_text = match &files["util.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    assert!(util_text.contains("feature-branch"));
+}
+
+#[test]
+fn identity_demo_payload_edit_disjoint_merge_and_conflict() {
+    let dir = TempDir::new().unwrap();
+    copy_identity_demo(&dir).unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+
+    fs::write(
+        dir.path().join("core.rs"),
+        "pub fn answer() -> i32 {\n    42\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("labels.rs"),
+        "pub fn pair() -> (&'static str, &'static str) {\n    (\"alpha\", \"beta\")\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("conflict.rs"),
+        "fn sample() {\n    let value = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("baseline").unwrap();
+
+    let head = repo.head_state().unwrap();
+    let base_files = repo.load_state_files(&head).unwrap();
+    let old_core = match &base_files["core.rs"] {
+        astvcs::FileContent::Ast(g) => g,
+        _ => panic!("expected ast"),
+    };
+    let new_core = parse_source("core.rs", "pub fn answer() -> i32 {\n    43\n}\n").unwrap();
+    let core_diff = diff_graphs(old_core, &new_core);
+    assert!(
+        core_diff
+            .mutations
+            .iter()
+            .any(|m| matches!(m, Mutation::EditPayload { .. })),
+        "literal change should be EditPayload: {:?}",
+        core_diff.mutations
+    );
+
+    fs::write(
+        dir.path().join("core.rs"),
+        "pub fn answer() -> i32 {\n    43\n}\n",
+    )
+    .unwrap();
+    repo.record("edit literal on main").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("labels.rs"),
+        "pub fn pair() -> (&'static str, &'static str) {\n    (\"alpha\", \"BETA\")\n}\n",
+    )
+    .unwrap();
+    repo.record("edit second string literal").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("labels.rs"),
+        "pub fn pair() -> (&'static str, &'static str) {\n    (\"ALPHA\", \"beta\")\n}\n",
+    )
+    .unwrap();
+    repo.record("edit first string literal").unwrap();
+
+    let merged = repo
+        .merge_branch("feature", "merge sibling literal edits")
+        .unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    let labels = match &files["labels.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    assert!(labels.contains("ALPHA"), "merged labels: {labels}");
+    assert!(labels.contains("BETA"), "merged labels: {labels}");
+
+    repo.create_branch("conflict", None).unwrap();
+    repo.checkout_branch("conflict").unwrap();
+    fs::write(
+        dir.path().join("conflict.rs"),
+        "fn sample() {\n    let renamed = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename to renamed").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("conflict.rs"),
+        "fn sample() {\n    let alternate = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename to alternate").unwrap();
+
+    let plan = repo.plan_merge("conflict").unwrap();
+    assert!(!plan.is_clean());
+    let report = plan.format_conflicts();
+    assert!(report.contains("intents from base"), "{report}");
+    assert!(report.contains("rename"), "{report}");
+}
+
+#[test]
+fn cli_merge_resolve_conflict() {
+    let dir = TempDir::new().unwrap();
+    copy_identity_demo(&dir).unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join("conflict.rs"),
+        "fn sample() {\n    let value = 1;\n}\n",
+    )
+    .unwrap();
+
+    assert!(
+        run_astvcs(None, &["init", root.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert!(
+        run_astvcs(Some(root), &["record", "-m", "baseline"])
+            .status
+            .success()
+    );
+    assert!(
+        run_astvcs(Some(root), &["branch", "create", "conflict"])
+            .status
+            .success()
+    );
+    assert!(
+        run_astvcs(Some(root), &["checkout", "--branch", "conflict"])
+            .status
+            .success()
+    );
+    fs::write(
+        root.join("conflict.rs"),
+        "fn sample() {\n    let renamed = 1;\n}\n",
+    )
+    .unwrap();
+    assert!(
+        run_astvcs(Some(root), &["record", "-m", "rename to renamed"])
+            .status
+            .success()
+    );
+    assert!(
+        run_astvcs(Some(root), &["checkout", "--branch", "main"])
+            .status
+            .success()
+    );
+    fs::write(
+        root.join("conflict.rs"),
+        "fn sample() {\n    let alternate = 1;\n}\n",
+    )
+    .unwrap();
+    assert!(
+        run_astvcs(Some(root), &["record", "-m", "rename to alternate"])
+            .status
+            .success()
+    );
+
+    let dry = run_astvcs(Some(root), &["merge", "conflict", "--dry-run"]);
+    assert!(!dry.status.success());
+
+    let head_before = Repo::open(root).unwrap().head_state().unwrap();
+    let merge = run_astvcs(
+        Some(root),
+        &[
+            "merge",
+            "conflict",
+            "-m",
+            "resolved via cli",
+            "--resolve",
+            "conflict.rs:theirs",
+        ],
+    );
+    assert!(
+        merge.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    assert_ne!(Repo::open(root).unwrap().head_state().unwrap(), head_before);
+
+    let disk = fs::read_to_string(root.join("conflict.rs")).unwrap();
+    assert!(
+        disk.contains("renamed"),
+        "conflict.rs should keep theirs: {disk}"
+    );
+    assert!(
+        !disk.contains("alternate"),
+        "conflict.rs should not keep ours: {disk}"
+    );
+}
+
+#[test]
+fn record_respects_gitignore() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join(".gitignore"), "build/\nsecret.txt\n").unwrap();
+    fs::create_dir_all(dir.path().join("build")).unwrap();
+    fs::write(dir.path().join("build").join("out.rs"), "fn out() {}\n").unwrap();
+    fs::write(dir.path().join("secret.txt"), "hidden\n").unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let id = repo.record("init").unwrap().state_id;
+    let files = repo.load_state_files(&id).unwrap();
+    assert!(files.contains_key("main.rs"));
+    assert!(!files.contains_key("build/out.rs"));
+    assert!(!files.contains_key("secret.txt"));
+}
+
+#[test]
+fn multi_language_repo_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("app.py"), "def main():\n    pass\n").unwrap();
+    fs::write(dir.path().join("data.json"), "{\"a\": 1}\n").unwrap();
+    fs::write(dir.path().join("app.ts"), "function main(): void {}\n").unwrap();
+    fs::write(
+        dir.path().join("view.tsx"),
+        "export function View() { return null; }\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.cpp"), "int main() { return 0; }\n").unwrap();
+    fs::write(
+        dir.path().join("Main.java"),
+        "class Main { public static void main(String[] args) {} }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("Program.cs"),
+        "class Program { static void Main() {} }\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.swift"), "func main() {}\n").unwrap();
+    fs::write(dir.path().join("main.kt"), "fun main() {}\n").unwrap();
+    fs::write(dir.path().join("build.kts"), "fun main() {}\n").unwrap();
+    fs::write(dir.path().join("main.zig"), "pub fn main() void {}\n").unwrap();
+    fs::write(dir.path().join("query.sql"), "SELECT 1;\n").unwrap();
+    fs::write(dir.path().join("script.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    fs::write(dir.path().join("script.bash"), "echo hi\n").unwrap();
+    fs::write(dir.path().join("notes.txt"), "plain text\n").unwrap();
+    let id = repo.record("multi-lang").unwrap().state_id;
+    let files = repo.load_state_files(&id).unwrap();
+    assert_eq!(files.len(), 16);
+    for path in [
+        "main.rs",
+        "app.py",
+        "data.json",
+        "app.ts",
+        "view.tsx",
+        "main.cpp",
+        "Main.java",
+        "Program.cs",
+        "main.swift",
+        "main.kt",
+        "build.kts",
+        "main.zig",
+        "query.sql",
+        "script.sh",
+        "script.bash",
+    ] {
+        assert!(files[path].is_ast(), "{path} should be AST");
+    }
+    assert!(!files["notes.txt"].is_ast());
+}
+
+#[test]
+fn history_walk_and_log_order() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.record("first").unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
+    repo.record("second").unwrap();
+    let history = repo.history(10).unwrap();
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0].message, "second");
+    assert_eq!(history[1].message, "first");
+}
+
+#[test]
+fn blob_deduplication_across_states() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let id1 = repo.record("v1").unwrap().state_id;
+    fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+    let id2 = repo.record("v2").unwrap().state_id;
+    let m1 = repo.load_manifest(&id1).unwrap();
+    let m2 = repo.load_manifest(&id2).unwrap();
+    assert_eq!(m1["main.rs"], m2["main.rs"]);
+}
+
+#[test]
+fn rust_unparse_roundtrip_via_repo() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+    fs::write(dir.path().join("lib.rs"), src).unwrap();
+    let id = repo.record("add fn").unwrap().state_id;
+    let files = repo.load_state_files(&id).unwrap();
+    if let astvcs::FileContent::Ast(graph) = &files["lib.rs"] {
+        assert_eq!(unparse(graph).as_bytes(), src.as_bytes());
+    } else {
+        panic!("expected ast");
+    }
+}
+
+#[test]
+fn parse_all_supported_languages() {
+    let samples: &[(&str, &str)] = &[
+        ("main.rs", "fn main() {}\n"),
+        ("app.py", "def main():\n    pass\n"),
+        ("app.pyw", "def main():\n    pass\n"),
+        ("index.js", "function main() {}\n"),
+        ("index.mjs", "export function main() {}\n"),
+        ("index.cjs", "module.exports = {};\n"),
+        ("main.go", "package main\nfunc main() {}\n"),
+        ("main.c", "int main() { return 0; }\n"),
+        ("main.h", "int x;\n"),
+        ("data.json", "{\"k\": 1}\n"),
+        (
+            "Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        ),
+        ("config.yaml", "key: value\n"),
+        ("config.yml", "key: value\n"),
+        ("app.ts", "function main(): void {}\n"),
+        ("types.d.ts", "declare const x: number;\n"),
+        ("view.tsx", "export function View() { return null; }\n"),
+        ("main.cpp", "int main() { return 0; }\n"),
+        ("util.cc", "int main() { return 0; }\n"),
+        ("util.cxx", "int main() { return 0; }\n"),
+        ("util.hpp", "int main() { return 0; }\n"),
+        ("util.hh", "int main() { return 0; }\n"),
+        (
+            "Main.java",
+            "class Main { public static void main(String[] args) {} }\n",
+        ),
+        ("Program.cs", "class Program { static void Main() {} }\n"),
+        ("main.swift", "func main() {}\n"),
+        ("main.kt", "fun main() {}\n"),
+        ("build.kts", "fun main() {}\n"),
+        ("main.zig", "pub fn main() void {}\n"),
+        ("query.sql", "SELECT 1;\n"),
+        ("script.sh", "#!/bin/sh\necho hi\n"),
+        ("script.bash", "echo hi\n"),
+    ];
+    let mut covered = std::collections::HashSet::new();
+    for (path, src) in samples {
+        let graph = parse_source(path, src).expect(path);
+        graph.validate().expect(path);
+        covered.insert(path.rsplit('.').next().unwrap());
+    }
+    for ext in astvcs::supported_extensions() {
+        assert!(
+            covered.contains(ext),
+            "parse sample missing extension: {ext}"
+        );
+    }
+}
+
+#[test]
+fn same_file_demo_disjoint_merge() {
+    let dir = TempDir::new().unwrap();
+    copy_fixture(
+        &dir,
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/same-file-demo"),
+    )
+    .unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("sample.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("baseline").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::write(
+        dir.path().join("sample.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename on main").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("sample.rs"),
+        "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
+    )
+    .unwrap();
+    repo.record("insert on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let merged = repo.merge_branch("feature", "merge feature").unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    let text = match &files["sample.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    let expected = "fn foo() {\n    let y = 1;\n    let z = 2;\n}\n";
+    assert_eq!(
+        normalize_newlines(&text),
+        expected,
+        "merged text formatting"
+    );
+    let disk = fs::read_to_string(dir.path().join("sample.rs")).unwrap();
+    assert_eq!(
+        normalize_newlines(&disk),
+        expected,
+        "disk sample.rs formatting"
+    );
+}
+
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+/// Parse `before`, diff to `after`, apply mutations, unparse, re-parse, and assert stability.
+fn assert_edit_roundtrip(path: &str, before: &str, after: &str) {
+    let base = parse_source(path, before).unwrap_or_else(|e| panic!("{path}: parse before: {e}"));
+    base.validate()
+        .unwrap_or_else(|e| panic!("{path}: validate before: {e}"));
+
+    let target = parse_source(path, after).unwrap_or_else(|e| panic!("{path}: parse after: {e}"));
+    target
+        .validate()
+        .unwrap_or_else(|e| panic!("{path}: validate after: {e}"));
+
+    let diff = diff_graphs(&base, &target);
+    assert!(
+        !diff.mutations.is_empty(),
+        "{path}: expected a non-empty edit from before to after"
+    );
+
+    let mut applied = base;
+    applied
+        .apply_batch(&diff.mutations)
+        .unwrap_or_else(|e| panic!("{path}: apply edit: {e}"));
+    applied
+        .validate()
+        .unwrap_or_else(|e| panic!("{path}: validate applied: {e}"));
+
+    let text = unparse(&applied);
+    let reparsed = parse_source(path, &text).unwrap_or_else(|e| panic!("{path}: re-parse: {e}"));
+    reparsed
+        .validate()
+        .unwrap_or_else(|e| panic!("{path}: validate reparsed: {e}"));
+
+    let structural = diff_graphs(&target, &reparsed);
+    assert!(
+        structural.mutations.is_empty(),
+        "{path}: structural drift after roundtrip: {:?}",
+        structural.mutations
+    );
+
+    let text_after_reparse = unparse(&reparsed);
+    assert_eq!(
+        normalize_newlines(&text),
+        normalize_newlines(&text_after_reparse),
+        "{path}: textual drift across re-parse"
+    );
+    assert_eq!(
+        normalize_newlines(&text),
+        normalize_newlines(&unparse(&target)),
+        "{path}: roundtrip text should match canonical unparse of target"
+    );
+}
+
+#[test]
+fn edit_roundtrip_preserves_structure_across_languages() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "main.rs",
+            "fn foo() {\n    let x = 1;\n}\n",
+            "fn foo() {\n    let x = 2;\n}\n",
+        ),
+        (
+            "app.py",
+            "def foo():\n    x = 1\n    return x\n",
+            "def foo():\n    x = 2\n    return x\n",
+        ),
+        (
+            "index.js",
+            "function foo() {\n    return 1;\n}\n",
+            "function foo() {\n    return 2;\n}\n",
+        ),
+        ("data.json", "{\"count\": 1}\n", "{\"count\": 2}\n"),
+        (
+            "app.ts",
+            "function foo(): number {\n    return 1;\n}\n",
+            "function foo(): number {\n    return 2;\n}\n",
+        ),
+        (
+            "main.go",
+            "package main\n\nfunc foo() int {\n    return 1\n}\n",
+            "package main\n\nfunc foo() int {\n    return 2\n}\n",
+        ),
+    ];
+    for (path, before, after) in cases {
+        assert_edit_roundtrip(path, before, after);
+    }
+}
+
+#[test]
+fn branch_merge_with_merge_base() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename on main").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
+    )
+    .unwrap();
+    repo.record("insert on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let merged = repo.merge_branch("feature", "merge feature").unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    let text = match &files["main.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    let expected = "fn foo() {\n    let y = 1;\n    let z = 2;\n}\n";
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn merge_demo_add_add_and_deletion() {
+    let dir = TempDir::new().unwrap();
+    copy_merge_demo(&dir).unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(
+        dir.path().join("lib.rs"),
+        "pub fn label() -> &'static str { \"base\" }\n",
+    )
+    .unwrap();
+    repo.record("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::write(dir.path().join("util.rs"), "pub fn util() {}\n").unwrap();
+    repo.record("main adds util.rs").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("util.rs"), "pub fn util() {}\n").unwrap();
+    fs::write(
+        dir.path().join("lib.rs"),
+        "pub fn label() -> &'static str { \"feature\" }\n",
+    )
+    .unwrap();
+    repo.record("feature adds util and edits lib").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let merged = repo.merge_branch("feature", "merge add/add").unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    assert!(files.contains_key("util.rs"));
+    let lib = match &files["lib.rs"] {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        _ => panic!("expected ast"),
+    };
+    assert!(
+        lib.contains("feature"),
+        "lib.rs should keep feature edit: {lib}"
+    );
+}
+
+#[test]
+fn merge_demo_deletion_when_other_branch_unchanged() {
+    let dir = TempDir::new().unwrap();
+    copy_merge_demo(&dir).unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(
+        dir.path().join("lib.rs"),
+        "pub fn label() -> &'static str { \"base\" }\n",
+    )
+    .unwrap();
+    repo.record("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::remove_file(dir.path().join("lib.rs")).unwrap();
+    repo.record("main deletes lib.rs").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    repo.record("feature noop").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let merged = repo.merge_branch("feature", "merge deletion").unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    assert!(!files.contains_key("lib.rs"));
+    assert!(!dir.path().join("lib.rs").exists());
+}
+
+#[test]
+fn checkout_state_and_empty_record() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let v1 = repo.record("v1").unwrap().state_id;
+    fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
+    repo.record("v2").unwrap();
+
+    repo.checkout_state(&v1).unwrap();
+    assert!(repo.is_detached().unwrap());
+    assert!(repo.working_tree_is_clean().unwrap());
+
+    let again = repo.record("noop").unwrap();
+    assert!(!again.created);
+    assert_eq!(again.state_id, v1);
+    let entry = repo.load_timeline_entry(&v1).unwrap();
+    assert_eq!(entry.message, "v1");
+}
+
+#[test]
+fn config_files_use_ast_frontend() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("config.yaml"), "key: value\nlist:\n  - a\n").unwrap();
+    let id = repo.record("config").unwrap().state_id;
+    let files = repo.load_state_files(&id).unwrap();
+    assert!(files["Cargo.toml"].is_ast());
+    assert!(files["config.yaml"].is_ast());
+}
+
+#[test]
+fn merge_conflict_diagnostics_without_side_effects() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename to y on main").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let z = 1;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename to z on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let head_before = repo.head_state().unwrap();
+    let base = repo.merge_base_refs("main", "feature").unwrap();
+    let main_id = repo.head_state().unwrap();
+    let feature_id = repo.branch_state("feature").unwrap();
+    let three_way = repo
+        .diff_three_way(&base, &main_id, &feature_id, Some("main.rs"))
+        .unwrap();
+    assert!(three_way.contains("base -> left:"), "{three_way}");
+    assert!(three_way.contains("base -> right:"), "{three_way}");
+
+    let plan = repo.plan_merge("feature").unwrap();
+    assert!(!plan.is_clean());
+    let report = plan.format_conflicts();
+    assert!(report.contains("overlapping edit pairs"), "{report}");
+    assert!(report.contains("intents from base"), "{report}");
+    assert!(report.contains("rename"), "{report}");
+
+    let err = repo.merge_branch("feature", "try merge").unwrap_err();
+    assert!(err.contains("overlapping edit pairs"), "{err}");
+    assert_eq!(repo.head_state().unwrap(), head_before);
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn rename_vs_parent_delete_reports_overlap() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
+    )
+    .unwrap();
+    repo.record("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n    let z = 2;\n}\n",
+    )
+    .unwrap();
+    repo.record("rename binding on main").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let z = 2;\n}\n",
+    )
+    .unwrap();
+    repo.record("delete first statement on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let head_before = repo.head_state().unwrap();
+    let plan = repo.plan_merge("feature").unwrap();
+    assert!(!plan.is_clean());
+    let report = plan.format_conflicts();
+    assert!(report.contains("overlapping edit pairs"), "{report}");
+    assert!(report.contains("delete"), "{report}");
+    assert!(report.contains("rename"), "{report}");
+    assert!(
+        report.contains("covers edit"),
+        "expected ancestry overlap detail: {report}"
+    );
+
+    let err = repo
+        .merge_branch("feature", "merge rename vs delete")
+        .unwrap_err();
+    assert!(err.contains("overlapping edit pairs"), "{err}");
+    assert_eq!(repo.head_state().unwrap(), head_before);
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn transparency_scan_and_parse_notices() {
+    trace::clear_log();
+    trace::set_verbose(true);
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("app.ts"), "function main(): void {}\n").unwrap();
+    fs::write(dir.path().join("notes.md"), "# doc\n").unwrap();
+    fs::write(dir.path().join("image.png"), [0x89, 0x50, 0x4E, 0x47, 0, 0]).unwrap();
+
+    repo.status().unwrap();
+    let log = trace::take_log();
+    assert!(log.iter().any(|l| l.contains("scan: skipped image.png")));
+    assert!(log.iter().any(|l| l.contains("notes.md")));
+
+    trace::clear_log();
+    let outcome = repo.record("baseline").unwrap();
+    assert!(outcome.created);
+    let log = trace::take_log();
+    assert!(log.iter().any(|l| l.contains("main.rs: parsed as AST")));
+    assert!(log.iter().any(|l| l.contains("app.ts: parsed as AST")));
+    assert!(log.iter().any(|l| l.contains("notes.md")));
+
+    trace::clear_log();
+    let noop = repo.record("noop").unwrap();
+    assert!(!noop.created);
+    assert!(trace::take_log().iter().any(|l| l.contains("no changes")));
+    trace::set_verbose(false);
+}
+
+#[test]
+fn notices_suppressed_without_verbose() {
+    trace::clear_log();
+    trace::set_verbose(false);
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    assert!(
+        !trace::take_log().iter().any(|l| l.contains("notice:")),
+        "init notices should be gated"
+    );
+
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("widget.foo"), "data\n").unwrap();
+    trace::clear_warned();
+    repo.record("baseline").unwrap();
+    let log = trace::take_log();
+    assert!(
+        log.iter()
+            .any(|l| l.contains("warning:") && l.contains("widget.foo")),
+        "unexpected extensions should warn: {log:?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|l| l.contains("warning:") && l.contains("main.rs")),
+        "parsed files should not warn: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|l| l.contains("parsed as AST")),
+        "notices should be gated: {log:?}"
+    );
+}
+
+#[test]
+fn network_file_remote_fetch_push_and_clone() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
+    upstream_repo.record("v1").unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    let out = run_astvcs(
+        None,
+        &[
+            "clone",
+            upstream.path().to_str().unwrap(),
+            clone_dir.path().to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(clone_dir.path().join("note.txt")).unwrap(),
+        "v1\n"
+    );
+
+    fs::write(clone_dir.path().join("note.txt"), "v2\n").unwrap();
+    let out = run_astvcs(Some(clone_dir.path()), &["record", "-m", "v2"]);
+    assert!(out.status.success());
+    let out = run_astvcs(
+        Some(clone_dir.path()),
+        &["push", "origin", "--branch", "main"],
+    );
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        upstream_repo.head_state().unwrap(),
+        Repo::open(clone_dir.path()).unwrap().head_state().unwrap()
+    );
+}

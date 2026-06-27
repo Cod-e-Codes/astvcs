@@ -1,0 +1,222 @@
+use crate::frontend::languages::SourceLanguage;
+use crate::graph::{AstGraph, Node, NodeId, NodeKind};
+use std::collections::HashMap;
+use tree_sitter::{Node as TsNode, Parser, Tree};
+
+/// Parse Rust source into an internal AST graph.
+pub fn parse_rust(source: &str) -> Result<AstGraph, String> {
+    parse_language(SourceLanguage::Rust, source)
+}
+
+/// Parse source using the language inferred from `path`.
+pub fn parse_source(path: &str, source: &str) -> Result<AstGraph, String> {
+    let lang = SourceLanguage::from_path(path)
+        .ok_or_else(|| format!("no AST frontend for extension: {path}"))?;
+    parse_language(lang, source)
+}
+
+pub fn parse_language(lang: SourceLanguage, source: &str) -> Result<AstGraph, String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&lang.tree_sitter_language())
+        .map_err(|e| format!("failed to set {} grammar: {e}", lang.as_str()))?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| "parse returned no tree".to_string())?;
+    if tree.root_node().has_error() {
+        return Err("syntax errors in source".into());
+    }
+    parse_tree(source, &tree)
+}
+
+fn parse_tree(source: &str, tree: &Tree) -> Result<AstGraph, String> {
+    let mut nodes = HashMap::new();
+    let mut pending_trivia: Vec<(NodeId, NodeId, u32, String)> = Vec::new();
+    let root_id = translate(source, tree.root_node(), &mut nodes, &mut pending_trivia)?;
+    let root = nodes.get(&root_id).cloned().unwrap();
+    let mut graph = AstGraph::new(root, nodes);
+
+    for (parent, child, occurrence, leading) in pending_trivia {
+        graph.set_trivia(parent, child, occurrence, leading);
+    }
+
+    let root_ts = tree.root_node();
+    if let Some(last_named) = last_child(root_ts) {
+        let tail_start = last_named.end_byte();
+        if tail_start < source.len() {
+            graph.root_trailing_trivia = source[tail_start..].to_string();
+        }
+    }
+
+    Ok(graph)
+}
+
+fn last_child(node: TsNode) -> Option<TsNode> {
+    let mut cursor = node.walk();
+    let mut last = None;
+    if cursor.goto_first_child() {
+        loop {
+            last = Some(cursor.node());
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    last
+}
+
+fn translate(
+    source: &str,
+    ts_node: TsNode,
+    nodes: &mut HashMap<NodeId, Node>,
+    pending_trivia: &mut Vec<(NodeId, NodeId, u32, String)>,
+) -> Result<NodeId, String> {
+    let kind = if ts_node.is_named() {
+        NodeKind::from_ts_kind(ts_node.kind())
+    } else {
+        NodeKind::Token
+    };
+
+    let payload = if ts_node.child_count() == 0 {
+        source[ts_node.start_byte()..ts_node.end_byte()].to_string()
+    } else {
+        String::new()
+    };
+
+    let mut child_ids = Vec::new();
+    let mut child_leading = Vec::new();
+
+    let mut cursor = ts_node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let child_ts = cursor.node();
+            let leading_start = if let Some(prev) = child_ts.prev_sibling() {
+                prev.end_byte()
+            } else {
+                ts_node.start_byte()
+            };
+            let leading = if leading_start < child_ts.start_byte() {
+                source[leading_start..child_ts.start_byte()].to_string()
+            } else {
+                String::new()
+            };
+
+            let child_id = translate(source, child_ts, nodes, pending_trivia)?;
+            child_ids.push(child_id);
+            child_leading.push(leading);
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+    let node = Node::new(kind, payload, child_ids.clone());
+    let node_id = node.id;
+    nodes.insert(node_id, node);
+
+    let mut occurrence_counts: HashMap<NodeId, u32> = HashMap::new();
+    for (child_id, leading) in child_ids.iter().zip(child_leading.iter()) {
+        let occ = *occurrence_counts.entry(*child_id).or_insert(0);
+        occurrence_counts.insert(*child_id, occ + 1);
+        pending_trivia.push((node_id, *child_id, occ, leading.clone()));
+    }
+
+    Ok(node_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::languages::SourceLanguage;
+
+    #[test]
+    fn parses_simple_function() {
+        let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+        let graph = parse_rust(src).unwrap();
+        graph.validate().unwrap();
+        assert!(graph.nodes.len() > 1);
+    }
+
+    #[test]
+    fn parses_python() {
+        let src = "def add(a, b):\n    return a + b\n";
+        let graph = parse_language(SourceLanguage::Python, src).unwrap();
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_javascript() {
+        let src = "function add(a, b) { return a + b; }\n";
+        let graph = parse_language(SourceLanguage::JavaScript, src).unwrap();
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_go() {
+        let src = "package main\nfunc main() {}\n";
+        let graph = parse_language(SourceLanguage::Go, src).unwrap();
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_json() {
+        let src = r#"{"key": "value"}"#;
+        let graph = parse_language(SourceLanguage::Json, src).unwrap();
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn typescript_and_tsx_use_distinct_grammars() {
+        use tree_sitter::{Node, Parser};
+
+        fn has_named_kind(node: Node, kind: &str) -> bool {
+            if node.is_named() && node.kind() == kind {
+                return true;
+            }
+            let mut cursor = node.walk();
+            if cursor.goto_first_child() {
+                loop {
+                    if has_named_kind(cursor.node(), kind) {
+                        return true;
+                    }
+                    if !cursor.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            false
+        }
+
+        let plain = "function main(): void {}\n";
+        parse_source("app.ts", plain).unwrap().validate().unwrap();
+        parse_source("view.tsx", plain).unwrap().validate().unwrap();
+
+        let jsx = "export function View() { return <div />; }\n";
+        assert!(parse_source("app.ts", jsx).is_err());
+        let tsx_graph = parse_source("view.tsx", jsx).unwrap();
+        tsx_graph.validate().unwrap();
+
+        let mut ts_parser = Parser::new();
+        ts_parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .expect("ts grammar");
+        let ts_tree = ts_parser.parse(jsx, None).expect("ts tree");
+        assert!(ts_tree.root_node().has_error());
+        assert!(!has_named_kind(
+            ts_tree.root_node(),
+            "jsx_self_closing_element"
+        ));
+
+        let mut tsx_parser = Parser::new();
+        tsx_parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
+            .expect("tsx grammar");
+        let tsx_tree = tsx_parser.parse(jsx, None).expect("tsx tree");
+        assert!(!tsx_tree.root_node().has_error());
+        assert!(has_named_kind(
+            tsx_tree.root_node(),
+            "jsx_self_closing_element"
+        ));
+    }
+}
