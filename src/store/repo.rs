@@ -2403,6 +2403,34 @@ mod tests {
     }
 
     #[test]
+    fn revert_noop_with_dirty_working_tree_skips_materialize_guard() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("v1").unwrap();
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.commit("v2").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("back to v1 content").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        fs::write(dir.path().join("scratch.txt"), "dirty\n").unwrap();
+        assert!(!repo.working_tree_is_clean().unwrap());
+
+        let outcome = repo.revert_state(&v2, "noop revert").unwrap();
+        assert!(!outcome.created);
+        assert_eq!(outcome.state_id, tip);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("scratch.txt")).unwrap(),
+            "dirty\n",
+            "no-op revert must not materialize or clobber uncommitted files"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+    }
+
+    #[test]
     fn revert_ast_prepended_comment() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("lib.rs"), "pub fn one() {}\n").unwrap();
@@ -2662,6 +2690,63 @@ mod tests {
             log.iter()
                 .any(|l| l
                     .contains("warning: merge --force: discarded uncommitted changes in note.txt")),
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn merge_force_on_dirty_overlapping_path_applies_committed_plan() {
+        trace::clear_log();
+        let (dir, repo) = sample_repo();
+        fs::write(
+            dir.path().join("main.rs"),
+            "fn foo() {\n    let x = 1;\n}\n",
+        )
+        .unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::write(
+            dir.path().join("main.rs"),
+            "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
+        )
+        .unwrap();
+        repo.commit("insert on feature").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(
+            dir.path().join("main.rs"),
+            "fn foo() {\n    let y = 1;\n}\n",
+        )
+        .unwrap();
+        repo.commit("rename on main").unwrap();
+        fs::write(
+            dir.path().join("main.rs"),
+            "fn foo() {\n    let dirty = 99;\n}\n",
+        )
+        .unwrap();
+
+        repo.merge_branch_with_resolutions_force("feature", "merge", &[], true)
+            .unwrap();
+        let main_rs = fs::read_to_string(dir.path().join("main.rs")).unwrap();
+        assert!(
+            main_rs.contains('y'),
+            "merged main.rs missing main edit: {main_rs}"
+        );
+        assert!(
+            main_rs.contains('z'),
+            "merged main.rs missing feature insert: {main_rs}"
+        );
+        assert!(
+            !main_rs.contains("dirty"),
+            "uncommitted edit must not affect merge plan or final content: {main_rs}"
+        );
+        let log = trace::take_log();
+        assert!(
+            log.iter()
+                .any(|l| l
+                    .contains("warning: merge --force: discarded uncommitted changes in main.rs")),
             "{log:?}"
         );
     }

@@ -28,6 +28,8 @@
 | `network_file_remote_fetch_push_and_clone` | File remote sync |
 | `cli_reset_hard_soft_and_force` | Reset modes, force clobber warnings |
 | `cli_materialize_refuses_dirty_tree_and_force` | Merge, checkout, revert refuse dirty tree; `--force` clobber warnings |
+| `merge_force_on_dirty_overlapping_path_applies_committed_plan` | Merge `--force` on dirty path in merge plan uses committed three-way result (unit) |
+| `revert_noop_with_dirty_working_tree_skips_materialize_guard` | No-op revert succeeds with dirty tree, no guard (unit) |
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
 | `cli_revert_of_revert_restores_content` | Revert then revert the revert commit (parent state reuse) |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |

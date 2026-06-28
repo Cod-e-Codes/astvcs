@@ -80,6 +80,8 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 `revert` applies the guard only when it would materialize (no-op reverts that leave HEAD unchanged skip the check). `merge --dry-run` and `revert --dry-run` never touch the working tree.
 
+**Merge planning and the working tree.** `plan_merge` and `prepare_merge` load file content only from committed states (merge base, HEAD, and the branch tip being merged). They do not read the working tree, so uncommitted edits are invisible to conflict detection and to the merged manifest. With `--force`, dirty paths are discarded during materialization *after* the plan is computed; uncommitted content on a path that the merge itself changes cannot leak into the planner or alter the three-way result—the final on-disk file is the committed merge outcome for that path.
+
 ### `revert`
 
 Creates a **new** forward state that undoes the target state's changes on top of current HEAD using the same per-path three-way machinery as merge (`base` = target, `left` = target's parent, `right` = HEAD).

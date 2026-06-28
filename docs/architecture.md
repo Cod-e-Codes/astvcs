@@ -8,6 +8,8 @@
 
 **Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` call `materialize_state` to write a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in `materialize_state` so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization.
 
+**Merge planning is commit-only.** Three-way merge plans are built from blob manifests at the merge base, HEAD, and the other branch tip (`load_state_files` only). The working tree is not consulted, so a forced merge cannot incorporate uncommitted edits into conflict detection or the merged file set; `--force` only clobbers dirty paths when writing the already-computed plan to disk.
+
 **Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store (no GC yet). `config.json` `default_branch` is not updated when a branch is removed.
 
 **On-disk layout.**
