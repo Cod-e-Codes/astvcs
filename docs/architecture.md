@@ -38,7 +38,9 @@ HEAD                 branch name or state id
 index.json           last committed manifest (working-tree baseline)
 ```
 
-**Working tree scan.** Honors `.gitignore`, `.astvcsignore`, and git exclude files (ripgrep semantics). Always skips `.astvcs/` and `.git/`. Non-UTF-8 paths are not tracked as text.
+**Working tree scan.** Honors `.gitignore`, `.astvcsignore`, and git exclude files (ripgrep semantics). Always skips `.astvcs/` and `.git/`. Non-UTF-8 path names are not tracked; file content may be binary.
+
+**Binary files.** Files whose bytes contain a NUL or are not valid UTF-8 are stored as `FileContent::Binary` blobs. UTF-8 text (including known text-only paths and parse-fallback sources) continues to use AST or text blobs. Binary payloads share the same content-addressed `blobs/` tree as AST and text: each blob is a JSON envelope `{"kind":"binary","bytes":"<base64>"}` hashed by the serialized bytes (same sharded layout as other kinds). A separate `blobs-bin/` tree was not added: one store keeps deduplication, `gc`, `fsck`, and network sync unified; the `kind` field distinguishes encodings on read. There is no maximum file size policy beyond available disk and memory. Materialization writes raw bytes via `atomic::write_atomic`. `status` reports binary paths as added, modified, or removed like text. `diff` and `diff --state` print path headers and `(binary file — content diff omitted)` instead of a byte-level diff. Three-way merge treats binary paths as opaque whole-file replace only (no structural or line merge); add/add with different bytes conflicts like text add/add.
 
 ## Parsing and storage
 
@@ -70,7 +72,7 @@ Supported extensions are parsed with tree-sitter into an `AstGraph` DAG. Each no
 | `.sql` | SQL (`tree-sitter-sequel` on crates.io) |
 | `.sh`, `.bash` | Bash |
 
-All other paths use line-oriented text blob storage. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`, `go.sum`, `.ps1`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process.
+All other paths use line-oriented text blob storage when the file is valid UTF-8 without NUL bytes. NUL-containing or invalid UTF-8 content is stored as a binary blob regardless of extension. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`, `go.sum`, `.ps1`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process.
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
@@ -141,6 +143,7 @@ src/
     languages.rs extension to tree-sitter language map
     treesitter.rs parser and translator
     textblob.rs  text fallback
+    binaryblob.rs binary detection and working-tree load
   unparser.rs
   diff/
     lcs.rs       longest common subsequence matching
@@ -215,5 +218,10 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `conflicting_path_renames_report_conflict` | Both branches rename same path to different destinations (unit) |
 | `move_subtree_and_sibling_payload_edit_merge` | Move + concurrent payload edit merge cleanly (unit) |
 | `moved_function_reports_move_not_delete_insert` | Intra-file reposition avoids delete+insert (unit) |
+| `binary_commit_status_and_diff` | Binary PNG fixture: status modified, diff omits content |
+| `binary_roundtrip_checkout_on_branch` | Byte-for-byte checkout across branches |
+| `binary_merge_add_add_conflict` | Add/add conflict on binary paths |
+| `binary_fsck_clean_after_commit` | NUL-containing binary: `fsck` clean |
+| `binary_push_clone_roundtrip` | Network clone preserves binary bytes |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

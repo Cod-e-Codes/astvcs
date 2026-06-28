@@ -56,10 +56,11 @@ Binary: `target\release\astvcs.exe`
 | AST diff and three-way merge for supported languages | Interactive conflict resolution in the working tree |
 | Network sync (`fetch`, `push`, `clone`, `serve`) over file or HTTP | Hosting service or authentication |
 | Per-path merge resolution (`--resolve path:ours\|theirs`) | Conflict markers in files |
-| `reset`, `revert`, detached checkout (refs include remote-tracking); `--force` on merge, checkout, revert, and hard reset when the working tree is dirty | Binary or non-UTF-8 file tracking |
+| `reset`, `revert`, detached checkout (refs include remote-tracking); `--force` on merge, checkout, revert, and hard reset when the working tree is dirty | Git interoperability |
+| Binary file tracking (NUL or non-UTF-8 content, byte-for-byte round-trip) | Interactive conflict resolution in the working tree |
 | `.gitignore` / `.astvcsignore` scanning | |
 
-Unsupported extensions and parse failures fall back to text blobs; astvcs prints `warning:` to stderr when that happens.
+Unsupported extensions and parse failures fall back to text blobs; astvcs prints `warning:` to stderr when that happens. NUL-containing or non-UTF-8 file content is stored as binary blobs.
 
 ## License
 

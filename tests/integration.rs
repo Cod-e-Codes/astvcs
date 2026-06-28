@@ -949,7 +949,7 @@ fn transparency_scan_and_parse_notices() {
 
     repo.status().unwrap();
     let log = trace::take_log();
-    assert!(log.iter().any(|l| l.contains("scan: skipped image.png")));
+    assert!(log.iter().any(|l| l.contains("image.png")));
     assert!(log.iter().any(|l| l.contains("notes.md")));
 
     trace::clear_log();
@@ -959,6 +959,10 @@ fn transparency_scan_and_parse_notices() {
     assert!(log.iter().any(|l| l.contains("main.rs: parsed as AST")));
     assert!(log.iter().any(|l| l.contains("app.ts: parsed as AST")));
     assert!(log.iter().any(|l| l.contains("notes.md")));
+    assert!(
+        log.iter()
+            .any(|l| l.contains("image.png: stored as binary blob"))
+    );
 
     trace::clear_log();
     let noop = repo.commit("noop").unwrap();
@@ -1815,4 +1819,118 @@ fn structured_errors_match_plain_messages_and_kinds() {
     assert!(json_err.contains("\"kind\":\"branch_guard\""), "{json_err}");
     assert!(json_err.contains("checked-out branch"), "{json_err}");
     assert!(!json_err.starts_with("error:"), "{json_err}");
+}
+
+const PNG_HEADER: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+#[test]
+fn binary_commit_status_and_diff() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("logo.png"), PNG_HEADER).unwrap();
+    repo.commit("add png").unwrap();
+
+    let status = repo.status().unwrap();
+    assert_eq!(status.entries.get("logo.png"), Some(&FileStatus::Unchanged));
+
+    fs::write(
+        dir.path().join("logo.png"),
+        [PNG_HEADER.as_slice(), &[0x00]].concat(),
+    )
+    .unwrap();
+    let status = repo.status().unwrap();
+    assert_eq!(status.entries.get("logo.png"), Some(&FileStatus::Modified));
+
+    let diff = repo.diff_working("logo.png").unwrap();
+    assert!(diff.contains("binary file"), "{diff}");
+    assert!(diff.contains("content diff omitted"), "{diff}");
+}
+
+#[test]
+fn binary_roundtrip_checkout_on_branch() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    let payload: Vec<u8> = [PNG_HEADER.as_slice(), b"fixture-bytes"].concat();
+    fs::write(dir.path().join("asset.bin"), &payload).unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("asset.bin"), b"feature-only").unwrap();
+    repo.commit("feature binary").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    assert_eq!(fs::read(dir.path().join("asset.bin")).unwrap(), payload);
+
+    repo.checkout_branch("feature").unwrap();
+    assert_eq!(
+        fs::read(dir.path().join("asset.bin")).unwrap(),
+        b"feature-only".as_slice()
+    );
+}
+
+#[test]
+fn binary_merge_add_add_conflict() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("data.bin"), [1u8, 2, 3]).unwrap();
+    repo.commit("add on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("data.bin"), [4u8, 5, 6]).unwrap();
+    repo.commit("add on main").unwrap();
+
+    let err = repo.merge_branch("feature", "merge binaries").unwrap_err();
+    assert!(
+        err.contains("both branches added different content"),
+        "{err}"
+    );
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn binary_fsck_clean_after_commit() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("nul.dat"), [b'a', 0, b'b']).unwrap();
+    repo.commit("binary with nul").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("repository ok"), "{stdout}");
+}
+
+#[test]
+fn binary_push_clone_roundtrip() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    let bytes: Vec<u8> = [PNG_HEADER.as_slice(), b"sync"].concat();
+    fs::write(upstream.path().join("icon.png"), &bytes).unwrap();
+    upstream_repo.commit("binary upstream").unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    let out = run_astvcs(
+        None,
+        &[
+            "clone",
+            upstream.path().to_str().unwrap(),
+            clone_dir.path().to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read(clone_dir.path().join("icon.png")).unwrap(), bytes);
 }

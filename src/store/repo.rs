@@ -2,7 +2,7 @@ use crate::diff::{
     DiffResult, build_rename_map, detect_path_renames, diff_graphs, diff_text,
     rename_targets_conflict, side_path_for_base,
 };
-use crate::frontend::{FileContent, parse_text_or_blob};
+use crate::frontend::{FileContent, load_working_content};
 use crate::intent;
 use crate::merge::{MergeConflict, PathMergeConflict, PathMergeOutcome, merge_path};
 use crate::store::atomic::{self, write_atomic_json, write_atomic_text};
@@ -581,8 +581,8 @@ impl Repo {
         let working_files = self.scan_working()?;
         let mut working_map = HashMap::new();
         for path in &working_files {
-            let disk = read_working_file(&self.root, path)?;
-            let current = parse_text_or_blob(path, &disk);
+            let bytes = read_working_bytes(&self.root, path)?;
+            let current = load_working_content(path, bytes);
             working_map.insert(path.clone(), current.clone());
             let status = match head_files.get(path) {
                 None => FileStatus::Added,
@@ -620,14 +620,14 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
-        let disk = read_working_file(&self.root, path)?;
-        let working = parse_text_or_blob(path, &disk);
+        let bytes = read_working_bytes(&self.root, path)?;
+        let working = load_working_content(path, bytes);
         let mut working_map = HashMap::new();
         working_map.insert(path.to_string(), working.clone());
         for p in self.scan_working()? {
             if p != path {
-                let disk = read_working_file(&self.root, &p)?;
-                working_map.insert(p.clone(), parse_text_or_blob(&p, &disk));
+                let bytes = read_working_bytes(&self.root, &p)?;
+                working_map.insert(p.clone(), load_working_content(&p, bytes));
             }
         }
         let renames = detect_path_renames(&head_files, &working_map);
@@ -1266,8 +1266,8 @@ impl Repo {
 
         let mut new_files = head_files.clone();
         for path in &working_files {
-            let disk = read_working_file(&self.root, path)?;
-            let content = parse_text_or_blob(path, &disk);
+            let bytes = read_working_bytes(&self.root, path)?;
+            let content = load_working_content(path, bytes);
             match head_files.get(path) {
                 Some(old) if content_eq(old, &content) => {}
                 Some(_) => trace::notice(format!("commit: {path} modified")),
@@ -1447,7 +1447,14 @@ impl Repo {
             if let Some(parent) = full.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            atomic::write_atomic_text(&full, &content_to_string(content))?;
+            match content {
+                FileContent::Binary(blob) => {
+                    atomic::write_atomic(&full, &blob.bytes)?;
+                }
+                other => {
+                    atomic::write_atomic_text(&full, &content_to_string(other))?;
+                }
+            }
             trace::notice(format!(
                 "materialize: wrote {path} ({})",
                 content.display_kind()
@@ -1798,15 +1805,23 @@ fn content_to_string(content: &FileContent) -> String {
     match content {
         FileContent::Ast(graph) => unparse(graph),
         FileContent::Text(blob) => blob.content.clone(),
+        FileContent::Binary(_) => {
+            panic!("content_to_string called on binary blob; use write_atomic with raw bytes")
+        }
     }
 }
 
 fn content_preview(content: &FileContent) -> String {
-    let text = content_to_string(content);
-    if text.len() > 200 {
-        format!("{}...\n", &text[..200])
-    } else {
-        format!("{text}\n")
+    match content {
+        FileContent::Binary(blob) => format!("(binary file, {} bytes)\n", blob.bytes.len()),
+        other => {
+            let text = content_to_string(other);
+            if text.len() > 200 {
+                format!("{}...\n", &text[..200])
+            } else {
+                format!("{text}\n")
+            }
+        }
     }
 }
 
@@ -1831,6 +1846,12 @@ fn format_path_rename(
 }
 
 fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
+    if old.is_binary() || new.is_binary() {
+        if old.semantic_eq(new) {
+            return "(binary file — unchanged)\n".into();
+        }
+        return "(binary file — content diff omitted)\n".into();
+    }
     match (old, new) {
         (FileContent::Ast(o), FileContent::Ast(n)) => {
             let DiffResult { mutations } = diff_graphs(o, n);
@@ -1867,18 +1888,22 @@ fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
                 out
             }
         }
-        _ => "(content kind changed: ast <-> text)\n".into(),
+        _ => "(content kind changed)\n".into(),
     }
 }
 
 fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> RepoResult<String> {
     let mut out = format!("--- {path}\n+++ {path}\n");
+    if old.is_binary() || new.is_binary() {
+        out.push_str(&format_mutation_diff(old, new));
+        return Ok(out);
+    }
     out.push_str(&format_mutation_diff(old, new));
     Ok(out)
 }
 
-fn read_working_file(root: &Path, rel: &str) -> RepoResult<String> {
-    fs::read_to_string(root.join(rel)).map_err(|e| RepoError::from_io("read working file", e))
+fn read_working_bytes(root: &Path, rel: &str) -> RepoResult<Vec<u8>> {
+    fs::read(root.join(rel)).map_err(|e| RepoError::from_io("read working file", e))
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> RepoResult<T> {
@@ -3369,6 +3394,7 @@ mod tests {
         let text = match files.get("renamed.rs").unwrap() {
             FileContent::Ast(g) => unparse(g),
             FileContent::Text(t) => t.content.clone(),
+            FileContent::Binary(_) => panic!("unexpected binary"),
         };
         assert!(
             text.contains("42"),

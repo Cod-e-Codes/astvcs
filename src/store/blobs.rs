@@ -166,6 +166,18 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn roundtrip_binary_blob() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::new(dir.path());
+        let content = FileContent::Binary(crate::frontend::BinaryBlob::new(vec![
+            0x89, 0x50, 0x4E, 0x47, 0, 0,
+        ]));
+        let id = store.write(&content).unwrap();
+        let loaded = store.read(&id).unwrap();
+        assert_eq!(content, loaded);
+    }
+
+    #[test]
     fn deduplicates_identical_content() {
         let dir = TempDir::new().unwrap();
         let store = BlobStore::new(dir.path());

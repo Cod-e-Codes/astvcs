@@ -13,6 +13,7 @@ name = "astvcs"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
 hex = "0.4.3"
 ignore = "0.4.26"

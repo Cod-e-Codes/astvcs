@@ -18,7 +18,7 @@ pub struct ScanReport {
     pub skipped: Vec<SkippedPath>,
 }
 
-/// Collect tracked UTF-8 text files under `root`, honoring ignore rules.
+/// Collect tracked files under `root`, honoring ignore rules.
 pub fn scan_working_files(root: &Path) -> Result<ScanReport, String> {
     let mut files = HashSet::new();
     let mut skipped = Vec::new();
@@ -65,11 +65,7 @@ fn is_repo_metadata(path: &Path) -> bool {
 }
 
 fn classify_file(path: &Path) -> Result<(), String> {
-    let bytes = fs::read(path).map_err(|e| format!("read error: {e}"))?;
-    if bytes.contains(&0) {
-        return Err("binary file (NUL byte)".into());
-    }
-    std::str::from_utf8(&bytes).map_err(|e| format!("not valid UTF-8: {e}"))?;
+    fs::read(path).map_err(|e| format!("read error: {e}"))?;
     Ok(())
 }
 
@@ -126,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_binary_files_as_skipped() {
+    fn tracks_binary_files() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         fs::write(root.join("image.png"), [0x89, 0x50, 0x4E, 0x47, 0, 0]).unwrap();
@@ -134,13 +130,7 @@ mod tests {
 
         let report = scan_working_files(root).unwrap();
         assert!(report.files.contains("main.rs"));
-        assert!(!report.files.contains("image.png"));
-        assert!(report.skipped.iter().any(|s| s.path == "image.png"));
-        assert!(
-            report
-                .skipped
-                .iter()
-                .any(|s| s.reason.contains("binary file"))
-        );
+        assert!(report.files.contains("image.png"));
+        assert!(report.skipped.is_empty());
     }
 }

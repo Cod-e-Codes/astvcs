@@ -199,8 +199,11 @@ pub fn merge_files(base: &FileContent, left: &FileContent, right: &FileContent) 
     match (base, left, right) {
         (FileContent::Ast(b), FileContent::Ast(l), FileContent::Ast(r)) => merge_ast(b, l, r),
         (FileContent::Text(b), FileContent::Text(l), FileContent::Text(r)) => merge_text(b, l, r),
+        (FileContent::Binary(b), FileContent::Binary(l), FileContent::Binary(r)) => {
+            merge_binary(b, l, r)
+        }
         _ => MergeOutcome::Conflict(MergeConflict {
-            message: "cannot merge AST state with text blob state".into(),
+            message: "cannot merge different content kinds (ast, text, binary)".into(),
             left_mutations: vec![],
             right_mutations: vec![],
             left_intent_lines: vec![],
@@ -316,6 +319,32 @@ fn merge_text(
 
     let merged = apply_disjoint_edits(&base.content, &left_edits, &right_edits);
     MergeOutcome::Merged(FileContent::Text(crate::frontend::TextBlob::new(merged)))
+}
+
+/// Opaque whole-file merge for binary blobs: one side wins or they conflict.
+fn merge_binary(
+    base: &crate::frontend::BinaryBlob,
+    left: &crate::frontend::BinaryBlob,
+    right: &crate::frontend::BinaryBlob,
+) -> MergeOutcome {
+    if left.bytes == right.bytes {
+        return MergeOutcome::Merged(FileContent::Binary(left.clone()));
+    }
+    if left.bytes == base.bytes {
+        return MergeOutcome::Merged(FileContent::Binary(right.clone()));
+    }
+    if right.bytes == base.bytes {
+        return MergeOutcome::Merged(FileContent::Binary(left.clone()));
+    }
+    MergeOutcome::Conflict(MergeConflict {
+        message: "both branches modified binary file".into(),
+        left_mutations: vec![],
+        right_mutations: vec![],
+        left_intent_lines: vec![],
+        right_intent_lines: vec![],
+        overlapping: vec![],
+        text_line: None,
+    })
 }
 
 fn apply_disjoint_edits(base: &str, left_edits: &[TextEdit], right_edits: &[TextEdit]) -> String {

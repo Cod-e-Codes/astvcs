@@ -37,6 +37,7 @@ cargo build --release
 - Minimize scope. Match existing module layout and naming in `src/`.
 - `NodeId` is per-snapshot only. Cross-version continuity comes from `diff_graphs` alignment, not persistent ids.
 - Parse failures and unsupported extensions fall back to text blobs with `warning:` on stderr.
+- NUL-containing or non-UTF-8 file content stores as `FileContent::Binary` (byte-for-byte round-trip).
 - Operational detail uses `trace::notice` (gated by `-v`); user-facing problems use `trace::warning`.
 
 ### Source layout
@@ -56,6 +57,6 @@ cargo build --release
 
 - All tests pass (`cargo test`).
 - Clippy is clean with `-D warnings`.
-- If CLI behavior changed (including `identity`, `--json`, `reset`, `revert`, `merge`, `checkout`, `branch remove`, `gc`, `fsck`, materialize dirty-tree guard, remote ref resolution, or repository lock errors), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network, locking, atomicity, reachability, gc/fsck, author identity, structured errors, or repository model semantics change.
+- If CLI behavior changed (including `identity`, `--json`, `reset`, `revert`, `merge`, `checkout`, `branch remove`, `gc`, `fsck`, binary file tracking, materialize dirty-tree guard, remote ref resolution, or repository lock errors), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network, locking, atomicity, reachability, gc/fsck, author identity, structured errors, binary blobs, or repository model semantics change.
 - If merge, revert, or diff semantics changed, update the matching fixture under `examples/` and its row in [examples/README.md](../../../examples/README.md).
 - If network sync behavior changed, update [docs/architecture.md](../../../docs/architecture.md) network section and extend `tests/integration.rs` or `src/network/sync.rs` tests.
