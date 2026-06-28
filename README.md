@@ -2,7 +2,7 @@
 
 Version control for a working tree of source files. Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges structural edits. Everything else is stored as UTF-8 text with a line-oriented diff.
 
-The CLI follows familiar names (`init`, `status`, `record`, `branch`, `merge`, `checkout`, `reset`, `revert`, `log`, `fetch`, `push`, `clone`). astvcs is a local-first tool with optional network sync over file paths or HTTP. There is no index staging area and no conflict markers written into files.
+The CLI follows familiar names (`init`, `status`, `commit`, `branch`, `merge`, `checkout`, `reset`, `revert`, `log`, `fetch`, `push`, `clone`). astvcs is a local-first tool with optional network sync over file paths or HTTP. There is no index staging area and no conflict markers written into files.
 
 ## Why structure matters
 
@@ -25,7 +25,7 @@ cargo build --release
 .\target\release\astvcs.exe init
 # edit tracked files (AST extensions: see docs/architecture.md) or other UTF-8 text
 .\target\release\astvcs.exe status
-.\target\release\astvcs.exe record -m "describe the change"
+.\target\release\astvcs.exe commit -m "describe the change"
 .\target\release\astvcs.exe diff
 .\target\release\astvcs.exe log
 ```

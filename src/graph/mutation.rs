@@ -37,6 +37,17 @@ pub enum Mutation {
         parent: NodeId,
         new_order: Vec<NodeId>,
     },
+    /// Set leading trivia before `child` under `parent` at `occurrence`.
+    SetTrivia {
+        parent: NodeId,
+        child: NodeId,
+        occurrence: u32,
+        leading: String,
+    },
+    /// Replace trailing trivia after the root node.
+    SetRootTrailingTrivia {
+        trailing: String,
+    },
 }
 
 impl Mutation {
@@ -47,7 +58,8 @@ impl Mutation {
             Self::MoveNode { node_id, .. } => Some(*node_id),
             Self::RenameIdentifier { node_id, .. } => Some(*node_id),
             Self::EditPayload { node_id, .. } => Some(*node_id),
-            Self::ReorderChildren { .. } => None,
+            Self::SetTrivia { child, .. } => Some(*child),
+            Self::ReorderChildren { .. } | Self::SetRootTrailingTrivia { .. } => None,
         }
     }
 
@@ -55,9 +67,11 @@ impl Mutation {
         match self {
             Self::InsertSubtree { parent, .. }
             | Self::DeleteSubtree { parent, .. }
-            | Self::ReorderChildren { parent, .. } => Some(*parent),
+            | Self::ReorderChildren { parent, .. }
+            | Self::SetTrivia { parent, .. } => Some(*parent),
             Self::MoveNode { new_parent, .. } => Some(*new_parent),
             Self::RenameIdentifier { .. } | Self::EditPayload { .. } => None,
+            Self::SetRootTrailingTrivia { .. } => None,
         }
     }
 }

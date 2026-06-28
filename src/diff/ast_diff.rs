@@ -11,7 +11,37 @@ pub struct DiffResult {
 pub fn diff_graphs(old: &AstGraph, new: &AstGraph) -> DiffResult {
     let mut mutations = Vec::new();
     diff_subtree(old, new, old.root, new.root, &mut mutations);
+    if old.root_trailing_trivia != new.root_trailing_trivia {
+        mutations.push(Mutation::SetRootTrailingTrivia {
+            trailing: new.root_trailing_trivia.clone(),
+        });
+    }
     DiffResult { mutations }
+}
+
+fn diff_child_trivia(
+    old: &AstGraph,
+    new: &AstGraph,
+    old_parent: NodeId,
+    new_parent: NodeId,
+    old_child: NodeId,
+    new_child: NodeId,
+    out: &mut Vec<Mutation>,
+) {
+    let old_children = old.get(&old_parent).unwrap().children.clone();
+    let new_children = new.get(&new_parent).unwrap().children.clone();
+    let old_occ = child_occurrence_at(&old_children, old_child);
+    let new_occ = child_occurrence_at(&new_children, new_child);
+    let old_leading = old.get_trivia(old_parent, old_child, old_occ);
+    let new_leading = new.get_trivia(new_parent, new_child, new_occ);
+    if old_leading != new_leading {
+        out.push(Mutation::SetTrivia {
+            parent: old_parent,
+            child: old_child,
+            occurrence: old_occ,
+            leading: new_leading.to_string(),
+        });
+    }
 }
 
 fn child_key(graph: &AstGraph, id: &NodeId) -> (NodeKind, String, usize) {
@@ -217,6 +247,15 @@ fn diff_children(
         matched_old[oi] = true;
         matched_new[ni] = true;
         diff_subtree(old, new, old_children[oi], new_children[ni], out);
+        diff_child_trivia(
+            old,
+            new,
+            old_node_id,
+            new_node_id,
+            old_children[oi],
+            new_children[ni],
+            out,
+        );
     }
 
     for (oi, ni) in role_pairs {
@@ -238,6 +277,15 @@ fn diff_children(
             });
         }
         diff_subtree(old, new, old_children[oi], new_children[ni], out);
+        diff_child_trivia(
+            old,
+            new,
+            old_node_id,
+            new_node_id,
+            old_children[oi],
+            new_children[ni],
+            out,
+        );
     }
 
     for (oi, ni) in key_pairs {
@@ -257,6 +305,15 @@ fn diff_children(
                 });
             }
             diff_subtree(old, new, old_children[oi], new_children[ni], out);
+            diff_child_trivia(
+                old,
+                new,
+                old_node_id,
+                new_node_id,
+                old_children[oi],
+                new_children[ni],
+                out,
+            );
         }
     }
 
@@ -281,6 +338,15 @@ fn diff_children(
                     });
                 }
                 diff_subtree(old, new, *old_child, *new_child, out);
+                diff_child_trivia(
+                    old,
+                    new,
+                    old_node_id,
+                    new_node_id,
+                    *old_child,
+                    *new_child,
+                    out,
+                );
                 break;
             }
         }
@@ -322,6 +388,15 @@ fn diff_children(
                         new_payload: nc.payload.clone(),
                     });
                 }
+                diff_child_trivia(
+                    old,
+                    new,
+                    old_node_id,
+                    new_node_id,
+                    *old_child,
+                    *new_child,
+                    out,
+                );
                 break;
             }
         }
@@ -455,6 +530,24 @@ mod tests {
         let mut working = old.clone();
         working.apply_batch(&diff.mutations).unwrap();
         working.validate().unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
+    }
+
+    #[test]
+    fn trailing_line_comment_diff_includes_trivia_shift() {
+        let old = parse_rust("fn main() {\n    println!(\"Hello, World!\");\n}\n").unwrap();
+        let new = parse_rust("fn main() {\n    println!(\"Hello, World!\"); // waddup fool\n}\n")
+            .unwrap();
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            diff.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::SetTrivia { .. })),
+            "expected SetTrivia for comment body after sibling, got {:?}",
+            diff.mutations
+        );
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
         assert_eq!(unparse(&working), unparse(&new));
     }
 

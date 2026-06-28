@@ -2,9 +2,11 @@
 
 ## Repository model
 
-**States.** Each `record` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Recording with no file changes is a no-op.
+**States.** Each `commit` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Committing with no file changes is a no-op.
 
-**HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `record` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
+**HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `commit` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
+
+**Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store (no GC yet).
 
 **On-disk layout.**
 
@@ -14,7 +16,7 @@
 .astvcs/timeline/    parent links and metadata
 .astvcs/refs/heads/  branch tips
 HEAD                 branch name or state id
-index.json           last recorded manifest (working-tree baseline)
+index.json           last committed manifest (working-tree baseline)
 ```
 
 **Working tree scan.** Honors `.gitignore`, `.astvcsignore`, and git exclude files (ripgrep semantics). Always skips `.astvcs/` and `.git/`. Non-UTF-8 paths are not tracked as text.
@@ -25,7 +27,7 @@ Supported extensions are parsed with tree-sitter into an `AstGraph` DAG. Each no
 
 **`NodeId` (one snapshot).** `NodeId` hashes `kind`, `payload`, and child ids. It names a node inside one parsed graph. A payload edit (for example `1` to `2` on a literal) produces a new id for that node. Applying a mutation can reseal ancestors to new ids when child ids change.
 
-**Cross-version continuity.** astvcs does not assign persistent node ids across `record` calls. Continuity is reconstructed: `diff_graphs` aligns an old graph to a new graph, then emits mutations (`EditPayload`, `RenameIdentifier`, `InsertSubtree`, and others) that reference nodes in the **old** graph. Three-way merge diffs each branch from the merge base and applies those mutations to a copy of the base.
+**Cross-version continuity.** astvcs does not assign persistent node ids across `commit` calls. Continuity is reconstructed: `diff_graphs` aligns an old graph to a new graph, then emits mutations (`EditPayload`, `RenameIdentifier`, `InsertSubtree`, `SetTrivia`, and others) that reference nodes in the **old** graph. Three-way merge diffs each branch from the merge base and applies those mutations to a copy of the base.
 
 | Extensions | Language |
 |------------|----------|
@@ -59,7 +61,7 @@ Checkout and merge call `materialize_state` to write the state manifest to disk 
 
 1. Parse old and new sources into graphs.
 2. Align children between old and new: LCS on matching `NodeId` (unchanged subtrees), then LCS on `(NodeKind, child_count)` (role pass; payload ignored), then further pairing for structural nodes and payload-editable leaves.
-3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `ReorderChildren`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings.
+3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `ReorderChildren`, `SetTrivia`, `SetRootTrailingTrivia`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings. When matched siblings keep the same `NodeId` but leading trivia changes (for example trailing comment text stored before the next sibling token), `SetTrivia` captures the gap.
 
 Alignment is heuristic. Wrong sibling pairing can produce delete+insert instead of `EditPayload`, or mis-anchored mutations. The `identity-demo` fixture exercises literal `EditPayload` and cases where alignment fails (rename conflict).
 
@@ -145,10 +147,12 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 |------|----------------|
 | `parse_all_supported_languages` | Every `supported_extensions()` entry and `supported_special_paths()` basename parses and validates |
 | `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial `EditPayload` diff, apply, unparse, re-parse: no structural drift; text matches edited source (Rust, Python, JS, JSON, TS, Go with multiline block returns) |
-| `rust_unparse_roundtrip_via_repo` | Record and reload preserves Rust source bytes |
-| `go_unparse_roundtrip_via_repo` | Record, reload, and checkout preserve Go source bytes including block closing newlines |
+| `rust_unparse_roundtrip_via_repo` | Commit and reload preserves Rust source bytes |
+| `go_unparse_roundtrip_via_repo` | Commit, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Sibling literal merge and rename conflicts |
+| `trailing_comment_and_literal_edit_merge` | Trailing comment text survives merge when a sibling literal is edited on the other branch |
+| `cli_branch_remove_guardrails` | Branch remove refuses checked-out and last branch |
 | `cli_reset_hard_soft_and_force` | Hard/soft reset, drift repair, force clobber warnings |
 | `cli_revert_and_dry_run` | Revert conflicts, dry-run, and successful undo |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | `origin/main`-style ref resolution |

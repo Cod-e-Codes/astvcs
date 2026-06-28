@@ -56,6 +56,6 @@ cargo build --release
 
 - All tests pass (`cargo test`).
 - Clippy is clean with `-D warnings`.
-- If CLI behavior changed (including `reset`, `revert`, or remote ref resolution), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network or repository model semantics change.
+- If CLI behavior changed (including `reset`, `revert`, `branch remove`, or remote ref resolution), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network or repository model semantics change.
 - If merge, revert, or diff semantics changed, update the matching fixture under `examples/` and its row in [examples/README.md](../../../examples/README.md).
 - If network sync behavior changed, update [docs/architecture.md](../../../docs/architecture.md) network section and extend `tests/integration.rs` or `src/network/sync.rs` tests.

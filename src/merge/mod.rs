@@ -439,7 +439,34 @@ fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
         | (Mutation::EditPayload { .. }, Mutation::InsertSubtree { .. })
         | (Mutation::InsertSubtree { .. }, Mutation::EditPayload { .. })
         | (Mutation::RenameIdentifier { .. }, Mutation::EditPayload { .. })
-        | (Mutation::EditPayload { .. }, Mutation::RenameIdentifier { .. }) => true,
+        | (Mutation::EditPayload { .. }, Mutation::RenameIdentifier { .. })
+        | (Mutation::SetTrivia { .. }, Mutation::EditPayload { .. })
+        | (Mutation::EditPayload { .. }, Mutation::SetTrivia { .. })
+        | (Mutation::SetTrivia { .. }, Mutation::RenameIdentifier { .. })
+        | (Mutation::RenameIdentifier { .. }, Mutation::SetTrivia { .. })
+        | (Mutation::SetTrivia { .. }, Mutation::InsertSubtree { .. })
+        | (Mutation::InsertSubtree { .. }, Mutation::SetTrivia { .. })
+        | (Mutation::SetRootTrailingTrivia { .. }, Mutation::EditPayload { .. })
+        | (Mutation::EditPayload { .. }, Mutation::SetRootTrailingTrivia { .. })
+        | (Mutation::SetRootTrailingTrivia { .. }, Mutation::RenameIdentifier { .. })
+        | (Mutation::RenameIdentifier { .. }, Mutation::SetRootTrailingTrivia { .. })
+        | (Mutation::SetRootTrailingTrivia { .. }, Mutation::InsertSubtree { .. })
+        | (Mutation::InsertSubtree { .. }, Mutation::SetRootTrailingTrivia { .. }) => true,
+        (
+            Mutation::SetTrivia {
+                parent: p1,
+                child: c1,
+                occurrence: o1,
+                ..
+            },
+            Mutation::SetTrivia {
+                parent: p2,
+                child: c2,
+                occurrence: o2,
+                ..
+            },
+        ) if p1 == p2 && c1 == c2 && o1 == o2 => false,
+        (Mutation::SetRootTrailingTrivia { .. }, Mutation::SetRootTrailingTrivia { .. }) => false,
         (Mutation::EditPayload { node_id: a, .. }, Mutation::EditPayload { node_id: b, .. })
         | (
             Mutation::RenameIdentifier { node_id: a, .. },
@@ -464,6 +491,7 @@ fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diff::diff_graphs;
     use crate::frontend::parse_rust;
 
     #[test]
@@ -543,6 +571,32 @@ mod tests {
             ),
             MergeOutcome::Merged(_)
         ));
+    }
+
+    #[test]
+    fn trailing_comment_survives_sibling_literal_edit_merge() {
+        use crate::unparser::unparse;
+
+        let base = parse_rust("fn main() {\n    println!(\"Hello, World!\");\n}\n").unwrap();
+        let left = parse_rust("fn main() {\n    println!(\"sup?\");\n}\n").unwrap();
+        let right = parse_rust("fn main() {\n    println!(\"Hello, World!\"); // waddup fool\n}\n")
+            .unwrap();
+        let left_diff = diff_graphs(&base, &left);
+        let right_diff = diff_graphs(&base, &right);
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected merge, left={left_diff:?} right={right_diff:?} outcome={outcome:?}");
+        };
+        let text = unparse(&merged);
+        assert!(
+            text.contains("// waddup fool"),
+            "merged text missing comment payload: {text:?}\nleft={left_diff:?}\nright={right_diff:?}"
+        );
+        assert!(text.contains("\"sup?\""), "merged text: {text:?}");
     }
 
     #[test]

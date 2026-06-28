@@ -16,9 +16,10 @@ Global flags:
 | `diff [path]` | Diff working tree, or a single file |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
-| `record -m <msg>` | Record working tree as a new state (prints when unchanged) |
+| `commit -m <msg>` | Commit working tree as a new state (prints when unchanged) |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
+| `branch remove <name>` | Remove a branch ref (see guardrails below) |
 | `merge-base <left> <right>` | Print lowest common ancestor (branch, remote-tracking ref, or state id) |
 | `merge <branch> -m <msg>` | Merge a branch; updates working tree on success |
 | `merge <branch> -m <msg> --resolve <path>:ours` | Merge with per-path conflict resolution (repeatable) |
@@ -38,15 +39,25 @@ Global flags:
 
 Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, and `revert` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
+### `branch remove`
+
+Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs are unchanged; states remain reachable by id (there is no garbage collection yet).
+
+| Guardrail | Behavior |
+|-----------|----------|
+| Checked-out branch | Error: `cannot remove the checked-out branch` |
+| Last remaining branch | Error: `cannot remove the last branch` |
+| Unmerged commits on the branch | Allowed. Removing a ref does not delete content-addressed states; history stays in the store and can still be checked out by state id. |
+
 ### `reset`
 
 Default mode is **hard**: move the branch tip or detached HEAD to the target and call `materialize_state` (sync working tree and `index.json`). This differs from git's default (`--mixed`): astvcs has no staging index, so the meaningful modes are **hard** (move pointer and sync disk) and **soft** (move pointer only).
 
 | Flag | Behavior |
 |------|----------|
-| (none) | Hard reset: refuse when the working tree has unrecorded changes |
+| (none) | Hard reset: refuse when the working tree has uncommitted changes |
 | `--soft` | Move the ref only; disk and `index.json` stay as-is (`status` shows diffs against the new HEAD) |
-| `--force` | With hard reset, proceed when the working tree is dirty; emit `warning: reset --force: discarded unrecorded changes in <path>` per clobbered path |
+| `--force` | With hard reset, proceed when the working tree is dirty; emit `warning: reset --force: discarded uncommitted changes in <path>` per clobbered path |
 
 Hard reset to the current tip still materializes (repairs drift between disk and HEAD). Resetting to the root empty state (`0` repeated 64 times) is allowed.
 
@@ -60,7 +71,7 @@ Preconditions (error before any write):
 - Target is an ancestor of HEAD (reverting HEAD tip is allowed)
 - Target is not the root empty state
 
-If the reverted manifest is identical to HEAD, revert is a true no-op (same stdout as `record` with no changes: no new timeline entry, refs unchanged). When the reverted tree matches the target's parent manifest, the branch tip moves to that parent state id instead of writing a duplicate content-addressed state.
+If the reverted manifest is identical to HEAD, revert is a true no-op (same stdout as `commit` with no changes: no new timeline entry, refs unchanged). When the reverted tree matches the target's parent manifest, the branch tip moves to that parent state id instead of writing a duplicate content-addressed state.
 
 Paths added in the target state and modified again on HEAD before revert produce a conflict (`path modified after the reverted state`) rather than silently keeping HEAD's newer content.
 
@@ -87,7 +98,7 @@ With `--dry-run`, resolutions are applied in memory only: a fully resolved plan 
 
 ## Stderr output
 
-By default, stderr shows only `warning:` lines (unexpected parse fallback, skipped paths, merge conflicts, reset force clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. With `-v`, `notice:` lines are included: scan results, parse mode per file, text-blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op records. Primary command output stays on stdout.
+By default, stderr shows only `warning:` lines (unexpected parse fallback, skipped paths, merge conflicts, reset force clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. With `-v`, `notice:` lines are included: scan results, parse mode per file, text-blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
 
 ## Ignore rules
 

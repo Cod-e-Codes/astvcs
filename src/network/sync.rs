@@ -227,10 +227,10 @@ mod tests {
     use crate::network::remote::add_remote;
     use tempfile::TempDir;
 
-    fn init_with_record(dir: &Path, message: &str) -> Repo {
+    fn init_with_commit(dir: &Path, message: &str) -> Repo {
         let repo = Repo::init(dir).unwrap();
         fs::write(dir.join("hello.txt"), "hello\n").unwrap();
-        repo.record(message).unwrap();
+        repo.commit(message).unwrap();
         repo
     }
 
@@ -238,7 +238,7 @@ mod tests {
     fn file_remote_fetch_and_push() {
         let upstream = TempDir::new().unwrap();
         let downstream = TempDir::new().unwrap();
-        let upstream_repo = init_with_record(upstream.path(), "upstream change");
+        let upstream_repo = init_with_commit(upstream.path(), "upstream change");
 
         let downstream_repo = Repo::init(downstream.path()).unwrap();
         add_remote(
@@ -260,7 +260,7 @@ mod tests {
         downstream_repo.checkout_branch("main").unwrap();
 
         fs::write(downstream.path().join("hello.txt"), "world\n").unwrap();
-        downstream_repo.record("downstream change").unwrap();
+        downstream_repo.commit("downstream change").unwrap();
         push(&downstream_repo, "origin", Some("main"), false).unwrap();
 
         assert_eq!(
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn clone_from_file_remote() {
         let upstream = TempDir::new().unwrap();
-        init_with_record(upstream.path(), "initial");
+        init_with_commit(upstream.path(), "initial");
 
         let clone_dir = TempDir::new().unwrap();
         let (repo, branch) =

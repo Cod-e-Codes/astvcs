@@ -23,8 +23,8 @@ pub use network::{
     RemoteConfig, add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 pub use store::{
-    BlobId, BlobStore, BranchInfo, FileStatus, MergePlan, MergeResolution, MergeResolveSide,
-    RecordOutcome, Repo, StateEntry, StateId, TimelineEntry, WorkingStatus, ancestors,
+    BlobId, BlobStore, BranchInfo, CommitOutcome, FileStatus, MergePlan, MergeResolution,
+    MergeResolveSide, Repo, StateEntry, StateId, TimelineEntry, WorkingStatus, ancestors,
     hash_manifest, merge_base, parse_merge_resolution, parse_merge_resolutions, walk_history,
 };
 pub use trace::{is_verbose, notice, set_verbose, warn};

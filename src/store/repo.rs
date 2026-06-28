@@ -129,9 +129,9 @@ impl MergePlan {
     }
 }
 
-/// Result of recording the working tree.
+/// Result of committing the working tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordOutcome {
+pub struct CommitOutcome {
     pub state_id: StateId,
     pub created: bool,
 }
@@ -347,6 +347,23 @@ impl Repo {
         };
         fs::write(ref_path, format!("{state}\n")).map_err(|e| e.to_string())?;
         trace::notice(format!("branch: created {name} at state {state}"));
+        Ok(())
+    }
+
+    /// Remove a branch ref. States remain in the store; only the named ref is deleted.
+    pub fn remove_branch(&self, name: &str) -> Result<(), String> {
+        let ref_path = self.astvcs_dir().join("refs/heads").join(name);
+        if !ref_path.exists() {
+            return Err(format!("branch not found: {name}"));
+        }
+        if self.head_branch()? == Some(name.to_string()) {
+            return Err(format!("cannot remove the checked-out branch: {name}"));
+        }
+        if self.list_branches()?.len() <= 1 {
+            return Err("cannot remove the last branch".into());
+        }
+        fs::remove_file(ref_path).map_err(|e| e.to_string())?;
+        trace::notice(format!("branch: removed {name}"));
         Ok(())
     }
 
@@ -784,7 +801,7 @@ impl Repo {
 
         if !soft && !force && target != prior_head && !self.working_tree_is_clean()? {
             return Err(
-                "working tree has unrecorded changes; record, soft reset, or pass --force".into(),
+                "working tree has uncommitted changes; commit, soft reset, or pass --force".into(),
             );
         }
 
@@ -822,7 +839,7 @@ impl Repo {
             self.materialize_state(&target)?;
             for path in clobbered_paths {
                 trace::warn(format!(
-                    "reset --force: discarded unrecorded changes in {path}"
+                    "reset --force: discarded uncommitted changes in {path}"
                 ));
             }
         }
@@ -876,7 +893,7 @@ impl Repo {
         Ok(out)
     }
 
-    pub fn record(&self, message: &str) -> Result<RecordOutcome, String> {
+    pub fn commit(&self, message: &str) -> Result<CommitOutcome, String> {
         let head = self.head_state()?;
         let head_files = self.load_state_files(&head)?;
         let working_files = self.scan_working()?;
@@ -887,21 +904,21 @@ impl Repo {
             let content = parse_text_or_blob(path, &disk);
             match head_files.get(path) {
                 Some(old) if content_eq(old, &content) => {}
-                Some(_) => trace::notice(format!("record: {path} modified")),
-                None => trace::notice(format!("record: {path} added")),
+                Some(_) => trace::notice(format!("commit: {path} modified")),
+                None => trace::notice(format!("commit: {path} added")),
             }
             new_files.insert(path.clone(), content);
         }
         for path in head_files.keys().cloned().collect::<Vec<_>>() {
             if !working_files.contains(&path) {
-                trace::notice(format!("record: {path} removed"));
+                trace::notice(format!("commit: {path} removed"));
                 new_files.remove(&path);
             }
         }
 
         if manifest_unchanged(&head_files, &new_files) {
-            trace::notice(format!("record: no changes; state {head} unchanged"));
-            return Ok(RecordOutcome {
+            trace::notice(format!("commit: no changes; state {head} unchanged"));
+            return Ok(CommitOutcome {
                 state_id: head,
                 created: false,
             });
@@ -915,16 +932,16 @@ impl Repo {
                     format!("{state_id}\n"),
                 )
                 .map_err(|e| e.to_string())?;
-                trace::notice(format!("record: updated branch {branch} -> {state_id}"));
+                trace::notice(format!("commit: updated branch {branch} -> {state_id}"));
             }
             HeadTarget::Detached(_) => {
                 self.write_head_target(&HeadTarget::Detached(state_id.clone()))?;
-                trace::notice(format!("record: detached HEAD -> {state_id}"));
+                trace::notice(format!("commit: detached HEAD -> {state_id}"));
             }
         }
         self.sync_index_to_state(&new_files, &state_id)?;
-        trace::notice(format!("record: created state {state_id}"));
-        Ok(RecordOutcome {
+        trace::notice(format!("commit: created state {state_id}"));
+        Ok(CommitOutcome {
             state_id,
             created: true,
         })
@@ -1378,10 +1395,10 @@ mod tests {
     }
 
     #[test]
-    fn record_and_reload_uses_blobs() {
+    fn commit_and_reload_uses_blobs() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        let id = repo.record("init").unwrap().state_id;
+        let id = repo.commit("init").unwrap().state_id;
         let files = repo.load_state_files(&id).unwrap();
         assert!(files.contains_key("main.rs"));
         assert!(
@@ -1394,13 +1411,13 @@ mod tests {
     fn merge_base_across_branches() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        let base_id = repo.record("base").unwrap().state_id;
+        let base_id = repo.commit("base").unwrap().state_id;
         repo.create_branch("feature", None).unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
-        repo.record("on main").unwrap();
+        repo.commit("on main").unwrap();
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() { let y = 2; }\n").unwrap();
-        let feature_id = repo.record("on feature").unwrap().state_id;
+        let feature_id = repo.commit("on feature").unwrap().state_id;
         let main_id = repo.branch_state("main").unwrap();
         let lca = merge_base(&main_id, &feature_id, |id| repo.load_timeline_entry(id)).unwrap();
         assert_eq!(lca, base_id);
@@ -1478,7 +1495,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.path().join("lib.rs"), "pub fn one() -> i32 { 1 }\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         repo.checkout_branch("feature").unwrap();
@@ -1487,7 +1504,7 @@ mod tests {
             "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
         )
         .unwrap();
-        repo.record("feature lib").unwrap();
+        repo.commit("feature lib").unwrap();
 
         repo.checkout_branch("main").unwrap();
         fs::write(
@@ -1495,7 +1512,7 @@ mod tests {
             "fn foo() {\n    let y = 1;\n}\n",
         )
         .unwrap();
-        repo.record("main rename").unwrap();
+        repo.commit("main rename").unwrap();
 
         repo.merge_branch("feature", "merge").unwrap();
         assert!(
@@ -1522,7 +1539,7 @@ mod tests {
             "fn foo() {\n    let x = 1;\n}\n",
         )
         .unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         fs::write(
@@ -1530,7 +1547,7 @@ mod tests {
             "fn foo() {\n    let y = 1;\n}\n",
         )
         .unwrap();
-        repo.record("rename on main").unwrap();
+        repo.commit("rename on main").unwrap();
 
         repo.checkout_branch("feature").unwrap();
         fs::write(
@@ -1538,7 +1555,7 @@ mod tests {
             "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
         )
         .unwrap();
-        repo.record("insert on feature").unwrap();
+        repo.commit("insert on feature").unwrap();
 
         repo.checkout_branch("main").unwrap();
         let merged = repo.merge_branch("feature", "merge").unwrap();
@@ -1555,16 +1572,16 @@ mod tests {
     fn merge_add_add_includes_new_file() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         fs::write(dir.path().join("lib.rs"), "fn shared() {}\n").unwrap();
-        repo.record("add lib on main").unwrap();
+        repo.commit("add lib on main").unwrap();
 
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("lib.rs"), "fn shared() {}\n").unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
-        repo.record("add lib and edit main on feature").unwrap();
+        repo.commit("add lib and edit main on feature").unwrap();
 
         repo.checkout_branch("main").unwrap();
         let merged = repo.merge_branch("feature", "merge identical add").unwrap();
@@ -1585,15 +1602,15 @@ mod tests {
     fn merge_add_add_conflict_on_different_content() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         fs::write(dir.path().join("lib.rs"), "fn on_main() {}\n").unwrap();
-        repo.record("add lib on main").unwrap();
+        repo.commit("add lib on main").unwrap();
 
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("lib.rs"), "fn on_feature() {}\n").unwrap();
-        repo.record("add lib on feature").unwrap();
+        repo.commit("add lib on feature").unwrap();
 
         repo.checkout_branch("main").unwrap();
         let err = repo.merge_branch("feature", "merge add/add").unwrap_err();
@@ -1610,7 +1627,7 @@ mod tests {
             "fn foo() {\n    let x = 1;\n}\n",
         )
         .unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         fs::write(
@@ -1618,7 +1635,7 @@ mod tests {
             "fn foo() {\n    let y = 1;\n}\n",
         )
         .unwrap();
-        repo.record("rename to y on main").unwrap();
+        repo.commit("rename to y on main").unwrap();
 
         repo.checkout_branch("feature").unwrap();
         fs::write(
@@ -1626,7 +1643,7 @@ mod tests {
             "fn foo() {\n    let z = 1;\n}\n",
         )
         .unwrap();
-        repo.record("rename to z on feature").unwrap();
+        repo.commit("rename to z on feature").unwrap();
         repo.checkout_branch("main").unwrap();
     }
 
@@ -1768,15 +1785,15 @@ mod tests {
     fn merge_add_add_resolve_theirs() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         fs::write(dir.path().join("lib.rs"), "fn on_main() {}\n").unwrap();
-        repo.record("add lib on main").unwrap();
+        repo.commit("add lib on main").unwrap();
 
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("lib.rs"), "fn on_feature() {}\n").unwrap();
-        repo.record("add lib on feature").unwrap();
+        repo.commit("add lib on feature").unwrap();
 
         repo.checkout_branch("main").unwrap();
         let merged = repo
@@ -1835,13 +1852,13 @@ mod tests {
     fn merge_base_refs_accepts_branch_names() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        let base_id = repo.record("base").unwrap().state_id;
+        let base_id = repo.commit("base").unwrap().state_id;
         repo.create_branch("feature", None).unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
-        repo.record("on main").unwrap();
+        repo.commit("on main").unwrap();
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() { let y = 2; }\n").unwrap();
-        repo.record("on feature").unwrap();
+        repo.commit("on feature").unwrap();
         repo.checkout_branch("main").unwrap();
         let lca = repo.merge_base_refs("main", "feature").unwrap();
         assert_eq!(lca, base_id);
@@ -1855,7 +1872,7 @@ mod tests {
             "fn foo() {\n    let x = 1;\n}\n",
         )
         .unwrap();
-        let base_id = repo.record("base").unwrap().state_id;
+        let base_id = repo.commit("base").unwrap().state_id;
         repo.create_branch("feature", None).unwrap();
 
         fs::write(
@@ -1863,7 +1880,7 @@ mod tests {
             "fn foo() {\n    let y = 1;\n}\n",
         )
         .unwrap();
-        let main_id = repo.record("on main").unwrap().state_id;
+        let main_id = repo.commit("on main").unwrap().state_id;
 
         repo.checkout_branch("feature").unwrap();
         fs::write(
@@ -1871,7 +1888,7 @@ mod tests {
             "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
         )
         .unwrap();
-        let feature_id = repo.record("on feature").unwrap().state_id;
+        let feature_id = repo.commit("on feature").unwrap().state_id;
 
         let out = repo
             .diff_three_way(&base_id, &main_id, &feature_id, Some("main.rs"))
@@ -1885,14 +1902,14 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
         fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         fs::remove_file(dir.path().join("lib.rs")).unwrap();
-        repo.record("delete lib on main").unwrap();
+        repo.commit("delete lib on main").unwrap();
 
         repo.checkout_branch("feature").unwrap();
-        repo.record("feature noop").unwrap();
+        repo.commit("feature noop").unwrap();
 
         repo.checkout_branch("main").unwrap();
         let merged = repo.merge_branch("feature", "merge deletion").unwrap();
@@ -1905,9 +1922,9 @@ mod tests {
     fn checkout_state_detached_status_matches_disk() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
-        repo.record("v2").unwrap();
+        repo.commit("v2").unwrap();
 
         repo.checkout_state(&v1).unwrap();
         assert!(repo.is_detached().unwrap());
@@ -1915,7 +1932,7 @@ mod tests {
         assert!(repo.working_tree_is_clean().unwrap());
 
         fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
-        let v3 = repo.record("v3 from detached").unwrap().state_id;
+        let v3 = repo.commit("v3 from detached").unwrap().state_id;
         let entry = repo.load_timeline_entry(&v3).unwrap();
         assert_eq!(entry.parent.as_deref(), Some(v1.as_str()));
         assert!(repo.is_detached().unwrap());
@@ -1923,11 +1940,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_record_is_idempotent() {
+    fn empty_commit_is_idempotent() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        let id = repo.record("first").unwrap().state_id;
-        let again = repo.record("duplicate").unwrap();
+        let id = repo.commit("first").unwrap().state_id;
+        let again = repo.commit("duplicate").unwrap();
         assert!(!again.created);
         assert_eq!(again.state_id, id);
         let entry = repo.load_timeline_entry(&id).unwrap();
@@ -1939,9 +1956,9 @@ mod tests {
     fn reset_hard_moves_tip_and_materializes() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        repo.record("v2").unwrap();
+        repo.commit("v2").unwrap();
 
         repo.reset(&v1, false, false).unwrap();
         assert_eq!(repo.head_state().unwrap(), v1);
@@ -1956,7 +1973,7 @@ mod tests {
     fn reset_hard_repairs_drift_at_same_tip() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "drifted\n").unwrap();
 
         repo.reset(&v1, false, false).unwrap();
@@ -1970,9 +1987,9 @@ mod tests {
     fn reset_soft_preserves_dirty_working_tree() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        repo.record("v2").unwrap();
+        repo.commit("v2").unwrap();
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
 
         repo.reset(&v1, true, false).unwrap();
@@ -1989,14 +2006,14 @@ mod tests {
     fn reset_hard_refuses_dirty_tree_without_force() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        repo.record("v2").unwrap();
+        repo.commit("v2").unwrap();
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
         let tip_before = repo.head_state().unwrap();
 
         let err = repo.reset(&v1, false, false).unwrap_err();
-        assert!(err.contains("unrecorded changes"), "{err}");
+        assert!(err.contains("uncommitted changes"), "{err}");
         assert_eq!(repo.head_state().unwrap(), tip_before);
         assert_eq!(
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
@@ -2009,9 +2026,9 @@ mod tests {
         trace::clear_log();
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        repo.record("v2").unwrap();
+        repo.commit("v2").unwrap();
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
 
         repo.reset(&v1, false, true).unwrap();
@@ -2023,7 +2040,7 @@ mod tests {
         assert!(
             log.iter()
                 .any(|l| l
-                    .contains("warning: reset --force: discarded unrecorded changes in note.txt")),
+                    .contains("warning: reset --force: discarded uncommitted changes in note.txt")),
             "{log:?}"
         );
     }
@@ -2032,9 +2049,9 @@ mod tests {
     fn reset_detached_hard_and_soft() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        let v2 = repo.record("v2").unwrap().state_id;
+        let v2 = repo.commit("v2").unwrap().state_id;
         repo.checkout_state(&v2).unwrap();
 
         repo.reset(&v1, true, false).unwrap();
@@ -2054,7 +2071,7 @@ mod tests {
     fn reset_to_root_empty_state() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        repo.record("v1").unwrap();
+        repo.commit("v1").unwrap();
         let root = StateId::from("0".repeat(64));
 
         repo.reset(&root, false, false).unwrap();
@@ -2066,7 +2083,7 @@ mod tests {
     fn reset_unknown_ref_errors_without_writes() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
 
         let err = repo.reset("missing-branch", false, false).unwrap_err();
         assert!(err.contains("unknown"), "{err}");
@@ -2081,7 +2098,7 @@ mod tests {
     fn resolve_state_ref_remote_tracking() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         repo.write_remote_ref("origin", "main", &v1).unwrap();
 
         assert_eq!(repo.resolve_state_ref("origin/main").unwrap(), v1);
@@ -2092,15 +2109,15 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
         fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
-        repo.record("seed").unwrap();
+        repo.commit("seed").unwrap();
         fs::remove_file(dir.path().join("notes.txt")).unwrap();
-        repo.record("remove notes").unwrap();
+        repo.commit("remove notes").unwrap();
         let target = {
             fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-            repo.record("add notes").unwrap().state_id
+            repo.commit("add notes").unwrap().state_id
         };
         fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
-        repo.record("modify notes").unwrap();
+        repo.commit("modify notes").unwrap();
 
         let err = repo.revert_state(&target, "revert add").unwrap_err();
         assert!(
@@ -2119,12 +2136,12 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
         fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
-        repo.record("seed").unwrap();
+        repo.commit("seed").unwrap();
         fs::remove_file(dir.path().join("notes.txt")).unwrap();
-        repo.record("remove notes").unwrap();
+        repo.commit("remove notes").unwrap();
         let target = {
             fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-            repo.record("add notes").unwrap().state_id
+            repo.commit("add notes").unwrap().state_id
         };
 
         let outcome = repo.revert_state(&target, "revert add").unwrap();
@@ -2137,11 +2154,11 @@ mod tests {
     fn revert_of_revert_restores_content() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        repo.record("v1").unwrap();
+        repo.commit("v1").unwrap();
         fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
-        let v2 = repo.record("v2 add extra").unwrap().state_id;
+        let v2 = repo.commit("v2 add extra").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v3\n").unwrap();
-        let v3 = repo.record("v3").unwrap().state_id;
+        let v3 = repo.commit("v3").unwrap().state_id;
         let v4 = repo.revert_state(&v2, "revert extra add").unwrap().state_id;
         let outcome = repo.revert_state(&v4, "revert the revert").unwrap();
 
@@ -2160,12 +2177,12 @@ mod tests {
     }
 
     #[test]
-    fn revert_head_tip_undoes_last_record() {
+    fn revert_head_tip_undoes_last_commit() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        let v1 = repo.record("v1").unwrap().state_id;
+        let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        let v2 = repo.record("v2").unwrap().state_id;
+        let v2 = repo.commit("v2").unwrap().state_id;
 
         let outcome = repo.revert_state(&v2, "undo v2").unwrap();
         assert!(outcome.created);
@@ -2185,11 +2202,11 @@ mod tests {
     fn revert_older_commit_on_linear_history() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        repo.record("v1").unwrap();
+        repo.commit("v1").unwrap();
         fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
-        let v2 = repo.record("v2 add extra").unwrap().state_id;
+        let v2 = repo.commit("v2 add extra").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v3\n").unwrap();
-        repo.record("v3").unwrap();
+        repo.commit("v3").unwrap();
 
         let outcome = repo.revert_state(&v2, "revert extra add").unwrap();
         let files = repo.load_state_files(&outcome.state_id).unwrap();
@@ -2209,13 +2226,13 @@ mod tests {
     fn revert_merge_state_errors() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
-        repo.record("main edit").unwrap();
+        repo.commit("main edit").unwrap();
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
-        repo.record("feature add").unwrap();
+        repo.commit("feature add").unwrap();
         repo.checkout_branch("main").unwrap();
         let merge_id = repo.merge_branch("feature", "merge").unwrap();
 
@@ -2227,16 +2244,16 @@ mod tests {
     fn revert_non_ancestor_errors() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "base\n").unwrap();
-        repo.record("base").unwrap();
+        repo.commit("base").unwrap();
         repo.create_branch("feature", None).unwrap();
 
         repo.checkout_branch("feature").unwrap();
         fs::write(dir.path().join("note.txt"), "feature\n").unwrap();
-        let feature_id = repo.record("feature").unwrap().state_id;
+        let feature_id = repo.commit("feature").unwrap().state_id;
 
         repo.checkout_branch("main").unwrap();
         fs::write(dir.path().join("note.txt"), "main\n").unwrap();
-        repo.record("main").unwrap();
+        repo.commit("main").unwrap();
 
         let err = repo
             .revert_state(&feature_id, "revert foreign")
@@ -2248,11 +2265,11 @@ mod tests {
     fn revert_noop_when_manifest_unchanged() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        repo.record("v1").unwrap();
+        repo.commit("v1").unwrap();
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
-        let v2 = repo.record("v2").unwrap().state_id;
+        let v2 = repo.commit("v2").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
-        repo.record("back to v1 content").unwrap();
+        repo.commit("back to v1 content").unwrap();
         let tip = repo.head_state().unwrap();
 
         let outcome = repo.revert_state(&v2, "noop revert").unwrap();
@@ -2264,10 +2281,10 @@ mod tests {
     fn revert_ast_prepended_comment() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("lib.rs"), "pub fn one() {}\n").unwrap();
-        repo.record("baseline").unwrap();
+        repo.commit("baseline").unwrap();
         let with_doc = "//! crate doc\npub fn one() {}\n";
         fs::write(dir.path().join("lib.rs"), with_doc).unwrap();
-        let target = repo.record("prepend doc").unwrap().state_id;
+        let target = repo.commit("prepend doc").unwrap().state_id;
 
         repo.revert_state(&target, "revert doc").unwrap();
         let head = repo.head_state().unwrap();
@@ -2285,15 +2302,15 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
         fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
-        repo.record("seed").unwrap();
+        repo.commit("seed").unwrap();
         fs::remove_file(dir.path().join("notes.txt")).unwrap();
-        repo.record("remove notes").unwrap();
+        repo.commit("remove notes").unwrap();
         let target = {
             fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-            repo.record("add notes").unwrap().state_id
+            repo.commit("add notes").unwrap().state_id
         };
         fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
-        repo.record("modify notes").unwrap();
+        repo.commit("modify notes").unwrap();
         fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
         repo.reset(&target, true, false).unwrap();
 
@@ -2307,15 +2324,15 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
         fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
-        repo.record("seed").unwrap();
+        repo.commit("seed").unwrap();
         fs::remove_file(dir.path().join("notes.txt")).unwrap();
-        repo.record("remove notes").unwrap();
+        repo.commit("remove notes").unwrap();
         let target = {
             fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-            repo.record("add notes").unwrap().state_id
+            repo.commit("add notes").unwrap().state_id
         };
         fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
-        let tip = repo.record("modify notes").unwrap().state_id;
+        let tip = repo.commit("modify notes").unwrap().state_id;
 
         let err = repo.revert_state(&target, "revert add").unwrap_err();
         assert!(
@@ -2327,5 +2344,28 @@ mod tests {
             fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
             "added later\n"
         );
+    }
+
+    #[test]
+    fn remove_branch_guardrails() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("baseline").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        repo.create_branch("archive", None).unwrap();
+
+        assert!(repo.remove_branch("main").is_err());
+        repo.remove_branch("feature").unwrap();
+        assert!(!dir.path().join(".astvcs/refs/heads/feature").exists());
+
+        repo.checkout_branch("archive").unwrap();
+        repo.remove_branch("main").unwrap();
+        assert!(repo.remove_branch("archive").is_err());
+
+        let solo = TempDir::new().unwrap();
+        let solo_repo = Repo::init(solo.path()).unwrap();
+        fs::write(solo.path().join("note.txt"), "solo\n").unwrap();
+        solo_repo.commit("solo").unwrap();
+        assert!(solo_repo.remove_branch("main").is_err());
     }
 }

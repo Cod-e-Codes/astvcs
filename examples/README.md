@@ -22,6 +22,8 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 | `same-file-demo/` | `same_file_demo_disjoint_merge` | Same-file disjoint edits (rename + insert) merge without `--resolve`; formatting preserved |
 | `merge-demo/` | `merge_demo_add_add_and_deletion`, `merge_demo_deletion_when_other_branch_unchanged` | Add/add on a new file; modify vs delete |
 | `identity-demo/` | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Literal edits as `EditPayload`; sibling literal merge; rename conflict |
+| (CLI-only) | `trailing_comment_and_literal_edit_merge` | Trailing comment text merges with sibling literal edit |
+| (CLI-only) | `cli_branch_remove_guardrails` | `branch remove` guardrails |
 
 ## Workflow demo
 
@@ -29,20 +31,20 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 .\examples\reset.ps1
 $D = "examples\workflow-demo"
 .\target\release\astvcs.exe init $D
-.\target\release\astvcs.exe --repo $D record --message "baseline"
+.\target\release\astvcs.exe --repo $D commit --message "baseline"
 
 Set-Content $D\lib.rs "//! workflow demo crate`npub mod core;`npub mod util;`n"
 .\target\release\astvcs.exe --repo $D diff lib.rs
-.\target\release\astvcs.exe --repo $D record --message "prepend doc comment"
+.\target\release\astvcs.exe --repo $D commit --message "prepend doc comment"
 
 .\target\release\astvcs.exe --repo $D branch create feature
 .\target\release\astvcs.exe --repo $D checkout --branch feature
 Set-Content $D\util.rs "pub fn label() -> &'static str {`n    `"feature-branch`"`n}`n"
-.\target\release\astvcs.exe --repo $D record --message "feature util label"
+.\target\release\astvcs.exe --repo $D commit --message "feature util label"
 
 .\target\release\astvcs.exe --repo $D checkout --branch main
 Set-Content $D\core.rs "pub fn answer() -> i32 {`n    43`n}`n"
-.\target\release\astvcs.exe --repo $D record --message "main core answer"
+.\target\release\astvcs.exe --repo $D commit --message "main core answer"
 
 $base = (.\target\release\astvcs.exe --repo $D merge-base main feature | Select-Object -Last 1)
 .\target\release\astvcs.exe --repo $D diff --base $base --left main --right feature core.rs
@@ -58,7 +60,7 @@ Detached checkout (run after `main core answer`, before `merge`):
 ```powershell
 $stateId = (.\target\release\astvcs.exe --repo $D merge-base main feature | Select-Object -Last 1)
 .\target\release\astvcs.exe --repo $D checkout --state $stateId
-.\target\release\astvcs.exe --repo $D record --message "noop while detached"
+.\target\release\astvcs.exe --repo $D commit --message "noop while detached"
 .\target\release\astvcs.exe --repo $D checkout --branch main
 ```
 
@@ -68,17 +70,17 @@ $stateId = (.\target\release\astvcs.exe --repo $D merge-base main feature | Sele
 .\examples\reset.ps1
 $D = "examples\merge-demo"
 .\target\release\astvcs.exe init $D
-.\target\release\astvcs.exe --repo $D record --message "base"
+.\target\release\astvcs.exe --repo $D commit --message "base"
 
 .\target\release\astvcs.exe --repo $D branch create feature
 .\target\release\astvcs.exe --repo $D checkout --branch feature
 Set-Content $D\util.rs "pub fn util() {}`n"
 Set-Content $D\lib.rs "pub fn label() -> &'static str { `"feature`" }`n"
-.\target\release\astvcs.exe --repo $D record --message "feature util and lib"
+.\target\release\astvcs.exe --repo $D commit --message "feature util and lib"
 
 .\target\release\astvcs.exe --repo $D checkout --branch main
 Set-Content $D\util.rs "pub fn util() {}`n"
-.\target\release\astvcs.exe --repo $D record --message "main util"
+.\target\release\astvcs.exe --repo $D commit --message "main util"
 .\target\release\astvcs.exe --repo $D merge feature --message "merge add/add"
 Get-Content $D\util.rs
 Get-Content $D\lib.rs
@@ -90,11 +92,11 @@ Deletion (continues same `$D`; do not run `reset.ps1` between the two parts):
 .\target\release\astvcs.exe --repo $D checkout --branch main
 .\target\release\astvcs.exe --repo $D branch create feature2
 .\target\release\astvcs.exe --repo $D checkout --branch feature2
-.\target\release\astvcs.exe --repo $D record --message "feature noop"
+.\target\release\astvcs.exe --repo $D commit --message "feature noop"
 
 .\target\release\astvcs.exe --repo $D checkout --branch main
 Remove-Item $D\config.toml
-.\target\release\astvcs.exe --repo $D record --message "delete config on main"
+.\target\release\astvcs.exe --repo $D commit --message "delete config on main"
 .\target\release\astvcs.exe --repo $D merge feature2 --message "merge deletion"
 .\target\release\astvcs.exe --repo $D status
 ```
@@ -105,19 +107,19 @@ Remove-Item $D\config.toml
 .\examples\reset.ps1
 $I = "examples\identity-demo"
 .\target\release\astvcs.exe init $I
-.\target\release\astvcs.exe --repo $I record --message "baseline"
+.\target\release\astvcs.exe --repo $I commit --message "baseline"
 
 Set-Content $I\core.rs "pub fn answer() -> i32 {`n    43`n}`n"
 .\target\release\astvcs.exe --repo $I diff core.rs
-.\target\release\astvcs.exe --repo $I record --message "literal on main"
+.\target\release\astvcs.exe --repo $I commit --message "literal on main"
 
 .\target\release\astvcs.exe --repo $I branch create feature
 .\target\release\astvcs.exe --repo $I checkout --branch feature
 Set-Content $I\labels.rs "pub fn pair() -> (&'static str, &'static str) {`n    (`"alpha`", `"BETA`")`n}`n"
-.\target\release\astvcs.exe --repo $I record --message "edit second literal"
+.\target\release\astvcs.exe --repo $I commit --message "edit second literal"
 .\target\release\astvcs.exe --repo $I checkout --branch main
 Set-Content $I\labels.rs "pub fn pair() -> (&'static str, &'static str) {`n    (`"ALPHA`", `"beta`")`n}`n"
-.\target\release\astvcs.exe --repo $I record --message "edit first literal"
+.\target\release\astvcs.exe --repo $I commit --message "edit first literal"
 .\target\release\astvcs.exe --repo $I merge feature --message "merge sibling literals"
 Get-Content $I\labels.rs
 ```
@@ -128,11 +130,11 @@ Rename conflict (continues same `$I`):
 .\target\release\astvcs.exe --repo $I branch create conflict
 .\target\release\astvcs.exe --repo $I checkout --branch conflict
 Set-Content $I\conflict.rs "fn sample() {`n    let renamed = 1;`n}`n"
-.\target\release\astvcs.exe --repo $I record --message "rename to renamed"
+.\target\release\astvcs.exe --repo $I commit --message "rename to renamed"
 
 .\target\release\astvcs.exe --repo $I checkout --branch main
 Set-Content $I\conflict.rs "fn sample() {`n    let alternate = 1;`n}`n"
-.\target\release\astvcs.exe --repo $I record --message "rename to alternate"
+.\target\release\astvcs.exe --repo $I commit --message "rename to alternate"
 .\target\release\astvcs.exe --repo $I merge conflict --dry-run
 ```
 
@@ -152,16 +154,16 @@ Uses `sample.rs` (not `main.rs`) so Cargo does not treat this folder as an examp
 .\examples\reset.ps1
 $D = "examples\same-file-demo"
 .\target\release\astvcs.exe init $D
-.\target\release\astvcs.exe --repo $D record --message "baseline"
+.\target\release\astvcs.exe --repo $D commit --message "baseline"
 
 .\target\release\astvcs.exe --repo $D branch create feature
 .\target\release\astvcs.exe --repo $D checkout --branch feature
 Set-Content $D\sample.rs "fn foo() {`n    let x = 1;`n    let z = 2;`n}`n"
-.\target\release\astvcs.exe --repo $D record --message "insert on feature"
+.\target\release\astvcs.exe --repo $D commit --message "insert on feature"
 
 .\target\release\astvcs.exe --repo $D checkout --branch main
 Set-Content $D\sample.rs "fn foo() {`n    let y = 1;`n}`n"
-.\target\release\astvcs.exe --repo $D record --message "rename on main"
+.\target\release\astvcs.exe --repo $D commit --message "rename on main"
 
 $base = (.\target\release\astvcs.exe --repo $D merge-base main feature | Select-Object -Last 1)
 .\target\release\astvcs.exe --repo $D diff --base $base --left main --right feature sample.rs

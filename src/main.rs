@@ -32,7 +32,7 @@ enum Commands {
     },
     Status,
     Diff(DiffArgs),
-    Record {
+    Commit {
         #[arg(short, long)]
         message: String,
     },
@@ -56,7 +56,7 @@ enum Commands {
         /// Move the ref only; leave the working tree and index unchanged.
         #[arg(long)]
         soft: bool,
-        /// Allow hard reset when the working tree has unrecorded changes.
+        /// Allow hard reset when the working tree has uncommitted changes.
         #[arg(long)]
         force: bool,
     },
@@ -153,6 +153,9 @@ enum BranchAction {
         #[arg(long)]
         from: Option<String>,
     },
+    Remove {
+        name: String,
+    },
 }
 
 fn repo_root(cli: &Cli) -> PathBuf {
@@ -201,7 +204,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 println!("{label} {path}");
             }
             if !any {
-                println!("nothing to record, working tree clean");
+                println!("nothing to commit, working tree clean");
             }
         }
         Commands::Diff(args) => {
@@ -239,11 +242,11 @@ fn run(cli: Cli) -> Result<(), String> {
             };
             print!("{output}");
         }
-        Commands::Record { message } => {
+        Commands::Commit { message } => {
             let repo = Repo::open(&root)?;
-            let outcome = repo.record(&message)?;
+            let outcome = repo.commit(&message)?;
             if outcome.created {
-                println!("Recorded state {}", outcome.state_id);
+                println!("Committed state {}", outcome.state_id);
             } else {
                 println!("No changes (state {} unchanged)", outcome.state_id);
             }
@@ -265,6 +268,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 let repo = Repo::open(&root)?;
                 repo.create_branch(&name, from.as_deref())?;
                 println!("Created branch {name}");
+            }
+            BranchAction::Remove { name } => {
+                let repo = Repo::open(&root)?;
+                repo.remove_branch(&name)?;
+                println!("Removed branch {name}");
             }
         },
         Commands::Merge(args) => {

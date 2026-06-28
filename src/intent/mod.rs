@@ -36,6 +36,12 @@ pub enum EditIntent {
     ReorderMembers {
         parent: NodeId,
     },
+    SetTrivia {
+        parent: NodeId,
+        child: NodeId,
+        occurrence: u32,
+    },
+    SetRootTrailingTrivia,
 }
 
 pub fn classify_mutation(base: Option<&AstGraph>, mutation: &Mutation) -> EditIntent {
@@ -95,6 +101,17 @@ pub fn classify_mutation(base: Option<&AstGraph>, mutation: &Mutation) -> EditIn
             new_parent: *new_parent,
         },
         Mutation::ReorderChildren { parent, .. } => EditIntent::ReorderMembers { parent: *parent },
+        Mutation::SetTrivia {
+            parent,
+            child,
+            occurrence,
+            ..
+        } => EditIntent::SetTrivia {
+            parent: *parent,
+            child: *child,
+            occurrence: *occurrence,
+        },
+        Mutation::SetRootTrailingTrivia { .. } => EditIntent::SetRootTrailingTrivia,
     }
 }
 
@@ -180,6 +197,12 @@ pub fn format_intent(base: Option<&AstGraph>, intent: &EditIntent) -> String {
             new_parent,
         } => format!("move {node_id} under {new_parent}"),
         EditIntent::ReorderMembers { parent } => format!("reorder members under {parent}"),
+        EditIntent::SetTrivia {
+            parent,
+            child,
+            occurrence,
+        } => format!("set trivia before {child} under {parent} (occ {occurrence})"),
+        EditIntent::SetRootTrailingTrivia => "set root trailing trivia".into(),
     }
 }
 
@@ -235,6 +258,44 @@ pub fn intents_disjoint(a: &EditIntent, b: &EditIntent) -> bool {
         | (EditIntent::EditLiteral { .. }, EditIntent::ReorderMembers { .. })
         | (EditIntent::ReorderMembers { .. }, EditIntent::EditPayload { .. })
         | (EditIntent::EditPayload { .. }, EditIntent::ReorderMembers { .. }) => true,
+        (
+            EditIntent::SetTrivia {
+                parent: p1,
+                child: c1,
+                occurrence: o1,
+            },
+            EditIntent::SetTrivia {
+                parent: p2,
+                child: c2,
+                occurrence: o2,
+            },
+        ) => p1 != p2 || c1 != c2 || o1 != o2,
+        (
+            EditIntent::RenameIdentifier { node_id: left, .. }
+            | EditIntent::EditLiteral { node_id: left, .. }
+            | EditIntent::EditPayload { node_id: left, .. },
+            EditIntent::SetTrivia { child: right, .. },
+        )
+        | (
+            EditIntent::SetTrivia { child: left, .. },
+            EditIntent::RenameIdentifier { node_id: right, .. }
+            | EditIntent::EditLiteral { node_id: right, .. }
+            | EditIntent::EditPayload { node_id: right, .. },
+        ) => left != right,
+        (EditIntent::SetTrivia { .. }, EditIntent::InsertStatement)
+        | (EditIntent::InsertStatement, EditIntent::SetTrivia { .. })
+        | (EditIntent::SetTrivia { .. }, EditIntent::PrependComment)
+        | (EditIntent::PrependComment, EditIntent::SetTrivia { .. })
+        | (EditIntent::SetRootTrailingTrivia, EditIntent::RenameIdentifier { .. })
+        | (EditIntent::RenameIdentifier { .. }, EditIntent::SetRootTrailingTrivia)
+        | (EditIntent::SetRootTrailingTrivia, EditIntent::EditLiteral { .. })
+        | (EditIntent::EditLiteral { .. }, EditIntent::SetRootTrailingTrivia)
+        | (EditIntent::SetRootTrailingTrivia, EditIntent::EditPayload { .. })
+        | (EditIntent::EditPayload { .. }, EditIntent::SetRootTrailingTrivia)
+        | (EditIntent::SetRootTrailingTrivia, EditIntent::InsertStatement)
+        | (EditIntent::InsertStatement, EditIntent::SetRootTrailingTrivia)
+        | (EditIntent::SetRootTrailingTrivia, EditIntent::PrependComment)
+        | (EditIntent::PrependComment, EditIntent::SetRootTrailingTrivia) => true,
         _ => false,
     }
 }

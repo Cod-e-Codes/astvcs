@@ -126,9 +126,11 @@ impl AstGraph {
     }
 
     pub fn set_trivia(&mut self, parent: NodeId, child: NodeId, occurrence: u32, trivia: String) {
-        if !trivia.is_empty() {
-            self.trivia
-                .insert(TriviaSlot::before_child(parent, child, occurrence), trivia);
+        let slot = TriviaSlot::before_child(parent, child, occurrence);
+        if trivia.is_empty() {
+            self.trivia.remove(&slot);
+        } else {
+            self.trivia.insert(slot, trivia);
         }
     }
 
@@ -293,6 +295,17 @@ impl AstGraph {
                     },
                     &mut cascades,
                 )?;
+            }
+            Mutation::SetTrivia {
+                parent,
+                child,
+                occurrence,
+                leading,
+            } => {
+                self.set_trivia(*parent, *child, *occurrence, leading.clone());
+            }
+            Mutation::SetRootTrailingTrivia { trailing } => {
+                self.root_trailing_trivia = trailing.clone();
             }
         }
         Ok(cascades)
@@ -638,6 +651,20 @@ pub fn remap_mutation(mutation: &Mutation, table: &HashMap<NodeId, NodeId>) -> M
                 .iter()
                 .map(|id| redirect_map(*id, table))
                 .collect(),
+        },
+        Mutation::SetTrivia {
+            parent,
+            child,
+            occurrence,
+            leading,
+        } => Mutation::SetTrivia {
+            parent: redirect_map(*parent, table),
+            child: redirect_map(*child, table),
+            occurrence: *occurrence,
+            leading: leading.clone(),
+        },
+        Mutation::SetRootTrailingTrivia { trailing } => Mutation::SetRootTrailingTrivia {
+            trailing: trailing.clone(),
         },
     }
 }
