@@ -230,6 +230,11 @@ impl AstGraph {
                 node_id,
                 new_parent,
                 before,
+            }
+            | Mutation::MoveSubtree {
+                node_id,
+                new_parent,
+                before,
             } => {
                 if !self.nodes.contains_key(node_id) {
                     return Err(format!("move target not found: {node_id}"));
@@ -630,6 +635,15 @@ pub fn remap_mutation(mutation: &Mutation, table: &HashMap<NodeId, NodeId>) -> M
             new_parent,
             before,
         } => Mutation::MoveNode {
+            node_id: redirect_map(*node_id, table),
+            new_parent: redirect_map(*new_parent, table),
+            before: before.map(|id| redirect_map(id, table)),
+        },
+        Mutation::MoveSubtree {
+            node_id,
+            new_parent,
+            before,
+        } => Mutation::MoveSubtree {
             node_id: redirect_map(*node_id, table),
             new_parent: redirect_map(*new_parent, table),
             before: before.map(|id| redirect_map(id, table)),

@@ -24,6 +24,13 @@ pub enum Mutation {
         new_parent: NodeId,
         before: Option<NodeId>,
     },
+    /// Relocate an unchanged or edit-only subtree detected after LCS alignment fails.
+    /// Preserves `node_id` so concurrent payload edits on the other branch still apply.
+    MoveSubtree {
+        node_id: NodeId,
+        new_parent: NodeId,
+        before: Option<NodeId>,
+    },
     RenameIdentifier {
         node_id: NodeId,
         new_name: String,
@@ -55,7 +62,7 @@ impl Mutation {
         match self {
             Self::InsertSubtree { node, .. } => Some(node.id),
             Self::DeleteSubtree { node_id, .. } => Some(*node_id),
-            Self::MoveNode { node_id, .. } => Some(*node_id),
+            Self::MoveNode { node_id, .. } | Self::MoveSubtree { node_id, .. } => Some(*node_id),
             Self::RenameIdentifier { node_id, .. } => Some(*node_id),
             Self::EditPayload { node_id, .. } => Some(*node_id),
             Self::SetTrivia { child, .. } => Some(*child),
@@ -69,7 +76,9 @@ impl Mutation {
             | Self::DeleteSubtree { parent, .. }
             | Self::ReorderChildren { parent, .. }
             | Self::SetTrivia { parent, .. } => Some(*parent),
-            Self::MoveNode { new_parent, .. } => Some(*new_parent),
+            Self::MoveNode { new_parent, .. } | Self::MoveSubtree { new_parent, .. } => {
+                Some(*new_parent)
+            }
             Self::RenameIdentifier { .. } | Self::EditPayload { .. } => None,
             Self::SetRootTrailingTrivia { .. } => None,
         }

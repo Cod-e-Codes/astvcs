@@ -24,19 +24,24 @@ metadata:
 
 - Keep mutations anchored to the **old** graph.
 - Prefer sibling anchors over index-based inserts so prepends do not cascade `MoveNode`.
+- Path-level renames use `detect_path_renames` and surface as `EditIntent::RenamePath` in `status`/`diff` (exact content or AST edit-only pairing).
+- Intra-file moves use `Mutation::MoveSubtree` after LCS when structure fingerprints match uniquely; `MoveNode` remains for role/key LCS repositioning.
 - Trivia-only edits use `SetTrivia` / `SetRootTrailingTrivia`. Same-id nodes still recurse into children; the reorder path diffs child trivia after `ReorderChildren`.
 - Trailing comment text often lives in leading trivia before the next sibling token, not in the comment node payload.
 - After alignment changes, run `workflow_demo_prepend_and_disjoint_merge`, `identity_demo_payload_edit_disjoint_merge_and_conflict`, and `trailing_comment_and_literal_edit_merge`.
 
 ### Intent changes
 
-- Intents classify raw mutations for human-readable `diff` output (`PrependComment`, `RenameIdentifier`, etc.).
+- Intents classify raw mutations for human-readable `diff` output (`PrependComment`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, etc.).
 - Overlap logic in `intent/` drives merge conflict detection. Changing intents can change which merges succeed.
+- Wire new mutation variants through `classify_mutation`, `intents_disjoint`, `remap_mutation`, and `are_disjoint_edits`.
 
 ### Merge changes
 
 - Preserve atomic rollback on conflict.
 - Merge planning reads committed states only (`plan_merge` / `load_state_files`); the working tree is not consulted. Forced merges clobber dirty paths during materialization after the plan is fixed.
+- `plan_merge` correlates paths through `detect_path_renames` per side before per-file `merge_path`.
+- `MoveSubtree`/`MoveNode` are disjoint from payload edits on the same `node_id` during merge.
 - Disjoint sibling payload edits under the same parent should merge when they touch different nodes.
 - Conflicting `SetTrivia` on the same slot should report a structural conflict.
 - Do not write conflict markers into the working tree.

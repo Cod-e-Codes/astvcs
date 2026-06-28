@@ -472,6 +472,30 @@ fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
             Mutation::RenameIdentifier { node_id: a, .. },
             Mutation::RenameIdentifier { node_id: b, .. },
         ) if a != b => true,
+        (Mutation::MoveNode { node_id: a, .. }, Mutation::EditPayload { node_id: b, .. })
+        | (Mutation::EditPayload { node_id: b, .. }, Mutation::MoveNode { node_id: a, .. })
+        | (Mutation::MoveSubtree { node_id: a, .. }, Mutation::EditPayload { node_id: b, .. })
+        | (Mutation::EditPayload { node_id: b, .. }, Mutation::MoveSubtree { node_id: a, .. })
+        | (Mutation::MoveNode { node_id: a, .. }, Mutation::RenameIdentifier { node_id: b, .. })
+        | (Mutation::RenameIdentifier { node_id: b, .. }, Mutation::MoveNode { node_id: a, .. })
+        | (
+            Mutation::MoveSubtree { node_id: a, .. },
+            Mutation::RenameIdentifier { node_id: b, .. },
+        )
+        | (
+            Mutation::RenameIdentifier { node_id: b, .. },
+            Mutation::MoveSubtree { node_id: a, .. },
+        ) if a == b => true,
+        (Mutation::MoveSubtree { node_id: a, .. }, Mutation::MoveSubtree { node_id: b, .. })
+            if a != b =>
+        {
+            true
+        }
+        (Mutation::MoveNode { node_id: a, .. }, Mutation::MoveNode { node_id: b, .. })
+            if a != b =>
+        {
+            true
+        }
         (
             Mutation::InsertSubtree {
                 parent: p1,
@@ -493,6 +517,29 @@ mod tests {
     use super::*;
     use crate::diff::diff_graphs;
     use crate::frontend::parse_rust;
+
+    #[test]
+    fn move_subtree_and_sibling_payload_edit_merge() {
+        use crate::unparser::unparse;
+
+        let base = parse_rust("fn helper() { 1 }\nstruct S {}\n").unwrap();
+        let left = parse_rust("struct S {}\nfn helper() { 1 }\n").unwrap();
+        let right = parse_rust("fn helper() { 9 }\nstruct S {}\n").unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected merge when one branch moves and the other edits the moved node");
+        };
+        let text = unparse(&merged);
+        assert!(text.contains("struct S"), "merged: {text:?}");
+        assert!(
+            text.contains('9'),
+            "edit should apply at moved location: {text:?}"
+        );
+    }
 
     #[test]
     fn disjoint_ast_edits_merge() {

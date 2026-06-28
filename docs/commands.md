@@ -12,8 +12,8 @@ Global flags:
 | Command | Description |
 |---------|-------------|
 | `init [path]` | Create a new repository (default path: `.`) |
-| `status` | Show changed files vs the checked-out state (clean tree: one summary line) |
-| `diff [path]` | Diff working tree, or a single file |
+| `status` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. |
+| `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
 | `commit -m <msg>` | Commit working tree as a new state (prints when unchanged) |

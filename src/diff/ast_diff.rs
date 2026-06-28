@@ -95,12 +95,72 @@ fn insert_trivia(
     trivia
 }
 
+fn structure_fingerprint(graph: &AstGraph, id: &NodeId) -> Vec<(NodeKind, usize)> {
+    let n = graph.get(id).unwrap();
+    let mut out = vec![(n.kind.clone(), n.children.len())];
+    for child in &n.children {
+        out.extend(structure_fingerprint(graph, child));
+    }
+    out
+}
+
 fn same_id_multiset(a: &[NodeId], b: &[NodeId]) -> bool {
     let mut left = a.to_vec();
     let mut right = b.to_vec();
     left.sort();
     right.sort();
     left == right
+}
+
+fn unique_fingerprint_pairs(
+    old: &AstGraph,
+    new: &AstGraph,
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_old: &[bool],
+    matched_new: &[bool],
+) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for (oi, old_child) in old_children.iter().enumerate() {
+        if matched_old[oi] {
+            continue;
+        }
+        let oc = old.get(old_child).unwrap();
+        if oc.is_leaf() {
+            continue;
+        }
+        let fp = structure_fingerprint(old, old_child);
+        let new_candidates: Vec<usize> = new_children
+            .iter()
+            .enumerate()
+            .filter(|(ni, new_child)| {
+                !matched_new[*ni]
+                    && old.get(old_child).unwrap().kind == new.get(new_child).unwrap().kind
+                    && !new.get(new_child).unwrap().is_leaf()
+                    && structure_fingerprint(new, new_child) == fp
+            })
+            .map(|(ni, _)| ni)
+            .collect();
+        if new_candidates.len() != 1 {
+            continue;
+        }
+        let ni = new_candidates[0];
+        let old_candidates: Vec<usize> = old_children
+            .iter()
+            .enumerate()
+            .filter(|(oi2, old_child2)| {
+                !matched_old[*oi2]
+                    && old.get(old_child2).unwrap().kind == new.get(&new_children[ni]).unwrap().kind
+                    && !old.get(old_child2).unwrap().is_leaf()
+                    && structure_fingerprint(old, old_child2) == fp
+            })
+            .map(|(oi2, _)| oi2)
+            .collect();
+        if old_candidates.len() == 1 {
+            pairs.push((oi, ni));
+        }
+    }
+    pairs
 }
 
 fn diff_subtree(
@@ -321,6 +381,35 @@ fn diff_children(
                 out,
             );
         }
+    }
+
+    for (oi, ni) in unique_fingerprint_pairs(
+        old,
+        new,
+        &old_children,
+        &new_children,
+        &matched_old,
+        &matched_new,
+    ) {
+        matched_old[oi] = true;
+        matched_new[ni] = true;
+        if oi != ni {
+            out.push(Mutation::MoveSubtree {
+                node_id: old_children[oi],
+                new_parent: old_node_id,
+                before: insert_anchor(&new_children, ni),
+            });
+        }
+        diff_subtree(old, new, old_children[oi], new_children[ni], out);
+        diff_child_trivia(
+            old,
+            new,
+            old_node_id,
+            new_node_id,
+            old_children[oi],
+            new_children[ni],
+            out,
+        );
     }
 
     for (oi, old_child) in old_children.iter().enumerate() {
@@ -618,5 +707,35 @@ mod tests {
         merged.apply_batch(&combined).unwrap();
         let expected = "fn foo() {\n    let y = 1;\n    let z = 2;\n}\n";
         assert_eq!(unparse(&merged), expected);
+    }
+
+    #[test]
+    fn moved_function_reports_move_not_delete_insert() {
+        let old = parse_rust("fn helper() {}\nstruct S {}\n").unwrap();
+        let new = parse_rust("struct S {}\nfn helper() {}\n").unwrap();
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            diff.mutations.iter().any(|m| {
+                matches!(
+                    m,
+                    Mutation::MoveSubtree { .. }
+                        | Mutation::MoveNode { .. }
+                        | Mutation::ReorderChildren { .. }
+                )
+            }),
+            "expected reposition, got {:?}",
+            diff.mutations
+        );
+        assert!(
+            !diff
+                .mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::DeleteSubtree { .. })),
+            "unexpected delete: {:?}",
+            diff.mutations
+        );
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
     }
 }

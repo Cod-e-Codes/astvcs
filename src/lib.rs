@@ -8,8 +8,10 @@ pub mod store;
 pub mod trace;
 pub mod unparser;
 
-pub use diff::TextEdit;
-pub use diff::{DiffResult, diff_graphs, diff_text};
+pub use diff::{
+    DiffResult, PathRename, PathRenameKind, TextEdit, build_rename_map, detect_path_renames,
+    diff_graphs, diff_text, rename_targets_conflict, side_path_for_base,
+};
 pub use frontend::{
     FileContent, SourceLanguage, TextBlob, parse_language, parse_rust, parse_source,
     parse_text_or_blob, supported_extensions, supported_special_paths,

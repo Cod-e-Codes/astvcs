@@ -76,11 +76,22 @@ Materialization uses trivia-aware unparsing (see **Working tree materialization*
 
 1. Parse old and new sources into graphs.
 2. Align children between old and new: LCS on matching `NodeId` (unchanged subtrees), then LCS on `(NodeKind, child_count)` (role pass; payload ignored), then further pairing for structural nodes and payload-editable leaves.
-3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `ReorderChildren`, `SetTrivia`, `SetRootTrailingTrivia`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings. When matched siblings keep the same `NodeId` but leading trivia changes (for example trailing comment text stored before the next sibling token), `SetTrivia` captures the gap. Same-id internal nodes still recurse into children so trivia-only edits and reorder-with-trivia changes are not skipped.
+3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `MoveNode`, `MoveSubtree`, `ReorderChildren`, `SetTrivia`, `SetRootTrailingTrivia`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings. When matched siblings keep the same `NodeId` but leading trivia changes (for example trailing comment text stored before the next sibling token), `SetTrivia` captures the gap. Same-id internal nodes still recurse into children so trivia-only edits and reorder-with-trivia changes are not skipped.
 
 Alignment is heuristic. Wrong sibling pairing can produce delete+insert instead of `EditPayload`, or mis-anchored mutations. The `identity-demo` fixture exercises literal `EditPayload` and cases where alignment fails (rename conflict).
 
-**Edit intents.** Raw mutations are classified for human-readable output (`EditLiteral`, `RenameIdentifier`, `PrependComment`, `InsertStatement`, etc.). `diff` prints intents by default; pass `-v` to also print raw mutations.
+**Rename and move detection.** Two problems are handled separately:
+
+| Kind | Detection | Representation |
+|------|-----------|----------------|
+| Path-level rename | Pair removed and added manifest paths in `detect_path_renames` | `EditIntent::RenamePath` in `status`/`diff` output (not delete+add) |
+| Intra-file subtree move | Post-LCS pass in `diff_children`: unique bijective structure fingerprint match | `Mutation::MoveSubtree` → `EditIntent::MoveSubtree` |
+
+**Path rename pairing.** Text files pair only on exact content (`semantic_eq`). AST files also pair when `diff_graphs` reports edit-only changes (no `DeleteSubtree` or `InsertSubtree`), surfaced as `rename with edits`. Near-identical text paths stay unpaired (delete+add). Merge planning correlates base paths through per-side rename maps; conflicting renames of the same base path to different destinations conflict; keeping the source path while the other branch renamed it to a destination that HEAD also modified independently conflicts.
+
+**Intra-file move scope.** `MoveSubtree` runs after id/role/key LCS passes when exactly one unmatched old child and one unmatched new child share a structure fingerprint (kind tree, ignoring payloads and `NodeId`). Ambiguous siblings (multiple same-shape items) are left to existing `MoveNode`/`ReorderChildren` heuristics or delete+insert. Merge treats `MoveSubtree`/`MoveNode` as disjoint from payload edits on the same `node_id`, so a move on one branch and a body edit on the other apply together. Cross-file function moves are out of scope (path rename only).
+
+**Edit intents.** Raw mutations are classified for human-readable output (`EditLiteral`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, `PrependComment`, `InsertStatement`, etc.). `diff` prints intents by default; pass `-v` to also print raw mutations.
 
 **Text diff.** Fallback files use Myers line diff via the `similar` crate.
 
@@ -185,6 +196,13 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `fsck_clean_repository` | Healthy repo reports `fsck: repository ok` (unit) |
 | `cli_fsck_clean_repository`, `cli_fsck_detects_corruption` | fsck clean vs corrupted fixture (integration) |
 | `cli_gc_dry_run_and_prune` | gc dry-run default; `--prune` deletes unreachable blobs (integration) |
-| `cli_gc_and_fsck_fail_under_external_lock` | gc/fsck fail fast under external lock (integration) |
+| `path_rename_status_and_diff_integration` | Path rename in `status` (`R old -> new`) and `diff` (`RenamePath` intent) |
+| `path_rename_exact_reports_rename_intent_in_diff` | Exact path rename intent, not delete+add (unit) |
+| `path_rename_with_edits_reports_rename_with_edits` | AST rename+edit pairing (unit) |
+| `path_rename_merges_with_independent_content_edit` | Rename on one branch + content edit on other merges at renamed path (unit) |
+| `path_rename_conflicts_with_independent_add_at_destination` | Rename vs independent add at destination conflicts (unit) |
+| `conflicting_path_renames_report_conflict` | Both branches rename same path to different destinations (unit) |
+| `move_subtree_and_sibling_payload_edit_merge` | Move + concurrent payload edit merge cleanly (unit) |
+| `moved_function_reports_move_not_delete_insert` | Intra-file reposition avoids delete+insert (unit) |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

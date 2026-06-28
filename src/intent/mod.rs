@@ -33,8 +33,19 @@ pub enum EditIntent {
         node_id: NodeId,
         new_parent: NodeId,
     },
+    /// Entire subtree relocated with structure preserved (post-LCS detection).
+    MoveSubtree {
+        node_id: NodeId,
+        new_parent: NodeId,
+    },
     ReorderMembers {
         parent: NodeId,
+    },
+    /// Manifest path renamed (paired delete + add).
+    RenamePath {
+        from: String,
+        to: String,
+        with_edits: bool,
     },
     SetTrivia {
         parent: NodeId,
@@ -100,6 +111,14 @@ pub fn classify_mutation(base: Option<&AstGraph>, mutation: &Mutation) -> EditIn
             node_id: *node_id,
             new_parent: *new_parent,
         },
+        Mutation::MoveSubtree {
+            node_id,
+            new_parent,
+            ..
+        } => EditIntent::MoveSubtree {
+            node_id: *node_id,
+            new_parent: *new_parent,
+        },
         Mutation::ReorderChildren { parent, .. } => EditIntent::ReorderMembers { parent: *parent },
         Mutation::SetTrivia {
             parent,
@@ -139,6 +158,14 @@ fn classify_insert(
         parent,
         before,
         kind: node.kind.clone(),
+    }
+}
+
+pub fn classify_path_rename(rename: &crate::diff::PathRename) -> EditIntent {
+    EditIntent::RenamePath {
+        from: rename.from.clone(),
+        to: rename.to.clone(),
+        with_edits: rename.kind == crate::diff::PathRenameKind::WithEdits,
     }
 }
 
@@ -196,6 +223,21 @@ pub fn format_intent(base: Option<&AstGraph>, intent: &EditIntent) -> String {
             node_id,
             new_parent,
         } => format!("move {node_id} under {new_parent}"),
+        EditIntent::MoveSubtree {
+            node_id,
+            new_parent,
+        } => format!("move subtree {node_id} under {new_parent}"),
+        EditIntent::RenamePath {
+            from,
+            to,
+            with_edits,
+        } => {
+            if *with_edits {
+                format!("rename path `{from}` -> `{to}` (with edits)")
+            } else {
+                format!("rename path `{from}` -> `{to}`")
+            }
+        }
         EditIntent::ReorderMembers { parent } => format!("reorder members under {parent}"),
         EditIntent::SetTrivia {
             parent,
@@ -296,6 +338,24 @@ pub fn intents_disjoint(a: &EditIntent, b: &EditIntent) -> bool {
         | (EditIntent::InsertStatement, EditIntent::SetRootTrailingTrivia)
         | (EditIntent::SetRootTrailingTrivia, EditIntent::PrependComment)
         | (EditIntent::PrependComment, EditIntent::SetRootTrailingTrivia) => true,
+        (
+            EditIntent::MoveNode { node_id: left, .. }
+            | EditIntent::MoveSubtree { node_id: left, .. },
+            EditIntent::RenameIdentifier { node_id: right, .. }
+            | EditIntent::EditLiteral { node_id: right, .. }
+            | EditIntent::EditPayload { node_id: right, .. },
+        )
+        | (
+            EditIntent::RenameIdentifier { node_id: left, .. }
+            | EditIntent::EditLiteral { node_id: left, .. }
+            | EditIntent::EditPayload { node_id: left, .. },
+            EditIntent::MoveNode { node_id: right, .. }
+            | EditIntent::MoveSubtree { node_id: right, .. },
+        ) if left == right => true,
+        (
+            EditIntent::MoveSubtree { node_id: p1, .. },
+            EditIntent::MoveSubtree { node_id: p2, .. },
+        ) if p1 != p2 => true,
         _ => false,
     }
 }

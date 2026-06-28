@@ -1,7 +1,7 @@
 use astvcs::diff::diff_graphs;
 use astvcs::frontend::parse_source;
 use astvcs::graph::Mutation;
-use astvcs::store::Repo;
+use astvcs::store::{FileStatus, Repo};
 use astvcs::trace;
 use astvcs::unparse;
 use std::fs;
@@ -1648,4 +1648,28 @@ fn cli_gc_and_fsck_fail_under_external_lock() {
         );
         assert!(err.contains("repo.lock"), "{err}");
     }
+}
+
+#[test]
+fn path_rename_status_and_diff_integration() {
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("old.rs"), "fn foo() {}\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("add").unwrap();
+    fs::rename(dir.path().join("old.rs"), dir.path().join("new.rs")).unwrap();
+
+    let status = repo.status().unwrap();
+    assert_eq!(
+        status.entries.get("new.rs"),
+        Some(&FileStatus::Renamed {
+            from: "old.rs".into()
+        })
+    );
+    assert!(!status.entries.contains_key("old.rs"));
+
+    let diff = run_astvcs(Some(dir.path()), &["diff", "new.rs"]);
+    assert_astvcs_ok(&diff, "diff renamed path");
+    let out = String::from_utf8_lossy(&diff.stdout);
+    assert!(out.contains("rename path `old.rs` -> `new.rs`"), "{out}");
 }

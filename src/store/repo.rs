@@ -1,4 +1,7 @@
-use crate::diff::{DiffResult, diff_graphs, diff_text};
+use crate::diff::{
+    DiffResult, build_rename_map, detect_path_renames, diff_graphs, diff_text,
+    rename_targets_conflict, side_path_for_base,
+};
 use crate::frontend::{FileContent, parse_text_or_blob};
 use crate::intent;
 use crate::merge::{MergeConflict, PathMergeConflict, PathMergeOutcome, merge_path};
@@ -112,6 +115,7 @@ pub enum FileStatus {
     Modified,
     Added,
     Removed,
+    Renamed { from: String },
     Untracked,
 }
 
@@ -122,6 +126,7 @@ impl std::fmt::Display for FileStatus {
             Self::Modified => write!(f, "modified"),
             Self::Added => write!(f, "added"),
             Self::Removed => write!(f, "removed"),
+            Self::Renamed { from } => write!(f, "renamed from {from}"),
             Self::Untracked => write!(f, "untracked"),
         }
     }
@@ -551,10 +556,11 @@ impl Repo {
 
         let mut entries = HashMap::new();
         let working_files = self.scan_working()?;
-
+        let mut working_map = HashMap::new();
         for path in &working_files {
             let disk = read_working_file(&self.root, path)?;
             let current = parse_text_or_blob(path, &disk);
+            working_map.insert(path.clone(), current.clone());
             let status = match head_files.get(path) {
                 None => FileStatus::Added,
                 Some(stored) if !content_eq(stored, &current) => FileStatus::Modified,
@@ -573,6 +579,17 @@ impl Repo {
             }
         }
 
+        let renames = detect_path_renames(&head_files, &working_map);
+        for rename in &renames {
+            entries.remove(&rename.from);
+            entries.insert(
+                rename.to.clone(),
+                FileStatus::Renamed {
+                    from: rename.from.clone(),
+                },
+            );
+        }
+
         Ok(WorkingStatus { entries })
     }
 
@@ -582,6 +599,19 @@ impl Repo {
         let head_files = self.load_state_files_unlocked(&head)?;
         let disk = read_working_file(&self.root, path)?;
         let working = parse_text_or_blob(path, &disk);
+        let mut working_map = HashMap::new();
+        working_map.insert(path.to_string(), working.clone());
+        for p in self.scan_working()? {
+            if p != path {
+                let disk = read_working_file(&self.root, &p)?;
+                working_map.insert(p.clone(), parse_text_or_blob(&p, &disk));
+            }
+        }
+        let renames = detect_path_renames(&head_files, &working_map);
+        if let Some(rename) = renames.iter().find(|r| r.to == path) {
+            let old = head_files.get(&rename.from).unwrap();
+            return Ok(format_path_rename(rename, old, &working));
+        }
         match head_files.get(path) {
             None => Ok(format!("--- /dev/null\n+++ {path}\n(new file)\n")),
             Some(base) => format_diff(path, base, &working),
@@ -723,13 +753,159 @@ impl Repo {
         let head_files = self.load_state_files_unlocked(&head)?;
         let other_files = self.load_state_files_unlocked(&other)?;
 
-        let mut merged_files = base_files.clone();
+        let head_renames = detect_path_renames(&base_files, &head_files);
+        let other_renames = detect_path_renames(&base_files, &other_files);
+        let head_rename_map = build_rename_map(&head_renames);
+        let other_rename_map = build_rename_map(&other_renames);
+
+        let mut merged_files = HashMap::new();
         let mut conflicts = Vec::new();
+        let mut processed = HashSet::new();
         let mut all_paths: HashSet<String> = head_files.keys().cloned().collect();
         all_paths.extend(other_files.keys().cloned());
         all_paths.extend(base_files.keys().cloned());
 
+        for base_path in base_files.keys() {
+            if rename_targets_conflict(base_path, &head_rename_map, &other_rename_map) {
+                conflicts.push(PathMergeConflict {
+                    path: base_path.clone(),
+                    detail: MergeConflict {
+                        message: format!("both branches renamed {base_path} to different paths"),
+                        left_mutations: vec![],
+                        right_mutations: vec![],
+                        left_intent_lines: vec![format!(
+                            "  [0] {}",
+                            intent::format_intent(
+                                None,
+                                &intent::classify_path_rename(
+                                    head_renames.iter().find(|r| r.from == *base_path).unwrap(),
+                                ),
+                            )
+                        )],
+                        right_intent_lines: vec![format!(
+                            "  [0] {}",
+                            intent::format_intent(
+                                None,
+                                &intent::classify_path_rename(
+                                    other_renames.iter().find(|r| r.from == *base_path).unwrap(),
+                                ),
+                            )
+                        )],
+                        overlapping: vec![],
+                        text_line: None,
+                    },
+                });
+                processed.insert(base_path.clone());
+                if let Some(h) = head_rename_map.get(base_path) {
+                    processed.insert(h.clone());
+                }
+                if let Some(o) = other_rename_map.get(base_path) {
+                    processed.insert(o.clone());
+                }
+                continue;
+            }
+
+            let result_path = head_rename_map
+                .get(base_path)
+                .or_else(|| other_rename_map.get(base_path))
+                .cloned()
+                .unwrap_or_else(|| base_path.clone());
+            let head_path =
+                side_path_for_base(base_path, &head_files, &head_rename_map).or_else(|| {
+                    if head_files.contains_key(&result_path)
+                        && !base_files.contains_key(&result_path)
+                    {
+                        Some(result_path.clone())
+                    } else {
+                        None
+                    }
+                });
+            let other_path = side_path_for_base(base_path, &other_files, &other_rename_map)
+                .or_else(|| {
+                    if other_files.contains_key(&result_path)
+                        && !base_files.contains_key(&result_path)
+                    {
+                        Some(result_path.clone())
+                    } else {
+                        None
+                    }
+                });
+
+            if (other_rename_map.contains_key(base_path) || head_rename_map.contains_key(base_path))
+                && head_files.contains_key(base_path)
+                && let (Some(head_dest), Some(other_dest)) = (
+                    head_files.get(&result_path),
+                    other_path.as_ref().and_then(|p| other_files.get(p)),
+                )
+                && !content_eq(head_dest, other_dest)
+            {
+                conflicts.push(PathMergeConflict {
+                    path: result_path.clone(),
+                    detail: MergeConflict {
+                        message: format!(
+                            "path rename to {result_path} conflicts with independent content at that path"
+                        ),
+                        left_mutations: vec![],
+                        right_mutations: vec![],
+                        left_intent_lines: vec![format!(
+                            "  [0] {}",
+                            intent::format_intent(
+                                None,
+                                &intent::classify_path_rename(&crate::diff::PathRename {
+                                    from: base_path.clone(),
+                                    to: result_path.clone(),
+                                    kind: crate::diff::PathRenameKind::Exact,
+                                }),
+                            )
+                        )],
+                        right_intent_lines: vec![],
+                        overlapping: vec![],
+                        text_line: None,
+                    },
+                });
+                processed.insert(base_path.clone());
+                if let Some(h) = &head_path {
+                    processed.insert(h.clone());
+                }
+                if let Some(o) = &other_path {
+                    processed.insert(o.clone());
+                }
+                processed.insert(result_path.clone());
+                continue;
+            }
+
+            match merge_path(
+                &result_path,
+                base_files.get(base_path),
+                head_path.as_ref().and_then(|p| head_files.get(p)),
+                other_path.as_ref().and_then(|p| other_files.get(p)),
+            ) {
+                PathMergeOutcome::Keep(content) => {
+                    trace::notice(format!("merge plan: {result_path} keep"));
+                    merged_files.insert(result_path, content);
+                }
+                PathMergeOutcome::Remove => {
+                    trace::notice(format!("merge plan: {result_path} remove"));
+                }
+                PathMergeOutcome::Conflict(c) => {
+                    trace::warn(format!("merge plan: {} conflict", c.path));
+                    conflicts.push(c);
+                }
+            }
+
+            processed.insert(base_path.clone());
+            if let Some(h) = head_path {
+                processed.insert(h);
+            }
+            if let Some(o) = other_path {
+                processed.insert(o);
+            }
+        }
+
         for path in all_paths {
+            if processed.contains(&path) {
+                continue;
+            }
             let base = base_files.get(&path);
             let left = head_files.get(&path);
             let right = other_files.get(&path);
@@ -740,7 +916,6 @@ impl Repo {
                 }
                 PathMergeOutcome::Remove => {
                     trace::notice(format!("merge plan: {path} remove"));
-                    merged_files.remove(&path);
                 }
                 PathMergeOutcome::Conflict(c) => {
                     trace::warn(format!("merge plan: {} conflict", c.path));
@@ -997,6 +1172,12 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let from_files = self.load_state_files_unlocked(from)?;
         let to_files = self.load_state_files_unlocked(to)?;
+        let renames = detect_path_renames(&from_files, &to_files);
+        if let Some(rename) = renames.iter().find(|r| r.from == path || r.to == path) {
+            let old = from_files.get(&rename.from).unwrap();
+            let new = to_files.get(&rename.to).unwrap();
+            return Ok(format_path_rename(rename, old, new));
+        }
         match (from_files.get(path), to_files.get(path)) {
             (None, Some(new)) => {
                 let mut out = format!("--- /dev/null\n+++ {path}\n(new file)\n");
@@ -1013,12 +1194,23 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let from_files = self.load_state_files_unlocked(from)?;
         let to_files = self.load_state_files_unlocked(to)?;
+        let renames = detect_path_renames(&from_files, &to_files);
+        let renamed_from: HashSet<String> = renames.iter().map(|r| r.from.clone()).collect();
+        let renamed_to: HashSet<String> = renames.iter().map(|r| r.to.clone()).collect();
         let mut out = String::new();
+        for rename in &renames {
+            let old = from_files.get(&rename.from).unwrap();
+            let new = to_files.get(&rename.to).unwrap();
+            out.push_str(&format_path_rename(rename, old, new));
+        }
         let mut paths: HashSet<String> = from_files.keys().cloned().collect();
         paths.extend(to_files.keys().cloned());
         let mut sorted: Vec<_> = paths.into_iter().collect();
         sorted.sort();
         for path in sorted {
+            if renamed_from.contains(&path) || renamed_to.contains(&path) {
+                continue;
+            }
             match (from_files.get(&path), to_files.get(&path)) {
                 (None, Some(new)) => {
                     out.push_str(&format!("--- /dev/null\n+++ {path}\n(new file)\n"));
@@ -1568,6 +1760,26 @@ fn content_preview(content: &FileContent) -> String {
     } else {
         format!("{text}\n")
     }
+}
+
+fn format_path_rename(
+    rename: &crate::diff::PathRename,
+    old: &FileContent,
+    new: &FileContent,
+) -> String {
+    let label = match rename.kind {
+        crate::diff::PathRenameKind::Exact => "rename",
+        crate::diff::PathRenameKind::WithEdits => "rename with edits",
+    };
+    let mut out = format!("--- {}\n+++ {}\n({label})\n", rename.from, rename.to);
+    out.push_str(&format!(
+        "intents:\n  [0] {}\n",
+        intent::format_intent(None, &intent::classify_path_rename(rename))
+    ));
+    if rename.kind == crate::diff::PathRenameKind::WithEdits {
+        out.push_str(&format_mutation_diff(old, new));
+    }
+    out
 }
 
 fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
@@ -3054,5 +3266,130 @@ mod tests {
             fs::read_to_string(dir.path().join("main.rs")).unwrap(),
             disk_before
         );
+    }
+
+    #[test]
+    fn path_rename_exact_reports_rename_intent_in_diff() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("old.rs"), "fn foo() {}\n").unwrap();
+        repo.commit("add old").unwrap();
+        fs::rename(dir.path().join("old.rs"), dir.path().join("new.rs")).unwrap();
+        let diff = repo.diff_working("new.rs").unwrap();
+        assert!(diff.contains("(rename)"), "{diff}");
+        assert!(diff.contains("rename path `old.rs` -> `new.rs`"), "{diff}");
+        assert!(!diff.contains("(deleted)"), "{diff}");
+    }
+
+    #[test]
+    fn path_rename_with_edits_reports_rename_with_edits() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("a.rs"), "fn foo() { 1 }\n").unwrap();
+        repo.commit("add a").unwrap();
+        fs::remove_file(dir.path().join("a.rs")).unwrap();
+        fs::write(dir.path().join("b.rs"), "fn foo() { 2 }\n").unwrap();
+        let diff = repo.diff_working("b.rs").unwrap();
+        assert!(diff.contains("(rename with edits)"), "{diff}");
+        assert!(
+            diff.contains("EditLiteral") || diff.contains("edit literal"),
+            "{diff}"
+        );
+    }
+
+    #[test]
+    fn path_rename_merges_with_independent_content_edit() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::remove_file(dir.path().join("lib.rs")).unwrap();
+        fs::write(dir.path().join("renamed.rs"), "fn foo() {}\n").unwrap();
+        repo.commit("rename on feature").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("lib.rs"), "fn foo() { 42 }\n").unwrap();
+        repo.commit("edit on main").unwrap();
+
+        let merged = repo.merge_branch("feature", "merge rename + edit").unwrap();
+        let files = repo.load_state_files(&merged).unwrap();
+        let text = match files.get("renamed.rs").unwrap() {
+            FileContent::Ast(g) => unparse(g),
+            FileContent::Text(t) => t.content.clone(),
+        };
+        assert!(
+            text.contains("42"),
+            "merged rename path should keep main edit: {text}"
+        );
+        assert!(!files.contains_key("lib.rs"));
+    }
+
+    #[test]
+    fn conflicting_path_renames_report_conflict() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("base.rs"), "fn foo() {}\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::remove_file(dir.path().join("base.rs")).unwrap();
+        fs::write(dir.path().join("left.rs"), "fn foo() {}\n").unwrap();
+        repo.commit("rename to left").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::remove_file(dir.path().join("base.rs")).unwrap();
+        fs::write(dir.path().join("right.rs"), "fn foo() {}\n").unwrap();
+        repo.commit("rename to right").unwrap();
+
+        let err = repo.merge_branch("feature", "merge").unwrap_err();
+        assert!(err.contains("both branches renamed base.rs"), "{err}");
+    }
+
+    #[test]
+    fn path_rename_conflicts_with_independent_add_at_destination() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("src.txt"), "base content\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::remove_file(dir.path().join("src.txt")).unwrap();
+        fs::write(dir.path().join("dst.txt"), "base content\n").unwrap();
+        repo.commit("rename to dst").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("dst.txt"), "other content\n").unwrap();
+        repo.commit("add different at dst while keeping src")
+            .unwrap();
+
+        let err = repo.merge_branch("feature", "merge").unwrap_err();
+        assert!(err.contains("path rename to dst.txt conflicts"), "{err}");
+    }
+
+    #[test]
+    fn path_rename_with_replace_at_destination_merges_edit() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("src.txt"), "base content\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::remove_file(dir.path().join("src.txt")).unwrap();
+        fs::write(dir.path().join("dst.txt"), "base content\n").unwrap();
+        repo.commit("rename to dst").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::remove_file(dir.path().join("src.txt")).unwrap();
+        fs::write(dir.path().join("dst.txt"), "other content\n").unwrap();
+        repo.commit("replace with dst").unwrap();
+
+        let merged = repo.merge_branch("feature", "merge").unwrap();
+        let files = repo.load_state_files(&merged).unwrap();
+        let text = match files.get("dst.txt").unwrap() {
+            FileContent::Text(t) => t.content.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(text, "other content\n");
+        assert!(!files.contains_key("src.txt"));
     }
 }

@@ -214,6 +214,11 @@ fn run(cli: Cli) -> Result<(), String> {
                     FileStatus::Modified => " M",
                     FileStatus::Added => " A",
                     FileStatus::Removed => " D",
+                    FileStatus::Renamed { from } => {
+                        any = true;
+                        println!(" R {from} -> {path}");
+                        continue;
+                    }
                     FileStatus::Untracked => "??",
                 };
                 any = true;
@@ -246,7 +251,10 @@ fn run(cli: Cli) -> Result<(), String> {
                 let status = repo.status()?;
                 let mut out = String::new();
                 for (path, st) in &status.entries {
-                    if matches!(st, FileStatus::Modified | FileStatus::Added) {
+                    if matches!(
+                        st,
+                        FileStatus::Modified | FileStatus::Added | FileStatus::Renamed { .. }
+                    ) {
                         out.push_str(&repo.diff_working(path)?);
                     }
                 }

@@ -46,3 +46,9 @@
 | `cli_fsck_clean_repository`, `cli_fsck_detects_corruption` | fsck clean vs corrupted fixture |
 | `cli_gc_dry_run_and_prune` | gc dry-run default; `--prune` removes unreachable blobs |
 | `cli_gc_and_fsck_fail_under_external_lock` | gc/fsck lock contention |
+| `path_rename_status_and_diff_integration` | Path rename in status (`R old -> new`) and diff (`RenamePath` intent) |
+| `path_rename_merges_with_independent_content_edit` | Rename on one branch + edit on other merges at renamed path (unit) |
+| `path_rename_conflicts_with_independent_add_at_destination` | Rename vs independent add at destination conflicts (unit) |
+| `conflicting_path_renames_report_conflict` | Both branches rename same path to different destinations (unit) |
+| `move_subtree_and_sibling_payload_edit_merge` | Move + payload edit merge cleanly (unit) |
+| `moved_function_reports_move_not_delete_insert` | Intra-file reposition avoids delete+insert (unit) |
