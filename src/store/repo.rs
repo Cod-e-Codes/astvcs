@@ -1556,7 +1556,7 @@ impl Repo {
             let blob_id = store.write(&tracked.content)?;
             manifest.insert(
                 path.clone(),
-                ManifestEntry::with_mode(blob_id, tracked.mode.clone()),
+                ManifestEntry::with_mode(blob_id, tracked.mode),
             );
         }
         let state_id = hash_manifest(&manifest);

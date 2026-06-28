@@ -244,12 +244,12 @@ fn merge_file_mode(
     left: Option<&TrackedFile>,
     right: Option<&TrackedFile>,
 ) -> Result<FileMode, String> {
-    let left_mode = left.map(|f| f.mode.clone()).unwrap_or(FileMode::Regular);
-    let right_mode = right.map(|f| f.mode.clone()).unwrap_or(FileMode::Regular);
+    let left_mode = left.map(|f| f.mode).unwrap_or(FileMode::Regular);
+    let right_mode = right.map(|f| f.mode).unwrap_or(FileMode::Regular);
     if left_mode == right_mode {
         return Ok(left_mode);
     }
-    let base_mode = base.map(|f| f.mode.clone());
+    let base_mode = base.map(|f| f.mode);
     let left_changed = base_mode.as_ref() != Some(&left_mode);
     let right_changed = base_mode.as_ref() != Some(&right_mode);
     match (left_changed, right_changed) {

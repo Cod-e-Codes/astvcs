@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// File type metadata tracked beside content-addressed blobs.
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileMode {
     #[default]
