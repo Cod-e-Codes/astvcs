@@ -22,3 +22,8 @@
 | `merge_conflict_diagnostics_without_side_effects` | Atomic rollback on conflict |
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
+| `network_file_remote_fetch_push_and_clone` | File remote sync |
+| `cli_reset_hard_soft_and_force` | Reset modes, force clobber warnings |
+| `cli_revert_and_dry_run` | Revert conflict and success paths |
+| `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |
+| `go_sum_and_ps1_status_are_quiet` | Known text-only paths on scan |

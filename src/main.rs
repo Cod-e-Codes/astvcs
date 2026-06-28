@@ -51,6 +51,23 @@ enum Commands {
         #[arg(long, group = "target")]
         state: Option<String>,
     },
+    Reset {
+        reference: String,
+        /// Move the ref only; leave the working tree and index unchanged.
+        #[arg(long)]
+        soft: bool,
+        /// Allow hard reset when the working tree has unrecorded changes.
+        #[arg(long)]
+        force: bool,
+    },
+    Revert {
+        reference: String,
+        #[arg(short, long)]
+        message: String,
+        /// Simulate revert and print conflicts without changing the repository.
+        #[arg(long)]
+        dry_run: bool,
+    },
     Log {
         #[arg(short = 'n', long, default_value = "20")]
         limit: usize,
@@ -277,11 +294,57 @@ fn run(cli: Cli) -> Result<(), String> {
             if let Some(name) = branch {
                 repo.checkout_branch(&name)?;
                 println!("Switched to branch {name}");
-            } else if let Some(id) = state {
+            } else if let Some(reference) = state {
+                let id = repo.resolve_state_ref(&reference)?;
                 repo.checkout_state(&id)?;
                 println!("Checked out state {id} (detached HEAD)");
             } else {
                 return Err("specify --branch or --state".into());
+            }
+        }
+        Commands::Reset {
+            reference,
+            soft,
+            force,
+        } => {
+            let repo = Repo::open(&root)?;
+            let target = repo.reset(&reference, soft, force)?;
+            if soft {
+                match repo.head_branch()? {
+                    Some(name) => {
+                        println!("Reset branch {name} to state {target} (soft)");
+                    }
+                    None => println!("Reset HEAD to state {target} (soft)"),
+                }
+            } else {
+                println!("Reset to state {target}");
+            }
+        }
+        Commands::Revert {
+            reference,
+            message,
+            dry_run,
+        } => {
+            let repo = Repo::open(&root)?;
+            if dry_run {
+                let plan = repo.revert_state_dry_run(&reference)?;
+                if plan.is_clean() {
+                    print!("{}", plan.format_dry_run());
+                } else {
+                    print!("{}", plan.format_conflicts());
+                    trace::warn("revert dry-run: would conflict");
+                    return Err("revert would conflict".into());
+                }
+            } else {
+                let outcome = repo.revert_state(&reference, &message)?;
+                if outcome.created {
+                    println!(
+                        "Reverted state {} (new state {})",
+                        reference, outcome.state_id
+                    );
+                } else {
+                    println!("No changes (state {} unchanged)", outcome.state_id);
+                }
             }
         }
         Commands::Log { limit } => {

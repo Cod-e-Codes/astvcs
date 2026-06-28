@@ -14,7 +14,7 @@ Then use `.\target\release\astvcs.exe` (no `cargo run` per command).
 .\examples\reset.ps1
 ```
 
-Integration tests in `tests/integration.rs` cover the same scenarios in CI.
+Integration tests in `tests/integration.rs` cover the same scenarios in CI. Reset and revert are tested there only (no separate fixture directory).
 
 | Fixture | Integration test | What it shows |
 |---------|------------------|---------------|

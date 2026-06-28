@@ -11,7 +11,7 @@ pub use merge_resolve::{
     parse_merge_resolutions,
 };
 pub use repo::{
-    BranchInfo, FileStatus, MergePlan, RecordOutcome, Repo, RepoConfig, StateEntry, StateId,
-    TimelineEntry, WorkingStatus,
+    BranchInfo, FileStatus, MergePlan, RecordOutcome, Repo, RepoConfig, RevertOutcome, RevertPlan,
+    StateEntry, StateId, TimelineEntry, WorkingStatus,
 };
 pub use walk::{ASTVCS_DIR, ScanReport, SkippedPath};

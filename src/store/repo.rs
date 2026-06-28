@@ -1,7 +1,7 @@
 use crate::diff::{DiffResult, diff_graphs, diff_text};
 use crate::frontend::{FileContent, parse_text_or_blob};
 use crate::intent;
-use crate::merge::{PathMergeConflict, PathMergeOutcome, merge_path};
+use crate::merge::{MergeConflict, PathMergeConflict, PathMergeOutcome, merge_path};
 use crate::store::blobs::{BlobStore, hash_manifest};
 use crate::store::history::{merge_base, walk_history};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
@@ -132,6 +132,52 @@ impl MergePlan {
 /// Result of recording the working tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordOutcome {
+    pub state_id: StateId,
+    pub created: bool,
+}
+
+/// Result of simulating a revert without writing refs or the working tree.
+#[derive(Clone, Debug)]
+pub struct RevertPlan {
+    pub target_id: StateId,
+    pub parent_id: StateId,
+    pub head_id: StateId,
+    pub reverted_files: HashMap<String, FileContent>,
+    pub conflicts: Vec<PathMergeConflict>,
+}
+
+impl RevertPlan {
+    pub fn is_clean(&self) -> bool {
+        self.conflicts.is_empty()
+    }
+
+    pub fn format_dry_run(&self) -> String {
+        if !self.is_clean() {
+            return self.format_conflicts();
+        }
+        let mut out = String::from("revert dry-run: would revert cleanly\n");
+        out.push_str(&format!("target: {}\n", self.target_id));
+        out.push_str(&format!("parent: {}\n", self.parent_id));
+        out.push_str(&format!("head: {}\n", self.head_id));
+        out.push_str(&format!("{} paths in result\n", self.reverted_files.len()));
+        out
+    }
+
+    pub fn format_conflicts(&self) -> String {
+        let mut out = String::from("revert would conflict\n");
+        out.push_str(&format!("target: {}\n", self.target_id));
+        out.push_str(&format!("parent: {}\n", self.parent_id));
+        out.push_str(&format!("head: {}\n", self.head_id));
+        for conflict in &self.conflicts {
+            out.push_str(&conflict.format_report());
+        }
+        out
+    }
+}
+
+/// Result of reverting a state on top of HEAD.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RevertOutcome {
     pub state_id: StateId,
     pub created: bool,
 }
@@ -405,7 +451,7 @@ impl Repo {
         }
     }
 
-    /// Resolve a branch name or 64-character state id.
+    /// Resolve a branch name, remote-tracking ref, or 64-character state id.
     pub fn resolve_state_ref(&self, reference: &str) -> Result<StateId, String> {
         if is_state_id(reference) {
             self.load_timeline_entry(&reference.to_string())?;
@@ -416,6 +462,12 @@ impl Repo {
         if ref_path.is_file() {
             let id = self.branch_state(reference)?;
             trace::notice(format!("resolved branch {reference} -> state {id}"));
+            return Ok(id);
+        }
+        if let Some((remote, branch)) = reference.split_once('/')
+            && let Some(id) = self.read_remote_ref(remote, branch)?
+        {
+            trace::notice(format!("resolved remote ref {reference} -> state {id}"));
             return Ok(id);
         }
         Err(format!("unknown branch or state: {reference}"))
@@ -553,6 +605,229 @@ impl Repo {
             merged_files,
             conflicts,
         })
+    }
+
+    pub fn plan_revert(&self, target_id: &StateId) -> Result<RevertPlan, String> {
+        let entry = self.load_timeline_entry(target_id)?;
+        if entry.parents.len() > 1 {
+            return Err(format!("cannot revert merge state {target_id}"));
+        }
+        let parent_id = match entry
+            .parent
+            .clone()
+            .or_else(|| entry.parents.first().cloned())
+        {
+            Some(id) => id,
+            None => return Err(format!("cannot revert root state {target_id}")),
+        };
+
+        let head = self.head_state()?;
+        if !self.is_ancestor_of(target_id, &head)? {
+            return Err(format!(
+                "state {target_id} is not an ancestor of HEAD {head}"
+            ));
+        }
+
+        trace::notice(format!(
+            "revert plan: target={target_id} parent={parent_id} head={head}"
+        ));
+        let base_files = self.load_state_files(target_id)?;
+        let left_files = self.load_state_files(&parent_id)?;
+        let head_files = self.load_state_files(&head)?;
+
+        let mut reverted_files = base_files.clone();
+        let mut conflicts = Vec::new();
+        let mut all_paths: HashSet<String> = base_files.keys().cloned().collect();
+        all_paths.extend(left_files.keys().cloned());
+        all_paths.extend(head_files.keys().cloned());
+
+        for path in all_paths {
+            let base = base_files.get(&path);
+            let left = left_files.get(&path);
+            let right = head_files.get(&path);
+            match merge_path(&path, base, left, right) {
+                PathMergeOutcome::Keep(content) => {
+                    if let (Some(b), None, Some(r)) = (base, left, right)
+                        && !r.semantic_eq(b)
+                    {
+                        trace::warn(format!(
+                            "revert plan: {path} modified after the reverted state"
+                        ));
+                        conflicts.push(PathMergeConflict {
+                            path: path.clone(),
+                            detail: MergeConflict {
+                                message: "path modified after the reverted state".into(),
+                                left_mutations: vec![],
+                                right_mutations: vec![],
+                                left_intent_lines: vec![],
+                                right_intent_lines: vec![],
+                                overlapping: vec![],
+                                text_line: None,
+                            },
+                        });
+                        continue;
+                    }
+                    trace::notice(format!("revert plan: {path} keep"));
+                    reverted_files.insert(path, content);
+                }
+                PathMergeOutcome::Remove => {
+                    trace::notice(format!("revert plan: {path} remove"));
+                    reverted_files.remove(&path);
+                }
+                PathMergeOutcome::Conflict(c) => {
+                    trace::warn(format!("revert plan: {} conflict", c.path));
+                    conflicts.push(c);
+                }
+            }
+        }
+
+        Ok(RevertPlan {
+            target_id: target_id.clone(),
+            parent_id,
+            head_id: head,
+            reverted_files,
+            conflicts,
+        })
+    }
+
+    pub fn revert_state(&self, reference: &str, message: &str) -> Result<RevertOutcome, String> {
+        let target_id = self.resolve_state_ref(reference)?;
+        let plan = self.plan_revert(&target_id)?;
+        if !plan.is_clean() {
+            trace::warn("revert: aborted due to conflicts");
+            return Err(plan.format_conflicts());
+        }
+        self.finish_revert(&plan, message)
+    }
+
+    pub fn revert_state_dry_run(&self, reference: &str) -> Result<RevertPlan, String> {
+        let target_id = self.resolve_state_ref(reference)?;
+        self.plan_revert(&target_id)
+    }
+
+    fn finish_revert(&self, plan: &RevertPlan, message: &str) -> Result<RevertOutcome, String> {
+        let head = plan.head_id.clone();
+        let head_files = self.load_state_files(&head)?;
+
+        if manifest_unchanged(&head_files, &plan.reverted_files) {
+            trace::notice(format!("revert: no changes; state {head} unchanged"));
+            return Ok(RevertOutcome {
+                state_id: head,
+                created: false,
+            });
+        }
+
+        let parent_files = self.load_state_files(&plan.parent_id)?;
+        if manifest_unchanged(&parent_files, &plan.reverted_files) {
+            match self.read_head_target()? {
+                HeadTarget::Branch(branch) => {
+                    fs::write(
+                        self.astvcs_dir().join("refs/heads").join(&branch),
+                        format!("{}\n", plan.parent_id),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    trace::notice(format!(
+                        "revert: updated branch {branch} -> {}",
+                        plan.parent_id
+                    ));
+                }
+                HeadTarget::Detached(_) => {
+                    self.write_head_target(&HeadTarget::Detached(plan.parent_id.clone()))?;
+                    trace::notice(format!("revert: detached HEAD -> {}", plan.parent_id));
+                }
+            }
+            self.materialize_state(&plan.parent_id)?;
+            trace::notice(format!(
+                "revert: restored parent state {} undoing {}",
+                plan.parent_id, plan.target_id
+            ));
+            return Ok(RevertOutcome {
+                state_id: plan.parent_id.clone(),
+                created: true,
+            });
+        }
+
+        let state_id = self.persist_state(
+            &plan.reverted_files,
+            message,
+            Some(head.clone()),
+            vec![head.clone()],
+        )?;
+        match self.read_head_target()? {
+            HeadTarget::Branch(branch) => {
+                fs::write(
+                    self.astvcs_dir().join("refs/heads").join(&branch),
+                    format!("{state_id}\n"),
+                )
+                .map_err(|e| e.to_string())?;
+                trace::notice(format!("revert: updated branch {branch} -> {state_id}"));
+            }
+            HeadTarget::Detached(_) => {
+                self.write_head_target(&HeadTarget::Detached(state_id.clone()))?;
+                trace::notice(format!("revert: detached HEAD -> {state_id}"));
+            }
+        }
+        self.materialize_state(&state_id)?;
+        trace::notice(format!(
+            "revert: created state {state_id} undoing {}",
+            plan.target_id
+        ));
+        Ok(RevertOutcome {
+            state_id,
+            created: true,
+        })
+    }
+
+    pub fn reset(&self, reference: &str, soft: bool, force: bool) -> Result<StateId, String> {
+        let target = self.resolve_state_ref(reference)?;
+        let prior_head = self.head_state()?;
+
+        if !soft && !force && target != prior_head && !self.working_tree_is_clean()? {
+            return Err(
+                "working tree has unrecorded changes; record, soft reset, or pass --force".into(),
+            );
+        }
+
+        let clobbered_paths: Vec<String> = if !soft && force && !self.working_tree_is_clean()? {
+            self.status()?
+                .entries
+                .iter()
+                .filter(|(_, status)| !matches!(status, FileStatus::Unchanged))
+                .map(|(path, _)| path.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        match self.read_head_target()? {
+            HeadTarget::Branch(ref branch) => {
+                fs::write(
+                    self.astvcs_dir().join("refs/heads").join(branch),
+                    format!("{target}\n"),
+                )
+                .map_err(|e| e.to_string())?;
+                let mode = if soft { "soft" } else { "hard" };
+                trace::notice(format!(
+                    "reset {mode}: branch {branch} {prior_head} -> {target}"
+                ));
+            }
+            HeadTarget::Detached(_) => {
+                self.write_head_target(&HeadTarget::Detached(target.clone()))?;
+                let mode = if soft { "soft" } else { "hard" };
+                trace::notice(format!("reset {mode}: detached {prior_head} -> {target}"));
+            }
+        }
+
+        if !soft {
+            self.materialize_state(&target)?;
+            for path in clobbered_paths {
+                trace::warn(format!(
+                    "reset --force: discarded unrecorded changes in {path}"
+                ));
+            }
+        }
+
+        Ok(target)
     }
 
     pub fn diff_state_path(
@@ -1658,5 +1933,405 @@ mod tests {
         let entry = repo.load_timeline_entry(&id).unwrap();
         assert_eq!(entry.message, "first");
         assert!(entry.parent.is_none() || entry.parent.as_deref() != Some(id.as_str()));
+    }
+
+    #[test]
+    fn reset_hard_moves_tip_and_materializes() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        repo.record("v2").unwrap();
+
+        repo.reset(&v1, false, false).unwrap();
+        assert_eq!(repo.head_state().unwrap(), v1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn reset_hard_repairs_drift_at_same_tip() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "drifted\n").unwrap();
+
+        repo.reset(&v1, false, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+    }
+
+    #[test]
+    fn reset_soft_preserves_dirty_working_tree() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        repo.record("v2").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+
+        repo.reset(&v1, true, false).unwrap();
+        assert_eq!(repo.head_state().unwrap(), v1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+        let status = repo.status().unwrap();
+        assert_eq!(status.entries.get("note.txt"), Some(&FileStatus::Modified));
+    }
+
+    #[test]
+    fn reset_hard_refuses_dirty_tree_without_force() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        repo.record("v2").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        let tip_before = repo.head_state().unwrap();
+
+        let err = repo.reset(&v1, false, false).unwrap_err();
+        assert!(err.contains("unrecorded changes"), "{err}");
+        assert_eq!(repo.head_state().unwrap(), tip_before);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+    }
+
+    #[test]
+    fn reset_hard_force_warns_and_clobbers_dirty_paths() {
+        trace::clear_log();
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        repo.record("v2").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+
+        repo.reset(&v1, false, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+        let log = trace::take_log();
+        assert!(
+            log.iter()
+                .any(|l| l
+                    .contains("warning: reset --force: discarded unrecorded changes in note.txt")),
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn reset_detached_hard_and_soft() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.record("v2").unwrap().state_id;
+        repo.checkout_state(&v2).unwrap();
+
+        repo.reset(&v1, true, false).unwrap();
+        assert!(repo.is_detached().unwrap());
+        assert_eq!(repo.head_state().unwrap(), v1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v2\n"
+        );
+
+        repo.reset(&v2, false, true).unwrap();
+        assert_eq!(repo.head_state().unwrap(), v2);
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn reset_to_root_empty_state() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.record("v1").unwrap();
+        let root = StateId::from("0".repeat(64));
+
+        repo.reset(&root, false, false).unwrap();
+        assert_eq!(repo.head_state().unwrap(), root);
+        assert!(!dir.path().join("note.txt").exists());
+    }
+
+    #[test]
+    fn reset_unknown_ref_errors_without_writes() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+
+        let err = repo.reset("missing-branch", false, false).unwrap_err();
+        assert!(err.contains("unknown"), "{err}");
+        assert_eq!(repo.head_state().unwrap(), v1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+    }
+
+    #[test]
+    fn resolve_state_ref_remote_tracking() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        repo.write_remote_ref("origin", "main", &v1).unwrap();
+
+        assert_eq!(repo.resolve_state_ref("origin/main").unwrap(), v1);
+    }
+
+    #[test]
+    fn revert_add_then_modify_conflicts() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
+        fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
+        repo.record("seed").unwrap();
+        fs::remove_file(dir.path().join("notes.txt")).unwrap();
+        repo.record("remove notes").unwrap();
+        let target = {
+            fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+            repo.record("add notes").unwrap().state_id
+        };
+        fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
+        repo.record("modify notes").unwrap();
+
+        let err = repo.revert_state(&target, "revert add").unwrap_err();
+        assert!(
+            err.contains("path modified after the reverted state"),
+            "{err}"
+        );
+        assert!(dir.path().join("notes.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
+            "added later\n"
+        );
+    }
+
+    #[test]
+    fn revert_harmless_add_removes_file() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
+        fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
+        repo.record("seed").unwrap();
+        fs::remove_file(dir.path().join("notes.txt")).unwrap();
+        repo.record("remove notes").unwrap();
+        let target = {
+            fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+            repo.record("add notes").unwrap().state_id
+        };
+
+        let outcome = repo.revert_state(&target, "revert add").unwrap();
+        assert!(outcome.created);
+        assert!(!dir.path().join("notes.txt").exists());
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn revert_of_revert_restores_content() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.record("v1").unwrap();
+        fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
+        let v2 = repo.record("v2 add extra").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v3\n").unwrap();
+        repo.record("v3").unwrap();
+        let v4 = repo.revert_state(&v2, "revert extra add").unwrap().state_id;
+        repo.revert_state(&v4, "revert the revert").unwrap();
+
+        let head = repo.head_state().unwrap();
+        let files = repo.load_state_files(&head).unwrap();
+        assert!(files.contains_key("extra.txt"));
+        assert_eq!(
+            match &files["note.txt"] {
+                FileContent::Text(t) => t.content.as_str(),
+                _ => panic!(),
+            },
+            "v3\n"
+        );
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn revert_head_tip_undoes_last_record() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.record("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.record("v2").unwrap().state_id;
+
+        let outcome = repo.revert_state(&v2, "undo v2").unwrap();
+        assert!(outcome.created);
+        let files = repo.load_state_files(&outcome.state_id).unwrap();
+        assert_eq!(
+            match &files["note.txt"] {
+                FileContent::Text(t) => t.content.as_str(),
+                _ => panic!(),
+            },
+            "v1\n"
+        );
+        assert!(repo.working_tree_is_clean().unwrap());
+        assert_eq!(outcome.state_id, v1);
+    }
+
+    #[test]
+    fn revert_older_commit_on_linear_history() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.record("v1").unwrap();
+        fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
+        let v2 = repo.record("v2 add extra").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v3\n").unwrap();
+        repo.record("v3").unwrap();
+
+        let outcome = repo.revert_state(&v2, "revert extra add").unwrap();
+        let files = repo.load_state_files(&outcome.state_id).unwrap();
+        assert!(!files.contains_key("extra.txt"));
+        assert_eq!(
+            match &files["note.txt"] {
+                FileContent::Text(t) => t.content.as_str(),
+                _ => panic!(),
+            },
+            "v3\n"
+        );
+        assert!(!dir.path().join("extra.txt").exists());
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn revert_merge_state_errors() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.record("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
+        repo.record("main edit").unwrap();
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+        repo.record("feature add").unwrap();
+        repo.checkout_branch("main").unwrap();
+        let merge_id = repo.merge_branch("feature", "merge").unwrap();
+
+        let err = repo.revert_state(&merge_id, "revert merge").unwrap_err();
+        assert!(err.contains("cannot revert merge state"), "{err}");
+    }
+
+    #[test]
+    fn revert_non_ancestor_errors() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "base\n").unwrap();
+        repo.record("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("note.txt"), "feature\n").unwrap();
+        let feature_id = repo.record("feature").unwrap().state_id;
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("note.txt"), "main\n").unwrap();
+        repo.record("main").unwrap();
+
+        let err = repo
+            .revert_state(&feature_id, "revert foreign")
+            .unwrap_err();
+        assert!(err.contains("not an ancestor"), "{err}");
+    }
+
+    #[test]
+    fn revert_noop_when_manifest_unchanged() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.record("v1").unwrap();
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.record("v2").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.record("back to v1 content").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        let outcome = repo.revert_state(&v2, "noop revert").unwrap();
+        assert!(!outcome.created);
+        assert_eq!(outcome.state_id, tip);
+    }
+
+    #[test]
+    fn revert_ast_prepended_comment() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("lib.rs"), "pub fn one() {}\n").unwrap();
+        repo.record("baseline").unwrap();
+        let with_doc = "//! crate doc\npub fn one() {}\n";
+        fs::write(dir.path().join("lib.rs"), with_doc).unwrap();
+        let target = repo.record("prepend doc").unwrap().state_id;
+
+        repo.revert_state(&target, "revert doc").unwrap();
+        let head = repo.head_state().unwrap();
+        let files = repo.load_state_files(&head).unwrap();
+        let text = match &files["lib.rs"] {
+            FileContent::Ast(g) => unparse(g),
+            _ => panic!("expected ast"),
+        };
+        assert_eq!(text, "pub fn one() {}\n");
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn revert_after_head_matches_target_add_removes_file() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
+        fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
+        repo.record("seed").unwrap();
+        fs::remove_file(dir.path().join("notes.txt")).unwrap();
+        let removed = repo.record("remove notes").unwrap();
+        assert!(removed.created);
+        let added = {
+            fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+            repo.record("add notes").unwrap()
+        };
+        assert!(added.created);
+        let target = added.state_id;
+        fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
+        repo.record("modify notes").unwrap();
+        fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+        repo.reset(&target, true, false).unwrap();
+
+        let plan = repo.plan_revert(&target).unwrap();
+        assert!(plan.is_clean(), "{:?}", plan.conflicts);
+        assert!(!plan.reverted_files.contains_key("notes.txt"));
+
+        repo.revert_state(&target, "revert add").unwrap();
+        assert!(!dir.path().join("notes.txt").exists());
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn revert_conflict_aborts_without_side_effects() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
+        fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
+        repo.record("seed").unwrap();
+        fs::remove_file(dir.path().join("notes.txt")).unwrap();
+        repo.record("remove notes").unwrap();
+        let target = {
+            fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+            repo.record("add notes").unwrap().state_id
+        };
+        fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
+        let tip = repo.record("modify notes").unwrap().state_id;
+
+        let err = repo.revert_state(&target, "revert add").unwrap_err();
+        assert!(
+            err.contains("path modified after the reverted state"),
+            "{err}"
+        );
+        assert_eq!(repo.head_state().unwrap(), tip);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
+            "added later\n"
+        );
     }
 }

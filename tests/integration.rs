@@ -1020,3 +1020,170 @@ fn network_file_remote_fetch_push_and_clone() {
         Repo::open(clone_dir.path()).unwrap().head_state().unwrap()
     );
 }
+
+#[test]
+fn cli_reset_hard_soft_and_force() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    let v1 = repo.record("v1").unwrap().state_id;
+    fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+    repo.record("v2").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["reset", &v1]);
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("Reset to state {v1}")));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "v1\n"
+    );
+
+    fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+    repo.record("v2 again").unwrap();
+    fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["reset", &v1]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unrecorded changes"));
+
+    let out = run_astvcs(Some(dir.path()), &["reset", &v1, "--soft"]);
+    assert!(out.status.success());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "dirty\n"
+    );
+
+    let out = run_astvcs(Some(dir.path()), &["reset", &v1, "--force"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("warning: reset --force: discarded unrecorded changes in note.txt"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "v1\n"
+    );
+}
+
+#[test]
+fn cli_revert_and_dry_run() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
+    fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
+    repo.record("seed").unwrap();
+    fs::remove_file(dir.path().join("notes.txt")).unwrap();
+    repo.record("remove").unwrap();
+    fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+    let target = repo.record("add notes").unwrap().state_id;
+    fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
+    let tip = repo.record("modify notes").unwrap().state_id;
+
+    let out = run_astvcs(
+        Some(dir.path()),
+        &["revert", &target, "-m", "revert add", "--dry-run"],
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("path modified after the reverted state")
+    );
+    assert_eq!(repo.head_state().unwrap(), tip);
+
+    fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+    repo.reset(&target, true, false).unwrap();
+    assert_eq!(repo.head_state().unwrap(), target);
+    let out = run_astvcs(Some(dir.path()), &["revert", &target, "-m", "revert add"]);
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!dir.path().join("notes.txt").exists());
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn resolve_remote_ref_for_diff_merge_base_and_checkout() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
+    upstream_repo.record("v1").unwrap();
+    fs::write(upstream.path().join("note.txt"), "v2\n").unwrap();
+    let v2 = upstream_repo.record("v2").unwrap().state_id;
+
+    let clone_dir = TempDir::new().unwrap();
+    run_astvcs(
+        None,
+        &[
+            "clone",
+            upstream.path().to_str().unwrap(),
+            clone_dir.path().to_str().unwrap(),
+        ],
+    );
+    let clone_repo = Repo::open(clone_dir.path()).unwrap();
+    fs::write(clone_dir.path().join("note.txt"), "v3\n").unwrap();
+    clone_repo.record("v3").unwrap();
+
+    let out = run_astvcs(
+        Some(clone_dir.path()),
+        &["merge-base", "origin/main", "main"],
+    );
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let base = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert_eq!(base, v2);
+
+    let out = run_astvcs(Some(clone_dir.path()), &["diff", "--state", "origin/main"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("v2"));
+
+    let out = run_astvcs(
+        Some(clone_dir.path()),
+        &["checkout", "--state", "origin/main"],
+    );
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let detached = Repo::open(clone_dir.path()).unwrap();
+    assert!(detached.is_detached().unwrap());
+    assert_eq!(
+        fs::read_to_string(clone_dir.path().join("note.txt")).unwrap(),
+        "v2\n"
+    );
+
+    let remote_tip = detached.read_remote_ref("origin", "main").unwrap().unwrap();
+    let out = run_astvcs(Some(clone_dir.path()), &["reset", "origin/main"]);
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let after_reset = Repo::open(clone_dir.path()).unwrap();
+    assert_eq!(after_reset.head_state().unwrap(), remote_tip);
+}
+
+#[test]
+fn go_sum_and_ps1_status_are_quiet() {
+    trace::clear_log();
+    trace::clear_warned();
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("go.sum"), "hash example\n").unwrap();
+    fs::write(dir.path().join("run.ps1"), "Write-Host hi\n").unwrap();
+    repo.record("deps and script").unwrap();
+
+    trace::clear_log();
+    repo.status().unwrap();
+    let log = trace::take_log();
+    assert!(
+        !log.iter().any(|l| l.contains("warning:")),
+        "text-only paths should not warn on status: {log:?}"
+    );
+}

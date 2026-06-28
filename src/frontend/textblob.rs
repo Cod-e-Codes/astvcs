@@ -95,7 +95,7 @@ mod tests {
         trace::clear_log();
         trace::clear_warned();
         trace::set_verbose(true);
-        for path in [".gitignore", "notes.txt", "README.md"] {
+        for path in [".gitignore", "notes.txt", "README.md", "go.sum", "run.ps1"] {
             let content = parse_text_or_blob(path, "data\n");
             assert!(matches!(content, FileContent::Text(_)));
         }

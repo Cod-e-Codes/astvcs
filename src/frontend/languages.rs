@@ -138,6 +138,7 @@ pub fn is_text_only_path(path: &str) -> bool {
             | "LICENSE"
             | "COPYING"
             | "README"
+            | "go.sum"
     ) || basename.ends_with("ignore") && basename.starts_with('.')
     {
         return true;
@@ -155,6 +156,7 @@ pub fn is_text_only_path(path: &str) -> bool {
             | "gitignore"
             | "dockerignore"
             | "editorconfig"
+            | "ps1"
     )
 }
 
@@ -267,5 +269,7 @@ mod tests {
         assert_eq!(SourceLanguage::from_path("README.RS"), None);
         assert_eq!(SourceLanguage::from_path("noext"), None);
         assert_eq!(SourceLanguage::from_path("readme.md"), None);
+        assert!(is_text_only_path("go.sum"));
+        assert!(is_text_only_path("scripts/run.ps1"));
     }
 }

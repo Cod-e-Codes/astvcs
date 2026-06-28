@@ -4,7 +4,7 @@
 
 **States.** Each `record` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Recording with no file changes is a no-op.
 
-**HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `record` compare against the checked-out state, not the branch tip when detached.
+**HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `record` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
 
 **On-disk layout.**
 
@@ -49,7 +49,7 @@ Supported extensions are parsed with tree-sitter into an `AstGraph` DAG. Each no
 | `.sql` | SQL (`tree-sitter-sequel` on crates.io) |
 | `.sh`, `.bash` | Bash |
 
-All other paths use line-oriented text blob storage. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process.
+All other paths use line-oriented text blob storage. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`, `go.sum`, `.ps1`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process.
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
@@ -90,7 +90,7 @@ Supported remote URLs:
 | Local path | `C:/repos/project` or `file:///C:/repos/project` |
 | HTTP | `http://127.0.0.1:9421` (from `astvcs serve`) |
 
-Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, and branch refs. `fetch` downloads missing history and updates remote-tracking refs; it does not change local branches or the working tree. `push` uploads missing objects and fast-forwards the remote branch (use `--force` to override). `clone` initializes a repository, fetches from the remote, and checks out the default branch.
+Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, and branch refs. `fetch` downloads missing history and updates remote-tracking refs; it does not change local branches or the working tree. Use `reset`, `checkout --state`, or `merge` with a remote-tracking ref (for example `origin/main`) to work on fetched commits. `push` uploads missing objects and fast-forwards the remote branch (use `--force` to override). `clone` initializes a repository, fetches from the remote, and checks out the default branch.
 
 The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, and repository config.
 
@@ -149,5 +149,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `go_unparse_roundtrip_via_repo` | Record, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Sibling literal merge and rename conflicts |
+| `cli_reset_hard_soft_and_force` | Hard/soft reset, drift repair, force clobber warnings |
+| `cli_revert_and_dry_run` | Revert conflicts, dry-run, and successful undo |
+| `resolve_remote_ref_for_diff_merge_base_and_checkout` | `origin/main`-style ref resolution |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.
