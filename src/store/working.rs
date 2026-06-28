@@ -25,10 +25,10 @@ pub fn load_working_tracked(root: &Path, rel: &str) -> Result<TrackedFile, Strin
 
 fn detect_executable_mode(path: &Path, bytes: &[u8]) -> FileMode {
     #[cfg(unix)]
-    if let Ok(meta) = fs::metadata(path) {
-        if meta.permissions().mode() & 0o111 != 0 {
-            return FileMode::Executable;
-        }
+    if let Ok(meta) = fs::metadata(path)
+        && meta.permissions().mode() & 0o111 != 0
+    {
+        return FileMode::Executable;
     }
     #[cfg(windows)]
     if is_windows_shell_script_executable(path, bytes) {
