@@ -64,7 +64,7 @@ impl<'a> MaterializeOptions<'a> {
 
 /// What HEAD points at: a branch name or a detached state id.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum HeadTarget {
+pub(crate) enum HeadTarget {
     Branch(String),
     Detached(StateId),
 }
@@ -351,6 +351,10 @@ impl Repo {
         BlobStore::new(self.astvcs_dir())
     }
 
+    pub(crate) fn blobs_store(&self) -> BlobStore {
+        self.blobs()
+    }
+
     pub fn head_branch(&self) -> Result<Option<String>, String> {
         let _lock = self.repo_lock()?;
         match self.read_head_target()? {
@@ -377,7 +381,7 @@ impl Repo {
         self.read_branch_ref(branch)
     }
 
-    fn read_branch_ref(&self, branch: &str) -> Result<StateId, String> {
+    pub(crate) fn read_branch_ref(&self, branch: &str) -> Result<StateId, String> {
         let text = fs::read_to_string(self.astvcs_dir().join("refs/heads").join(branch))
             .map_err(|e| e.to_string())?;
         Ok(text.trim().to_string())
@@ -385,8 +389,15 @@ impl Repo {
 
     pub fn list_branches(&self) -> Result<Vec<BranchInfo>, String> {
         let _lock = self.repo_lock()?;
+        self.list_branches_unlocked()
+    }
+
+    pub(crate) fn list_branches_unlocked(&self) -> Result<Vec<BranchInfo>, String> {
         let dir = self.astvcs_dir().join("refs/heads");
         let mut branches = Vec::new();
+        if !dir.is_dir() {
+            return Ok(branches);
+        }
         for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let name = entry.file_name().to_string_lossy().to_string();
@@ -424,7 +435,7 @@ impl Repo {
         if self.head_branch_unlocked()? == Some(name.to_string()) {
             return Err(format!("cannot remove the checked-out branch: {name}"));
         }
-        if self.list_branches()?.len() <= 1 {
+        if self.list_branches_unlocked()?.len() <= 1 {
             return Err("cannot remove the last branch".into());
         }
         fs::remove_file(ref_path).map_err(|e| e.to_string())?;
@@ -461,7 +472,7 @@ impl Repo {
         self.load_manifest_unlocked(state_id)
     }
 
-    fn load_manifest_unlocked(
+    pub(crate) fn load_manifest_unlocked(
         &self,
         state_id: &StateId,
     ) -> Result<HashMap<String, String>, String> {
@@ -510,7 +521,10 @@ impl Repo {
         self.load_timeline_entry_unlocked(state_id)
     }
 
-    fn load_timeline_entry_unlocked(&self, state_id: &StateId) -> Result<TimelineEntry, String> {
+    pub(crate) fn load_timeline_entry_unlocked(
+        &self,
+        state_id: &StateId,
+    ) -> Result<TimelineEntry, String> {
         let path = self
             .astvcs_dir()
             .join("timeline")
@@ -1340,7 +1354,7 @@ impl Repo {
         write_atomic_json(&self.astvcs_dir().join(INDEX_FILE), &index)
     }
 
-    fn read_head_target(&self) -> Result<HeadTarget, String> {
+    pub(crate) fn read_head_target(&self) -> Result<HeadTarget, String> {
         let text =
             fs::read_to_string(self.astvcs_dir().join(HEAD_FILE)).map_err(|e| e.to_string())?;
         let line = text.trim();
@@ -1351,14 +1365,18 @@ impl Repo {
         }
     }
 
-    fn head_branch_unlocked(&self) -> Result<Option<String>, String> {
+    pub(crate) fn head_branch_unlocked(&self) -> Result<Option<String>, String> {
         match self.read_head_target()? {
             HeadTarget::Branch(name) => Ok(Some(name)),
             HeadTarget::Detached(_) => Ok(None),
         }
     }
 
-    fn head_state_unlocked(&self) -> Result<StateId, String> {
+    pub(crate) fn is_detached_unlocked(&self) -> Result<bool, String> {
+        Ok(matches!(self.read_head_target()?, HeadTarget::Detached(_)))
+    }
+
+    pub(crate) fn head_state_unlocked(&self) -> Result<StateId, String> {
         match self.read_head_target()? {
             HeadTarget::Branch(name) => self.read_branch_ref(&name),
             HeadTarget::Detached(id) => Ok(id),
@@ -1456,7 +1474,7 @@ impl Repo {
         self.read_remote_ref_unlocked(remote, branch)
     }
 
-    fn read_remote_ref_unlocked(
+    pub(crate) fn read_remote_ref_unlocked(
         &self,
         remote: &str,
         branch: &str,

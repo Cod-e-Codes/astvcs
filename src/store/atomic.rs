@@ -87,6 +87,50 @@ fn is_repo_metadata_dir(path: &Path) -> bool {
         .is_some_and(|name| name == ".git" || name == ".astvcs")
 }
 
+/// List `.astvcs-tmp` files whose canonical target path does not exist.
+pub fn find_orphan_temp_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut orphans = Vec::new();
+    find_orphan_temps_dir(root, &mut orphans)?;
+    orphans.sort();
+    Ok(orphans)
+}
+
+fn find_orphan_temps_dir(dir: &Path, orphans: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if file_type.is_dir() {
+            if is_repo_metadata_dir(&path) {
+                continue;
+            }
+            find_orphan_temps_dir(&path, orphans)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(TEMP_SUFFIX) {
+            continue;
+        }
+        let canonical_name = name.strip_suffix(TEMP_SUFFIX).unwrap_or(name);
+        let canonical = path.with_file_name(canonical_name);
+        if !canonical.exists() {
+            orphans.push(path);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

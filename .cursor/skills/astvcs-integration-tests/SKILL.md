@@ -51,7 +51,12 @@ assert!(out.status.success());
 - Merge conflicts leave repo unchanged (see `merge_conflict_diagnostics_without_side_effects`, `merge_conflict_still_leaves_refs_and_disk_unchanged_under_lock`).
 - Revert conflicts and failed materialize commands on dirty trees leave refs and disk unchanged (see `cli_materialize_refuses_dirty_tree_and_force_overrides`, `cli_revert_and_dry_run`, `reset_hard_refuses_dirty_tree_without_force` in `src/store/repo.rs`).
 - Repository lock contention fails fast with `repository is locked by another process; cannot acquire …/repo.lock` (see `cli_reports_repository_lock_contention`, `concurrent_repo_lock_fails_fast_with_actionable_error`).
+- Reentrant lock guards may drop in any order; `outer_guard_may_drop_before_inner_without_releasing_lock` guards thread-local lock depth (see `src/store/lock.rs`).
+- `sequential_acquire_after_release_on_same_thread` guards back-to-back in-process repo calls on Linux (see `src/store/lock.rs`).
 - Stray `.astvcs-tmp` files from a prior crash are removed when the canonical file exists (see `stray_temp_file_cleaned_on_next_locked_command`).
+- `gc` defaults to dry-run; `--prune` deletes only blobs unreachable from ref tips; timeline entries are kept (see `gc_*` tests in `store/integrity.rs`, `cli_gc_dry_run_and_prune`).
+- `fsck` is report-only with no `--repair`; clean repos print `fsck: repository ok` (see `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`).
+- `gc` and `fsck` fail fast under external lock with the same `repository is locked by another process` message (see `cli_gc_and_fsck_fail_under_external_lock`).
 - `merge`, `checkout`, and `revert` refuse by default when the working tree is dirty; `--force` emits `warning: <command> --force: discarded uncommitted changes in <path>` per clobbered path (same contract as hard `reset`).
 - Merge planning reads committed states only; `merge_force_on_dirty_overlapping_path_applies_committed_plan` guards against uncommitted edits affecting the merge result.
 - No-op reverts skip the dirty-tree guard even when the working tree is dirty (`revert_noop_with_dirty_working_tree_skips_materialize_guard`).

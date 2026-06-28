@@ -38,6 +38,11 @@
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |
+| `sequential_acquire_after_release_on_same_thread` | Back-to-back lock acquire on same thread (unit, `src/store/lock.rs`) |
 | `stray_temp_file_cleaned_on_next_locked_command` | Crash leftover `.astvcs-tmp` cleaned on next command (unit) |
 | `merge_conflict_still_leaves_refs_and_disk_unchanged_under_lock` | Merge conflict rollback with locking (unit) |
 | `go_sum_and_ps1_status_are_quiet` | Known text-only paths on scan |
+| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `fsck_clean_repository` | Reachability GC and fsck unit tests (`store/integrity.rs`) |
+| `cli_fsck_clean_repository`, `cli_fsck_detects_corruption` | fsck clean vs corrupted fixture |
+| `cli_gc_dry_run_and_prune` | gc dry-run default; `--prune` removes unreachable blobs |
+| `cli_gc_and_fsck_fail_under_external_lock` | gc/fsck lock contention |

@@ -1533,3 +1533,119 @@ fn cli_reports_repository_lock_contention() {
     );
     assert!(err.contains("repo.lock"), "{err}");
 }
+
+#[test]
+fn cli_fsck_clean_repository() {
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let out = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert_astvcs_ok(&out, "fsck clean");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("fsck: repository ok"), "{stdout}");
+}
+
+#[test]
+fn cli_fsck_detects_corruption() {
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("note.txt"), "data\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("init").unwrap();
+    let head = repo.head_state().unwrap();
+    let manifest = repo.load_manifest(&head).unwrap();
+    let note_blob = manifest.get("note.txt").unwrap().clone();
+    let shard = &note_blob[..2];
+    fs::remove_file(
+        dir.path()
+            .join(".astvcs/blobs")
+            .join(shard)
+            .join(format!("{note_blob}.json")),
+    )
+    .unwrap();
+
+    fs::write(
+        dir.path().join(".astvcs/refs/heads/dangling"),
+        format!("{}\n", "f".repeat(64)),
+    )
+    .unwrap();
+    fs::write(dir.path().join(".astvcs/HEAD"), "ghost\n").unwrap();
+    fs::write(
+        dir.path().join(".astvcs/index.json"),
+        r#"{
+  "main.rs": {
+    "state_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "content_kind": "text"
+  }
+}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("orphan.txt.astvcs-tmp"), "partial").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("fsck:"), "{stdout}");
+    assert!(stdout.contains("issue(s) found"), "{stdout}");
+    assert!(stdout.contains("missing blob"), "{stdout}");
+    assert!(stdout.contains("dangling ref"), "{stdout}");
+    assert!(stdout.contains("HEAD branch missing"), "{stdout}");
+    assert!(stdout.contains("index inconsistent"), "{stdout}");
+    assert!(stdout.contains("orphan temp file"), "{stdout}");
+}
+
+#[test]
+fn cli_gc_dry_run_and_prune() {
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("temp", None).unwrap();
+    repo.checkout_branch("temp").unwrap();
+    fs::write(dir.path().join("temp.txt"), "gone\n").unwrap();
+    repo.commit("temp").unwrap();
+    repo.checkout_branch("main").unwrap();
+    repo.remove_branch("temp").unwrap();
+
+    let dry = run_astvcs(Some(dir.path()), &["gc"]);
+    assert_astvcs_ok(&dry, "gc dry-run");
+    let dry_out = String::from_utf8_lossy(&dry.stdout);
+    assert!(dry_out.contains("dry-run"), "{dry_out}");
+    assert!(dry_out.contains("unreachable"), "{dry_out}");
+
+    let prune = run_astvcs(Some(dir.path()), &["gc", "--prune"]);
+    assert_astvcs_ok(&prune, "gc --prune");
+    let prune_out = String::from_utf8_lossy(&prune.stdout);
+    assert!(prune_out.contains("removed"), "{prune_out}");
+
+    let again = run_astvcs(Some(dir.path()), &["gc", "--prune"]);
+    assert_astvcs_ok(&again, "gc second prune");
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("nothing to prune"),
+        "{}",
+        String::from_utf8_lossy(&again.stdout)
+    );
+}
+
+#[test]
+fn cli_gc_and_fsck_fail_under_external_lock() {
+    use astvcs::store::RepoLockGuard;
+
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    let astvcs = dir.path().join(".astvcs");
+    let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
+
+    for cmd in [&["gc"] as &[&str], &["gc", "--prune"], &["fsck"]] {
+        let out = run_astvcs(Some(dir.path()), cmd);
+        assert!(!out.status.success(), "expected lock failure for {cmd:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("repository is locked by another process"),
+            "{err}"
+        );
+        assert!(err.contains("repo.lock"), "{err}");
+    }
+}

@@ -1,12 +1,16 @@
 pub(crate) mod atomic;
 mod blobs;
 mod history;
+mod integrity;
 mod lock;
 mod merge_resolve;
+mod reachability;
 mod repo;
 mod walk;
 
+pub use integrity::{FsckFinding, FsckKind, FsckReport, GcReport};
 pub use lock::RepoLockGuard;
+pub use reachability::{ROOT_STATE_ID, Reachability};
 
 pub use blobs::{BlobId, BlobStore, hash_manifest};
 pub use history::{ancestors, merge_base, walk_history};

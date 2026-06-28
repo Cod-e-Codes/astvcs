@@ -87,10 +87,64 @@ impl BlobStore {
         Ok(())
     }
 
+    /// Returns on-disk byte length when the blob file exists.
+    pub fn file_size(&self, id: &BlobId) -> Result<u64, String> {
+        let path = self.blob_path(id);
+        fs::metadata(&path)
+            .map(|m| m.len())
+            .map_err(|e| e.to_string())
+    }
+
     fn blob_path(&self, id: &BlobId) -> PathBuf {
         let shard = if id.len() >= 2 { &id[..2] } else { "00" };
         self.root.join(shard).join(format!("{id}.json"))
     }
+
+    /// List every blob id stored on disk.
+    pub fn list_all_ids(&self) -> Result<Vec<BlobId>, String> {
+        self.ensure_dirs()?;
+        let mut ids = Vec::new();
+        list_blob_ids_recursive(&self.root, &mut ids)?;
+        ids.sort();
+        Ok(ids)
+    }
+
+    /// Remove a blob file. Returns bytes reclaimed.
+    pub fn remove(&self, id: &BlobId) -> Result<u64, String> {
+        let path = self.blob_path(id);
+        if !path.is_file() {
+            return Ok(0);
+        }
+        let size = fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+        Ok(size)
+    }
+}
+
+fn list_blob_ids_recursive(dir: &Path, out: &mut Vec<BlobId>) -> Result<(), String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            list_blob_ids_recursive(&path, out)?;
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            out.push(id.to_string());
+        }
+    }
+    Ok(())
 }
 
 pub fn hash_manifest(manifest: &std::collections::HashMap<String, BlobId>) -> String {

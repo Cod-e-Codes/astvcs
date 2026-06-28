@@ -63,6 +63,7 @@ pub fn remove_remote(repo: &Repo, name: &str) -> Result<(), String> {
 }
 
 pub fn list_remotes(repo: &Repo) -> Result<Vec<(String, String)>, String> {
+    let _lock = repo.repo_lock()?;
     let config = load_remotes(repo)?;
     let mut out: Vec<_> = config
         .remotes

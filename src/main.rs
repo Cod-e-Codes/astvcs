@@ -105,6 +105,12 @@ enum Commands {
         #[arg(long, default_value_t = 9421)]
         port: u16,
     },
+    Gc {
+        /// Delete unreachable blobs (default is dry-run).
+        #[arg(long)]
+        prune: bool,
+    },
+    Fsck,
 }
 
 #[derive(Subcommand)]
@@ -443,6 +449,19 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Serve { bind, port } => {
             let repo = Repo::open(&root)?;
             serve_repo(&repo, &bind, port)?;
+        }
+        Commands::Gc { prune } => {
+            let repo = Repo::open(&root)?;
+            let report = repo.gc(prune)?;
+            print!("{}", report.format_output());
+        }
+        Commands::Fsck => {
+            let repo = Repo::open(&root)?;
+            let report = repo.fsck()?;
+            print!("{}", report.format_output());
+            if !report.is_clean() {
+                return Err("repository integrity check failed".into());
+            }
         }
     }
     Ok(())

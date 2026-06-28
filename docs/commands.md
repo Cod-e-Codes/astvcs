@@ -40,12 +40,14 @@ Global flags:
 | `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch |
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
+| `gc [--prune]` | Report unreachable blobs (default dry-run); `--prune` deletes them |
+| `fsck` | Check repository integrity; report-only, exits non-zero when issues are found |
 
 Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, and `revert` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### `branch remove`
 
-Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs are unchanged; states remain reachable by id (there is no garbage collection yet).
+Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs remain until `gc --prune` removes blobs unreachable from any ref tip; states remain reachable by id via the timeline.
 
 | Guardrail | Behavior |
 |-----------|----------|
@@ -105,6 +107,55 @@ Paths added in the target state and modified again on HEAD before revert produce
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 
 Remote URLs may be a local repository path, a `file://` URL, or an `http://` base URL from `astvcs serve`.
+
+### `gc`
+
+Walks reachability from every local branch tip, remote-tracking ref tip, and detached HEAD, then reports blob store objects not referenced by any reachable state manifest. Timeline entries and state manifests are never deleted.
+
+| Flag | Behavior |
+|------|----------|
+| (none) | Dry-run: print how many blobs are unreachable and how much space `--prune` would reclaim |
+| `--prune` | Delete unreachable blob files and print how many were removed |
+
+Example output (dry-run):
+
+```text
+gc dry-run: 2 unreachable blob(s) (examined 5); would reclaim 1.2 KiB
+```
+
+After `--prune` with nothing to do:
+
+```text
+gc: examined 3 blob(s); nothing to prune
+```
+
+### `fsck`
+
+Read-only integrity check. Never modifies refs, HEAD, timeline, blobs, `index.json`, or the working tree. Exits with code 1 when any issue is found.
+
+| Check | Report label |
+|-------|----------------|
+| State manifest references a missing blob | `missing blob` |
+| Branch or remote-tracking ref points to a state with no timeline entry | `dangling ref` |
+| `HEAD` names a branch with no `refs/heads/` file | `HEAD branch missing` |
+| `index.json` `state_id` or paths disagree with HEAD, or index present while HEAD is invalid | `index inconsistent` |
+| `.astvcs-tmp` file with no canonical target (not cleaned by normal commands) | `orphan temp file` |
+
+Clean repository:
+
+```text
+fsck: repository ok
+```
+
+With findings:
+
+```text
+fsck: 2 issue(s) found
+  dangling ref: refs/heads/feature points to abc… with no timeline entry
+  missing blob: state def… path main.rs: blob 789… missing
+```
+
+There is no `fsck --repair`. Fix ref or HEAD problems manually; use `gc --prune` for unreachable blobs after refs reflect the history you want to keep.
 
 ### Merge conflict resolution
 
