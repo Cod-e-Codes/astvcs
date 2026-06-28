@@ -15,8 +15,8 @@ Global flags:
 | `init [path]` | Create a new repository (default path: `.`) |
 | `identity get [--global]` | Show configured author name and email (repository or global config) |
 | `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
-| `status` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. |
-| `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. |
+| `status` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. |
+| `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
 | `commit -m <msg>` | Commit working tree as a new state (prints when unchanged). Requires configured author identity. |
@@ -173,7 +173,9 @@ With `--dry-run`, resolutions are applied in memory only: a fully resolved plan 
 
 ## Stderr output
 
-By default, stderr shows only `warning:` lines (unexpected parse fallback, merge conflicts, materialize `--force` clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. NUL-containing or non-UTF-8 file content is stored as binary blobs (no warning). With `-v`, `notice:` lines are included: scan results, parse mode per file, text/binary blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
+By default, stderr shows only `warning:` lines (unexpected parse fallback, merge conflicts, materialize `--force` clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. NUL-containing or non-UTF-8 file content is stored as binary blobs (no warning). With `-v`, `notice:` lines are included: scan results, parse mode per file, text fallback reasons, text/binary blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
+
+`status` and `diff` also surface text fallback on stdout for AST-capable paths (see `status` and `diff` rows above) so CI and operators see structural diff loss without relying on stderr alone.
 
 When another process holds `.astvcs/repo.lock`, any command that needs the repository fails immediately on stderr with:
 

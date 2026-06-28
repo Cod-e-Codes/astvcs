@@ -34,11 +34,13 @@ pub fn parse_text_or_blob(path: &str, source: &str) -> crate::frontend::FileCont
                     trace::warn_once(format!(
                         "{path}: AST parse unavailable ({reason}); using text blob"
                     ));
+                    trace::notice(format!("{path}: text fallback ({reason})"));
                 }
             } else {
                 trace::warn(format!(
                     "{path}: AST parse failed ({reason}); using text blob"
                 ));
+                trace::notice(format!("{path}: text fallback ({reason})"));
             }
             crate::frontend::FileContent::Text(TextBlob::new(source.to_string()))
         }
@@ -131,5 +133,20 @@ mod tests {
         assert!(matches!(content, FileContent::Text(_)));
         let log = trace::take_log();
         assert!(log.iter().any(|l| l.contains("syntax errors")));
+    }
+
+    #[test]
+    fn syntax_error_verbose_emits_notice() {
+        trace::clear_log();
+        trace::clear_warned();
+        trace::set_verbose(true);
+        parse_text_or_blob("main.rs", "fn {{{\n");
+        let log = trace::take_log();
+        assert!(
+            log.iter()
+                .any(|l| l.contains("notice:") && l.contains("text fallback")),
+            "verbose parse failure should notice fallback: {log:?}"
+        );
+        trace::set_verbose(false);
     }
 }

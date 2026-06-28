@@ -2080,3 +2080,104 @@ fn symlink_vs_file_merge_conflict() {
     assert!(err.contains("symlink and regular file conflict"), "{err}");
     assert!(repo.working_tree_is_clean().unwrap());
 }
+
+#[test]
+fn parse_fallback_status_annotation() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("valid baseline").unwrap();
+
+    fs::write(dir.path().join("main.rs"), "fn {{{\n").unwrap();
+    let status = repo.status().unwrap();
+    assert_eq!(status.entries.get("main.rs"), Some(&FileStatus::Modified));
+    assert!(status.text_fallback_paths.contains("main.rs"));
+
+    let out = run_astvcs(Some(dir.path()), &["status"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(" M main.rs (text fallback)"),
+        "expected text fallback suffix in status: {stdout}"
+    );
+}
+
+#[test]
+fn parse_fallback_diff_annotation() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("valid baseline").unwrap();
+
+    fs::write(dir.path().join("main.rs"), "fn {{{\n").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["diff", "main.rs"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("text fallback - structural diff unavailable"),
+        "expected fallback banner in diff: {stdout}"
+    );
+    assert!(
+        stdout.contains("parse mode:") && stdout.contains("text fallback"),
+        "expected parse mode intent in diff: {stdout}"
+    );
+}
+
+#[test]
+fn parse_fallback_md_commit_stays_silent() {
+    trace::clear_log();
+    trace::clear_warned();
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("notes.md"), "# doc\n").unwrap();
+    repo.commit("markdown").unwrap();
+    let log = trace::take_log();
+    assert!(
+        !log.iter().any(|l| l.contains("warning:")),
+        "markdown commit should not warn: {log:?}"
+    );
+}
+
+#[test]
+fn parse_fallback_broken_rs_stderr_warning() {
+    trace::clear_log();
+    trace::clear_warned();
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("valid baseline").unwrap();
+
+    trace::clear_log();
+    trace::clear_warned();
+    fs::write(dir.path().join("main.rs"), "fn {{{\n").unwrap();
+    let out = run_astvcs(Some(dir.path()), &["commit", "-m", "broken"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning:") && stderr.contains("main.rs"),
+        "broken Rust should warn on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("syntax errors") || stderr.contains("AST parse failed"),
+        "warning should mention parse failure: {stderr}"
+    );
+}
+
+#[test]
+fn parse_fallback_verbose_notice_detail() {
+    trace::clear_log();
+    trace::clear_warned();
+    trace::set_verbose(true);
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn {{{\n").unwrap();
+    repo.commit("broken").unwrap();
+    let log = trace::take_log();
+    assert!(
+        log.iter()
+            .any(|l| l.contains("notice:") && l.contains("text fallback")),
+        "verbose commit should include text fallback notice: {log:?}"
+    );
+    trace::set_verbose(false);
+}

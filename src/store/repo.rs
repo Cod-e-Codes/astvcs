@@ -2,7 +2,7 @@ use crate::diff::{
     DiffResult, build_rename_map, detect_path_renames, diff_graphs, diff_text,
     rename_targets_conflict, side_path_for_base,
 };
-use crate::frontend::FileContent;
+use crate::frontend::{FileContent, path_has_text_fallback};
 use crate::intent;
 use crate::merge::{MergeConflict, PathMergeConflict, PathMergeTrackedOutcome, merge_tracked_path};
 use crate::store::atomic::{self, write_atomic_json, write_atomic_text};
@@ -147,6 +147,8 @@ impl std::fmt::Display for FileStatus {
 #[derive(Clone, Debug)]
 pub struct WorkingStatus {
     pub entries: HashMap<String, FileStatus>,
+    /// Paths where AST-capable sources are stored as text blobs on either side.
+    pub text_fallback_paths: HashSet<String>,
 }
 
 /// Result of simulating a merge without writing refs or the working tree.
@@ -582,11 +584,16 @@ impl Repo {
         self.check_index_consistency(&head, &head_files, &index);
 
         let mut entries = HashMap::new();
+        let mut text_fallback_paths = HashSet::new();
         let working_files = self.scan_working()?;
         let mut working_map = HashMap::new();
         for path in &working_files {
             let current = load_working_tracked(&self.root, path)?;
             working_map.insert(path.clone(), current.clone());
+            let head_content = head_files.get(path).map(|stored| &stored.content);
+            if path_has_text_fallback(path, head_content, &current.content) {
+                text_fallback_paths.insert(path.clone());
+            }
             let status = match head_files.get(path) {
                 None => FileStatus::Added,
                 Some(stored) if !tracked_eq(stored, &current) => FileStatus::Modified,
@@ -602,6 +609,11 @@ impl Repo {
             if !working_files.contains(path) {
                 trace::notice(format!("status: {path} Removed"));
                 entries.insert(path.clone(), FileStatus::Removed);
+                if let Some(stored) = head_files.get(path)
+                    && stored.content.is_text_fallback_at_path(path)
+                {
+                    text_fallback_paths.insert(path.clone());
+                }
             }
         }
 
@@ -617,9 +629,19 @@ impl Repo {
                     from: rename.from.clone(),
                 },
             );
+            if path_has_text_fallback(
+                &rename.to,
+                head_files.get(&rename.from).map(|stored| &stored.content),
+                &working_map[&rename.to].content,
+            ) {
+                text_fallback_paths.insert(rename.to.clone());
+            }
         }
 
-        Ok(WorkingStatus { entries })
+        Ok(WorkingStatus {
+            entries,
+            text_fallback_paths,
+        })
     }
 
     pub fn diff_working(&self, path: &str) -> RepoResult<String> {
@@ -736,7 +758,7 @@ impl Repo {
                     if let (Some(b), Some(l)) = (base_c, left_c) {
                         if !tracked_eq(b, l) {
                             out.push_str("\nbase -> left:\n");
-                            out.push_str(&format_mutation_diff(&b.content, &l.content));
+                            out.push_str(&format_pairwise_content_diff(&p, &b.content, &l.content));
                         } else {
                             out.push_str("\nbase -> left: (unchanged)\n");
                         }
@@ -748,7 +770,7 @@ impl Repo {
                     if let (Some(b), Some(r)) = (base_c, right_c) {
                         if !tracked_eq(b, r) {
                             out.push_str("\nbase -> right:\n");
-                            out.push_str(&format_mutation_diff(&b.content, &r.content));
+                            out.push_str(&format_pairwise_content_diff(&p, &b.content, &r.content));
                         } else {
                             out.push_str("\nbase -> right: (unchanged)\n");
                         }
@@ -1934,24 +1956,65 @@ fn format_path_rename(
         crate::diff::PathRenameKind::WithEdits => "rename with edits",
     };
     let mut out = format!("--- {}\n+++ {}\n({label})\n", rename.from, rename.to);
+    if path_has_text_fallback(&rename.to, Some(old), new) {
+        out.push_str("(text fallback - structural diff unavailable)\n");
+    }
     out.push_str(&format!(
         "intents:\n  [0] {}\n",
         intent::format_intent(None, &intent::classify_path_rename(rename))
     ));
     if rename.kind == crate::diff::PathRenameKind::WithEdits {
-        out.push_str(&format_mutation_diff(old, new));
+        out.push_str(&format_mutation_diff(Some(&rename.to), old, new));
     }
     out
 }
 
-fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
+fn format_pairwise_content_diff(path: &str, old: &FileContent, new: &FileContent) -> String {
+    let mut out = String::new();
+    if path_has_text_fallback(path, Some(old), new) {
+        out.push_str("(text fallback - structural diff unavailable)\n");
+    }
+    out.push_str(&format_mutation_diff(Some(path), old, new));
+    out
+}
+
+fn format_parse_mode_intent(path: &str, old: &FileContent, new: &FileContent) -> Option<String> {
+    if !crate::frontend::is_ast_capable_path(path) {
+        return None;
+    }
+    let left = content_parse_mode_label(old);
+    let right = content_parse_mode_label(new);
+    if left == "ast" && right == "ast" {
+        return None;
+    }
+    Some(format!(
+        "intents:\n  [0] parse mode: {left} (left), {right} (right)\n"
+    ))
+}
+
+fn content_parse_mode_label(content: &FileContent) -> &'static str {
+    match content {
+        FileContent::Ast(_) => "ast",
+        FileContent::Text(_) => "text fallback",
+        FileContent::Binary(_) => "binary",
+        FileContent::Symlink(_) => "symlink",
+    }
+}
+
+fn format_mutation_diff(path: Option<&str>, old: &FileContent, new: &FileContent) -> String {
     if old.is_binary() || new.is_binary() {
         if old.semantic_eq(new) {
             return "(binary file - unchanged)\n".into();
         }
         return "(binary file - content diff omitted)\n".into();
     }
-    match (old, new) {
+    let mut prefix = String::new();
+    if let Some(p) = path
+        && let Some(note) = format_parse_mode_intent(p, old, new)
+    {
+        prefix.push_str(&note);
+    }
+    let body = match (old, new) {
         (FileContent::Ast(o), FileContent::Ast(n)) => {
             let DiffResult { mutations } = diff_graphs(o, n);
             if mutations.is_empty() {
@@ -1988,16 +2051,13 @@ fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
             }
         }
         _ => "(content kind changed)\n".into(),
-    }
+    };
+    format!("{prefix}{body}")
 }
 
 fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> RepoResult<String> {
     let mut out = format!("--- {path}\n+++ {path}\n");
-    if old.is_binary() || new.is_binary() {
-        out.push_str(&format_mutation_diff(old, new));
-        return Ok(out);
-    }
-    out.push_str(&format_mutation_diff(old, new));
+    out.push_str(&format_pairwise_content_diff(path, old, new));
     Ok(out)
 }
 
@@ -2536,6 +2596,29 @@ mod tests {
             .unwrap();
         assert!(out.contains("base -> left:"), "{out}");
         assert!(out.contains("base -> right:"), "{out}");
+    }
+
+    #[test]
+    fn diff_three_way_includes_text_fallback_banner() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        let base_id = repo.commit("base").unwrap().state_id;
+        repo.create_branch("feature", None).unwrap();
+
+        fs::write(dir.path().join("main.rs"), "fn {{{\n").unwrap();
+        let left_id = repo.commit("broken on main").unwrap().state_id;
+
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
+        let right_id = repo.commit("on feature").unwrap().state_id;
+
+        let out = repo
+            .diff_three_way(&base_id, &left_id, &right_id, Some("main.rs"))
+            .unwrap();
+        assert!(
+            out.contains("text fallback - structural diff unavailable"),
+            "{out}"
+        );
     }
 
     #[test]

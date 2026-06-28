@@ -259,13 +259,23 @@ fn run(cli: Cli) -> RepoResult<()> {
                     FileStatus::Removed => " D",
                     FileStatus::Renamed { from } => {
                         any = true;
-                        println!(" R {from} -> {path}");
+                        let suffix = if status.text_fallback_paths.contains(&path) {
+                            " (text fallback)"
+                        } else {
+                            ""
+                        };
+                        println!(" R {from} -> {path}{suffix}");
                         continue;
                     }
                     FileStatus::Untracked => "??",
                 };
                 any = true;
-                println!("{label} {path}");
+                let suffix = if status.text_fallback_paths.contains(&path) {
+                    " (text fallback)"
+                } else {
+                    ""
+                };
+                println!("{label} {path}{suffix}");
             }
             if !any {
                 println!("nothing to commit, working tree clean");

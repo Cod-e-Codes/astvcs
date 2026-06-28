@@ -119,6 +119,11 @@ pub fn supported_special_paths() -> &'static [&'static str] {
     &["go.mod"]
 }
 
+/// True when the path extension or basename maps to a tree-sitter AST frontend.
+pub fn is_ast_capable_path(path: &str) -> bool {
+    SourceLanguage::from_path(path).is_some()
+}
+
 /// Paths that are intentionally stored as text blobs without a user-facing warning.
 pub fn is_text_only_path(path: &str) -> bool {
     if SourceLanguage::from_path(path).is_some() {

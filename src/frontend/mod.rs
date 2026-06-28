@@ -6,7 +6,8 @@ mod treesitter;
 
 pub use binaryblob::{BinaryBlob, is_binary_payload, load_working_content};
 pub use languages::{
-    SourceLanguage, is_text_only_path, supported_extensions, supported_special_paths,
+    SourceLanguage, is_ast_capable_path, is_text_only_path, supported_extensions,
+    supported_special_paths,
 };
 pub use symlinkblob::SymlinkBlob;
 pub use textblob::{TextBlob, parse_text_or_blob};
@@ -55,6 +56,17 @@ impl FileContent {
             _ => false,
         }
     }
+
+    /// True when an AST-capable path is stored as a line-oriented text blob.
+    pub fn is_text_fallback_at_path(&self, path: &str) -> bool {
+        is_ast_capable_path(path) && matches!(self, Self::Text(_))
+    }
+}
+
+/// True when either side uses text fallback on an AST-capable path.
+pub fn path_has_text_fallback(path: &str, old: Option<&FileContent>, new: &FileContent) -> bool {
+    new.is_text_fallback_at_path(path)
+        || old.is_some_and(|content| content.is_text_fallback_at_path(path))
 }
 
 impl serde::Serialize for FileContent {

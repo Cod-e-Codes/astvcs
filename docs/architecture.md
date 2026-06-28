@@ -74,7 +74,9 @@ Supported extensions are parsed with tree-sitter into an `AstGraph` DAG. Each no
 | `.sql` | SQL (`tree-sitter-sequel` on crates.io) |
 | `.sh`, `.bash` | Bash |
 
-All other paths use line-oriented text blob storage when the file is valid UTF-8 without NUL bytes. NUL-containing or invalid UTF-8 content is stored as a binary blob regardless of extension. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`, `go.sum`, `.ps1`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process.
+All other paths use line-oriented text blob storage when the file is valid UTF-8 without NUL bytes. NUL-containing or invalid UTF-8 content is stored as a binary blob regardless of extension. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`, `go.sum`, `.ps1`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process. Commits are not blocked on text fallback (partially broken sources still need versioning).
+
+When an AST-capable path is stored as a text blob on either HEAD or the working tree, `status` appends ` (text fallback)` to the path line and `diff` prints `(text fallback - structural diff unavailable)` in the path header plus a `parse mode:` intent when left and right differ in storage kind. Use `-v` to see `notice: … text fallback (reason)` detail on stderr in addition to warnings.
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
