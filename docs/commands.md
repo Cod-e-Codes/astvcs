@@ -22,12 +22,16 @@ Global flags:
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |
 | `merge-base <left> <right>` | Print lowest common ancestor (branch, remote-tracking ref, or state id) |
 | `merge <branch> -m <msg>` | Merge a branch; updates working tree on success |
+| `merge <branch> -m <msg> --force` | Merge when the working tree has uncommitted changes (warns per clobbered path) |
 | `merge <branch> -m <msg> --resolve <path>:ours` | Merge with per-path conflict resolution (repeatable) |
 | `merge <branch> --dry-run` | Simulate merge; print conflicts without changing the repository |
 | `checkout --branch <name>` | Switch branch and materialize its HEAD to disk |
+| `checkout --branch <name> --force` | Switch branch when the working tree is dirty (warns per clobbered path) |
 | `checkout --state <ref>` | Detached checkout: materialize a state and move HEAD to it |
+| `checkout --state <ref> --force` | Detached checkout when the working tree is dirty (warns per clobbered path) |
 | `reset <ref> [--soft] [--force]` | Move HEAD or the current branch tip to `<ref>` (default: hard, syncs disk) |
 | `revert <ref> -m <msg> [--dry-run]` | Create a new state that undoes `<ref>` on top of HEAD |
+| `revert <ref> -m <msg> --force` | Revert when the working tree is dirty (warns per clobbered path) |
 | `log [-n N]` | Walk timeline history (default 20 entries) |
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
@@ -61,6 +65,20 @@ Default mode is **hard**: move the branch tip or detached HEAD to the target and
 | `--force` | With hard reset, proceed when the working tree is dirty; emit `warning: reset --force: discarded uncommitted changes in <path>` per clobbered path |
 
 Hard reset to the current tip still materializes (repairs drift between disk and HEAD). Resetting to the root empty state (`0` repeated 64 times) is allowed.
+
+### Working tree safety (`merge`, `checkout`, `revert`, `reset`)
+
+`merge`, `checkout --branch`, `checkout --state`, and hard `reset` all call `materialize_state` to sync disk to a target manifest. They share one dirty-tree policy enforced inside `materialize_state` (checked before refs or timeline writes):
+
+| Default | `--force` |
+|---------|-----------|
+| Refuse when `status` reports any path other than unchanged | Proceed; emit `warning: <command> --force: discarded uncommitted changes in <path>` for each clobbered path |
+
+`reset --soft` skips materialization entirely, so it never clobbers uncommitted work (same as before). Hard reset to the current tip, and checkout of the branch or state already at HEAD, may materialize without `--force` to repair drift between disk and HEAD without moving to a different snapshot.
+
+`checkout --branch` and `checkout --state` use the same contract. Unlike git, astvcs always materializes on checkout; switching branches or detached states is not a pointer-only operation. A dirty tree therefore blocks both forms unless `--force` is passed.
+
+`revert` applies the guard only when it would materialize (no-op reverts that leave HEAD unchanged skip the check). `merge --dry-run` and `revert --dry-run` never touch the working tree.
 
 ### `revert`
 
@@ -99,7 +117,7 @@ With `--dry-run`, resolutions are applied in memory only: a fully resolved plan 
 
 ## Stderr output
 
-By default, stderr shows only `warning:` lines (unexpected parse fallback, skipped paths, merge conflicts, reset force clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. With `-v`, `notice:` lines are included: scan results, parse mode per file, text-blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
+By default, stderr shows only `warning:` lines (unexpected parse fallback, skipped paths, merge conflicts, materialize `--force` clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. With `-v`, `notice:` lines are included: scan results, parse mode per file, text-blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
 
 ## Ignore rules
 

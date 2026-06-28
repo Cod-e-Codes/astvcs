@@ -20,6 +20,46 @@ const INDEX_FILE: &str = "index.json";
 const CONFIG_FILE: &str = "config.json";
 const STATE_ID_LEN: usize = 64;
 
+const WORKING_TREE_DIRTY_ERR: &str = "working tree has uncommitted changes; commit or pass --force";
+
+const RESET_WORKING_TREE_DIRTY_ERR: &str =
+    "working tree has uncommitted changes; commit, soft reset, or pass --force";
+
+/// Dirty-tree policy applied before writing a state manifest to disk.
+struct MaterializeOptions<'a> {
+    force: bool,
+    command: &'a str,
+    /// Overwrite disk when HEAD already matches `state_id` (repair drift without `--force`).
+    allow_dirty: bool,
+    refuse_message: &'a str,
+}
+
+impl<'a> MaterializeOptions<'a> {
+    fn new(command: &'a str) -> Self {
+        Self {
+            force: false,
+            command,
+            allow_dirty: false,
+            refuse_message: WORKING_TREE_DIRTY_ERR,
+        }
+    }
+
+    fn force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+
+    fn allow_dirty(mut self, allow: bool) -> Self {
+        self.allow_dirty = allow;
+        self
+    }
+
+    fn reset_refuse(mut self) -> Self {
+        self.refuse_message = RESET_WORKING_TREE_DIRTY_ERR;
+        self
+    }
+}
+
 /// What HEAD points at: a branch name or a detached state id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HeadTarget {
@@ -368,14 +408,25 @@ impl Repo {
     }
 
     pub fn checkout_branch(&self, name: &str) -> Result<(), String> {
+        self.checkout_branch_with_force(name, false)
+    }
+
+    pub fn checkout_branch_with_force(&self, name: &str, force: bool) -> Result<(), String> {
         let ref_path = self.astvcs_dir().join("refs/heads").join(name);
         if !ref_path.exists() {
             return Err(format!("branch not found: {name}"));
         }
-        self.write_head_target(&HeadTarget::Branch(name.to_string()))?;
+        let prior_branch = self.head_branch()?;
+        let prior_head = self.head_state()?;
         let state = self.branch_state(name)?;
+        let allow_dirty = prior_branch.as_deref() == Some(name) && prior_head == state;
+        let materialize_opts = MaterializeOptions::new("checkout")
+            .force(force)
+            .allow_dirty(allow_dirty);
+        let clobbered = self.materialize_guard(&materialize_opts)?;
+        self.write_head_target(&HeadTarget::Branch(name.to_string()))?;
         trace::notice(format!("checkout: branch {name} -> state {state}"));
-        self.materialize_state(&state)
+        self.materialize_state_inner(&state, clobbered, &materialize_opts)
     }
 
     pub fn load_manifest(&self, state_id: &StateId) -> Result<HashMap<String, String>, String> {
@@ -708,13 +759,22 @@ impl Repo {
     }
 
     pub fn revert_state(&self, reference: &str, message: &str) -> Result<RevertOutcome, String> {
+        self.revert_state_with_force(reference, message, false)
+    }
+
+    pub fn revert_state_with_force(
+        &self,
+        reference: &str,
+        message: &str,
+        force: bool,
+    ) -> Result<RevertOutcome, String> {
         let target_id = self.resolve_state_ref(reference)?;
         let plan = self.plan_revert(&target_id)?;
         if !plan.is_clean() {
             trace::warn("revert: aborted due to conflicts");
             return Err(plan.format_conflicts());
         }
-        self.finish_revert(&plan, message)
+        self.finish_revert(&plan, message, force)
     }
 
     pub fn revert_state_dry_run(&self, reference: &str) -> Result<RevertPlan, String> {
@@ -722,7 +782,13 @@ impl Repo {
         self.plan_revert(&target_id)
     }
 
-    fn finish_revert(&self, plan: &RevertPlan, message: &str) -> Result<RevertOutcome, String> {
+    fn finish_revert(
+        &self,
+        plan: &RevertPlan,
+        message: &str,
+        force: bool,
+    ) -> Result<RevertOutcome, String> {
+        let materialize_opts = MaterializeOptions::new("revert").force(force);
         let head = plan.head_id.clone();
         let head_files = self.load_state_files(&head)?;
 
@@ -736,6 +802,7 @@ impl Repo {
 
         let parent_files = self.load_state_files(&plan.parent_id)?;
         if manifest_unchanged(&parent_files, &plan.reverted_files) {
+            let clobbered = self.materialize_guard(&materialize_opts)?;
             match self.read_head_target()? {
                 HeadTarget::Branch(branch) => {
                     fs::write(
@@ -753,7 +820,7 @@ impl Repo {
                     trace::notice(format!("revert: detached HEAD -> {}", plan.parent_id));
                 }
             }
-            self.materialize_state(&plan.parent_id)?;
+            self.materialize_state_inner(&plan.parent_id, clobbered, &materialize_opts)?;
             trace::notice(format!(
                 "revert: restored parent state {} undoing {}",
                 plan.parent_id, plan.target_id
@@ -764,6 +831,7 @@ impl Repo {
             });
         }
 
+        let clobbered = self.materialize_guard(&materialize_opts)?;
         let state_id = self.persist_state(
             &plan.reverted_files,
             message,
@@ -784,7 +852,7 @@ impl Repo {
                 trace::notice(format!("revert: detached HEAD -> {state_id}"));
             }
         }
-        self.materialize_state(&state_id)?;
+        self.materialize_state_inner(&state_id, clobbered, &materialize_opts)?;
         trace::notice(format!(
             "revert: created state {state_id} undoing {}",
             plan.target_id
@@ -798,20 +866,18 @@ impl Repo {
     pub fn reset(&self, reference: &str, soft: bool, force: bool) -> Result<StateId, String> {
         let target = self.resolve_state_ref(reference)?;
         let prior_head = self.head_state()?;
-
-        if !soft && !force && target != prior_head && !self.working_tree_is_clean()? {
-            return Err(
-                "working tree has uncommitted changes; commit, soft reset, or pass --force".into(),
-            );
-        }
-
-        let clobbered_paths: Vec<String> = if !soft && force && !self.working_tree_is_clean()? {
-            self.status()?
-                .entries
-                .iter()
-                .filter(|(_, status)| !matches!(status, FileStatus::Unchanged))
-                .map(|(path, _)| path.clone())
-                .collect()
+        let materialize_opts = if soft {
+            None
+        } else {
+            Some(
+                MaterializeOptions::new("reset")
+                    .reset_refuse()
+                    .force(force)
+                    .allow_dirty(target == prior_head),
+            )
+        };
+        let clobbered = if let Some(ref opts) = materialize_opts {
+            self.materialize_guard(opts)?
         } else {
             Vec::new()
         };
@@ -836,12 +902,8 @@ impl Repo {
         }
 
         if !soft {
-            self.materialize_state(&target)?;
-            for path in clobbered_paths {
-                trace::warn(format!(
-                    "reset --force: discarded uncommitted changes in {path}"
-                ));
-            }
+            let opts = materialize_opts.expect("hard reset materialize options");
+            self.materialize_state_inner(&target, clobbered, &opts)?;
         }
 
         Ok(target)
@@ -971,18 +1033,35 @@ impl Repo {
         message: &str,
         resolutions: &[MergeResolution],
     ) -> Result<StateId, String> {
+        self.merge_branch_with_resolutions_force(branch, message, resolutions, false)
+    }
+
+    pub fn merge_branch_with_resolutions_force(
+        &self,
+        branch: &str,
+        message: &str,
+        resolutions: &[MergeResolution],
+        force: bool,
+    ) -> Result<StateId, String> {
         let plan = self.prepare_merge(branch, resolutions)?;
         if !plan.is_clean() {
             trace::warn("merge: aborted due to conflicts");
             return Err(plan.format_conflicts());
         }
-        self.finish_merge(&plan, message)
+        self.finish_merge(&plan, message, force)
     }
 
-    fn finish_merge(&self, plan: &MergePlan, message: &str) -> Result<StateId, String> {
+    fn finish_merge(
+        &self,
+        plan: &MergePlan,
+        message: &str,
+        force: bool,
+    ) -> Result<StateId, String> {
         let head = plan.head_id.clone();
         let other = plan.other_id.clone();
         let merged_files = plan.merged_files.clone();
+        let materialize_opts = MaterializeOptions::new("merge").force(force);
+        let clobbered = self.materialize_guard(&materialize_opts)?;
 
         let state_id = self.persist_state(
             &merged_files,
@@ -1000,15 +1079,50 @@ impl Repo {
         } else {
             self.write_head_target(&HeadTarget::Detached(state_id.clone()))?;
         }
-        self.materialize_state(&state_id)?;
+        self.materialize_state_inner(&state_id, clobbered, &materialize_opts)?;
         trace::notice(format!(
             "merge: created state {state_id} from {head} + {other}"
         ));
         Ok(state_id)
     }
 
-    /// Write a state's files to the working tree, remove dropped tracked paths, sync index.
-    pub fn materialize_state(&self, state_id: &StateId) -> Result<(), String> {
+    fn clobbered_paths(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .status()?
+            .entries
+            .iter()
+            .filter(|(_, status)| !matches!(status, FileStatus::Unchanged))
+            .map(|(path, _)| path.clone())
+            .collect())
+    }
+
+    fn materialize_guard(&self, opts: &MaterializeOptions<'_>) -> Result<Vec<String>, String> {
+        if self.working_tree_is_clean()? {
+            return Ok(Vec::new());
+        }
+        if opts.force {
+            return self.clobbered_paths();
+        }
+        if opts.allow_dirty {
+            return Ok(Vec::new());
+        }
+        Err(opts.refuse_message.into())
+    }
+
+    fn emit_materialize_clobber_warnings(&self, clobbered: &[String], command: &str) {
+        for path in clobbered {
+            trace::warn(format!(
+                "{command} --force: discarded uncommitted changes in {path}"
+            ));
+        }
+    }
+
+    fn materialize_state_inner(
+        &self,
+        state_id: &StateId,
+        clobbered: Vec<String>,
+        opts: &MaterializeOptions<'_>,
+    ) -> Result<(), String> {
         let files = self.load_state_files(state_id)?;
         let state_paths: HashSet<String> = files.keys().cloned().collect();
 
@@ -1040,14 +1154,25 @@ impl Repo {
             "materialize: state {state_id} -> {} paths on disk",
             files.len()
         ));
+        self.emit_materialize_clobber_warnings(&clobbered, opts.command);
         Ok(())
     }
 
     pub fn checkout_state(&self, state_id: &StateId) -> Result<(), String> {
+        self.checkout_state_with_force(state_id, false)
+    }
+
+    pub fn checkout_state_with_force(&self, state_id: &StateId, force: bool) -> Result<(), String> {
         self.load_timeline_entry(state_id)?;
+        let prior_head = self.head_state()?;
+        let allow_dirty = prior_head == *state_id;
+        let materialize_opts = MaterializeOptions::new("checkout")
+            .force(force)
+            .allow_dirty(allow_dirty);
+        let clobbered = self.materialize_guard(&materialize_opts)?;
         self.write_head_target(&HeadTarget::Detached(state_id.clone()))?;
         trace::notice(format!("checkout: detached state {state_id}"));
-        self.materialize_state(state_id)
+        self.materialize_state_inner(state_id, clobbered, &materialize_opts)
     }
 
     pub fn working_tree_is_clean(&self) -> Result<bool, String> {
@@ -2444,14 +2569,188 @@ mod tests {
         )
         .unwrap();
         repo.commit("change literal").unwrap();
-        repo.merge_branch("feature", "merge comment and literal").unwrap();
+        repo.merge_branch("feature", "merge comment and literal")
+            .unwrap();
 
-        repo.revert_state(&feature_tip, "drop merged comment").unwrap();
+        repo.revert_state(&feature_tip, "drop merged comment")
+            .unwrap();
         let text = fs::read_to_string(dir.path().join("src/main.rs")).unwrap();
         assert!(
             text.contains("sup?") && !text.contains("waddup fool") && !text.contains("//"),
             "revert after merge should keep literal and drop comment: {text}"
         );
         assert!(repo.working_tree_is_clean().unwrap());
+    }
+
+    #[test]
+    fn merge_refuses_dirty_tree_when_merge_is_clean() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn foo() { let x = 1; }\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("lib.rs"), "pub fn feature() -> i32 { 1 }\n").unwrap();
+        repo.commit("feature lib").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        let err = repo.merge_branch("feature", "merge").unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert_eq!(repo.head_state().unwrap(), tip);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+        assert!(!dir.path().join("lib.rs").exists());
+    }
+
+    #[test]
+    fn merge_dirty_tree_preserved_when_merge_would_conflict() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn foo() { let x = 1; }\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("main.rs"), "fn foo() { let y = 1; }\n").unwrap();
+        repo.commit("feature rename").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("main.rs"), "fn foo() { let z = 1; }\n").unwrap();
+        repo.commit("main rename").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        let err = repo.merge_branch("feature", "merge").unwrap_err();
+        assert!(
+            err.contains("conflict") || err.contains("uncommitted changes"),
+            "{err}"
+        );
+        assert_eq!(repo.head_state().unwrap(), tip);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+    }
+
+    #[test]
+    fn merge_force_warns_and_clobbers_dirty_paths() {
+        trace::clear_log();
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn foo() { let x = 1; }\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("lib.rs"), "pub fn two() -> i32 { 2 }\n").unwrap();
+        repo.commit("feature lib").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+
+        repo.merge_branch_with_resolutions_force("feature", "merge", &[], true)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("lib.rs")).unwrap(),
+            "pub fn two() -> i32 { 2 }\n"
+        );
+        let log = trace::take_log();
+        assert!(
+            log.iter()
+                .any(|l| l
+                    .contains("warning: merge --force: discarded uncommitted changes in note.txt")),
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn checkout_branch_refuses_dirty_tree_when_switching_branches() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("lib.rs"), "pub fn f() {}\n").unwrap();
+        repo.commit("feature").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        let err = repo
+            .checkout_branch_with_force("feature", false)
+            .unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert_eq!(repo.head_state().unwrap(), tip);
+        assert_eq!(repo.head_branch().unwrap(), Some("main".into()));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+    }
+
+    #[test]
+    fn checkout_state_refuses_dirty_tree() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.commit("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.commit("v2").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        let err = repo.checkout_state_with_force(&v1, false).unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert_eq!(repo.head_state().unwrap(), tip);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+
+        repo.checkout_state_with_force(&v1, true).unwrap();
+        assert_eq!(repo.head_state().unwrap(), v1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+        assert_ne!(v2, v1);
+    }
+
+    #[test]
+    fn checkout_same_branch_repairs_drift_without_force() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("v1").unwrap();
+        fs::write(dir.path().join("note.txt"), "drifted\n").unwrap();
+
+        repo.checkout_branch("main").unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v1\n"
+        );
+    }
+
+    #[test]
+    fn revert_refuses_dirty_tree() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("v1").unwrap();
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.commit("v2").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        let tip = repo.head_state().unwrap();
+
+        let err = repo
+            .revert_state_with_force(&v2, "undo v2", false)
+            .unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert_eq!(repo.head_state().unwrap(), tip);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
     }
 }

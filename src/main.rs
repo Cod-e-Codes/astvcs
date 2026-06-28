@@ -50,6 +50,9 @@ enum Commands {
         branch: Option<String>,
         #[arg(long, group = "target")]
         state: Option<String>,
+        /// Allow checkout when the working tree has uncommitted changes.
+        #[arg(long)]
+        force: bool,
     },
     Reset {
         reference: String,
@@ -67,6 +70,9 @@ enum Commands {
         /// Simulate revert and print conflicts without changing the repository.
         #[arg(long)]
         dry_run: bool,
+        /// Allow revert when the working tree has uncommitted changes.
+        #[arg(long)]
+        force: bool,
     },
     Log {
         #[arg(short = 'n', long, default_value = "20")]
@@ -139,6 +145,10 @@ struct MergeArgs {
     /// Simulate merge and print conflicts without changing the repository.
     #[arg(long)]
     dry_run: bool,
+
+    /// Allow merge when the working tree has uncommitted changes.
+    #[arg(long)]
+    force: bool,
 
     /// Pick ours (HEAD) or theirs (merged branch) for a conflicted path.
     #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
@@ -289,8 +299,12 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             } else {
                 let message = args.message.expect("message required");
-                let id =
-                    repo.merge_branch_with_resolutions(&args.branch, &message, &resolutions)?;
+                let id = repo.merge_branch_with_resolutions_force(
+                    &args.branch,
+                    &message,
+                    &resolutions,
+                    args.force,
+                )?;
                 println!(
                     "Merged branch {} into current branch (state {id})",
                     args.branch
@@ -302,14 +316,18 @@ fn run(cli: Cli) -> Result<(), String> {
             let base = repo.merge_base_refs(&left, &right)?;
             println!("{base}");
         }
-        Commands::Checkout { branch, state } => {
+        Commands::Checkout {
+            branch,
+            state,
+            force,
+        } => {
             let repo = Repo::open(&root)?;
             if let Some(name) = branch {
-                repo.checkout_branch(&name)?;
+                repo.checkout_branch_with_force(&name, force)?;
                 println!("Switched to branch {name}");
             } else if let Some(reference) = state {
                 let id = repo.resolve_state_ref(&reference)?;
-                repo.checkout_state(&id)?;
+                repo.checkout_state_with_force(&id, force)?;
                 println!("Checked out state {id} (detached HEAD)");
             } else {
                 return Err("specify --branch or --state".into());
@@ -337,6 +355,7 @@ fn run(cli: Cli) -> Result<(), String> {
             reference,
             message,
             dry_run,
+            force,
         } => {
             let repo = Repo::open(&root)?;
             if dry_run {
@@ -349,7 +368,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     return Err("revert would conflict".into());
                 }
             } else {
-                let outcome = repo.revert_state(&reference, &message)?;
+                let outcome = repo.revert_state_with_force(&reference, &message, force)?;
                 if outcome.created {
                     println!(
                         "Reverted state {} (new state {})",

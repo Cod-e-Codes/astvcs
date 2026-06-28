@@ -1404,3 +1404,113 @@ fn cli_branch_remove_guardrails() {
     let list2 = run_astvcs(Some(root), &["branch", "list"]);
     assert!(String::from_utf8_lossy(&list2.stdout).contains("feature"));
 }
+
+#[test]
+fn cli_materialize_refuses_dirty_tree_and_force_overrides() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("base.txt"), "base\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feature.txt"), "feature\n").unwrap();
+    repo.commit("feature file").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("dirty.txt"), "dirty\n").unwrap();
+    let main_tip = repo.head_state().unwrap();
+
+    let merge_clean = run_astvcs(
+        Some(dir.path()),
+        &["merge", "feature", "-m", "merge feature"],
+    );
+    assert!(!merge_clean.status.success());
+    assert!(String::from_utf8_lossy(&merge_clean.stderr).contains("uncommitted changes"));
+    assert_eq!(repo.head_state().unwrap(), main_tip);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("dirty.txt")).unwrap(),
+        "dirty\n"
+    );
+
+    let merge_force = run_astvcs(
+        Some(dir.path()),
+        &["merge", "feature", "-m", "merge feature", "--force"],
+    );
+    assert_astvcs_ok(&merge_force, "merge --force");
+    let stderr = String::from_utf8_lossy(&merge_force.stderr);
+    assert!(stderr.contains("warning: merge --force: discarded uncommitted changes in dirty.txt"));
+    assert!(dir.path().join("feature.txt").exists());
+
+    fs::write(dir.path().join("dirty.txt"), "dirty again\n").unwrap();
+    let merged_tip = repo.head_state().unwrap();
+
+    let checkout_branch = run_astvcs(Some(dir.path()), &["checkout", "--branch", "feature"]);
+    assert!(!checkout_branch.status.success());
+    assert!(String::from_utf8_lossy(&checkout_branch.stderr).contains("uncommitted changes"));
+    assert_eq!(repo.head_state().unwrap(), merged_tip);
+
+    let checkout_branch_force = run_astvcs(
+        Some(dir.path()),
+        &["checkout", "--branch", "feature", "--force"],
+    );
+    assert_astvcs_ok(&checkout_branch_force, "checkout branch --force");
+    let stderr = String::from_utf8_lossy(&checkout_branch_force.stderr);
+    assert!(
+        stderr.contains("warning: checkout --force: discarded uncommitted changes in dirty.txt")
+    );
+
+    fs::write(dir.path().join("dirty.txt"), "dirty again\n").unwrap();
+    let feature_tip = repo.head_state().unwrap();
+    let base_id = repo
+        .history(10)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.message == "base")
+        .unwrap()
+        .id;
+
+    let checkout_state = run_astvcs(Some(dir.path()), &["checkout", "--state", &base_id]);
+    assert!(!checkout_state.status.success());
+    assert!(String::from_utf8_lossy(&checkout_state.stderr).contains("uncommitted changes"));
+    assert_eq!(repo.head_state().unwrap(), feature_tip);
+
+    let checkout_state_force = run_astvcs(
+        Some(dir.path()),
+        &["checkout", "--state", &base_id, "--force"],
+    );
+    assert_astvcs_ok(&checkout_state_force, "checkout state --force");
+    let stderr = String::from_utf8_lossy(&checkout_state_force.stderr);
+    assert!(
+        stderr.contains("warning: checkout --force: discarded uncommitted changes in dirty.txt")
+    );
+
+    repo.checkout_branch_with_force("main", true).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    repo.commit("v1 note").unwrap();
+    fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+    let v2 = repo.commit("v2 note").unwrap().state_id;
+    fs::write(dir.path().join("note.txt"), "dirty revert\n").unwrap();
+    let before_revert = repo.head_state().unwrap();
+
+    let revert = run_astvcs(Some(dir.path()), &["revert", &v2, "-m", "undo v2"]);
+    assert!(!revert.status.success());
+    assert!(String::from_utf8_lossy(&revert.stderr).contains("uncommitted changes"));
+    assert_eq!(repo.head_state().unwrap(), before_revert);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "dirty revert\n"
+    );
+
+    let revert_force = run_astvcs(
+        Some(dir.path()),
+        &["revert", &v2, "-m", "undo v2", "--force"],
+    );
+    assert_astvcs_ok(&revert_force, "revert --force");
+    let stderr = String::from_utf8_lossy(&revert_force.stderr);
+    assert!(stderr.contains("warning: revert --force: discarded uncommitted changes in note.txt"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "v1\n"
+    );
+}

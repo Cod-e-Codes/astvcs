@@ -6,6 +6,8 @@
 
 **HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `commit` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
 
+**Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` call `materialize_state` to write a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in `materialize_state` so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization.
+
 **Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store (no GC yet). `config.json` `default_branch` is not updated when a branch is removed.
 
 **On-disk layout.**
@@ -55,7 +57,7 @@ All other paths use line-oriented text blob storage. Parse failures on supported
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
-Checkout and merge call `materialize_state` to write the state manifest to disk and sync `index.json`. AST materialization uses trivia-aware unparsing: leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte.
+Checkout and merge call `materialize_state` to write the state manifest to disk and sync `index.json` (see **Working tree materialization** above). AST materialization uses trivia-aware unparsing: leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte.
 
 ## Structural diff
 

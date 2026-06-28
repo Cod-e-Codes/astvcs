@@ -559,10 +559,7 @@ mod tests {
 
     #[test]
     fn comment_removal_clears_trivia() {
-        let with_comment = parse_rust(
-            "fn main() {\n    println!(\"a\"); // note\n}\n",
-        )
-        .unwrap();
+        let with_comment = parse_rust("fn main() {\n    println!(\"a\"); // note\n}\n").unwrap();
         let without = parse_rust("fn main() {\n    println!(\"a\");\n}\n").unwrap();
         let diff = diff_graphs(&with_comment, &without);
         assert!(
