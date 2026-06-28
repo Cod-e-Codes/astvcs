@@ -16,7 +16,7 @@ Global flags:
 | `identity get [--global]` | Show configured author name and email (repository or global config) |
 | `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
 | `status` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. |
-| `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file — content diff omitted)`. |
+| `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
 | `commit -m <msg>` | Commit working tree as a new state (prints when unchanged). Requires configured author identity. |
@@ -85,7 +85,7 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 `revert` applies the guard only when it would materialize (no-op reverts that leave HEAD unchanged skip the check). `merge --dry-run` and `revert --dry-run` never touch the working tree.
 
-**Merge planning and the working tree.** `plan_merge` and `prepare_merge` load file content only from committed states (merge base, HEAD, and the branch tip being merged). They do not read the working tree, so uncommitted edits are invisible to conflict detection and to the merged manifest. With `--force`, dirty paths are discarded during materialization *after* the plan is computed; uncommitted content on a path that the merge itself changes cannot leak into the planner or alter the three-way result—the final on-disk file is the committed merge outcome for that path.
+**Merge planning and the working tree.** `plan_merge` and `prepare_merge` load file content only from committed states (merge base, HEAD, and the branch tip being merged). They do not read the working tree, so uncommitted edits are invisible to conflict detection and to the merged manifest. With `--force`, dirty paths are discarded during materialization *after* the plan is computed; uncommitted content on a path that the merge itself changes cannot leak into the planner or alter the three-way result - the final on-disk file is the committed merge outcome for that path.
 
 ### `revert`
 

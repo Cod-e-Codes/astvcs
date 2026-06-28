@@ -1,5 +1,6 @@
 use crate::store::atomic;
 use crate::store::error::{RepoError, RepoResult};
+use crate::store::manifest::ManifestMap;
 use crate::store::reachability::{Reachability, reachable_from_tips};
 use crate::store::repo::IndexEntry;
 use crate::store::{Repo, StateId};
@@ -359,11 +360,11 @@ fn check_timeline_and_blobs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
                 continue;
             }
         };
-        for (path, blob_id) in manifest {
-            if !repo.blobs_store().contains(&blob_id) {
+        for (path, entry) in manifest {
+            if !repo.blobs_store().contains(&entry.blob) {
                 findings.push(FsckFinding {
                     kind: FsckKind::MissingBlob,
-                    detail: format!("state {state_id} path {path}: blob {blob_id} missing"),
+                    detail: format!("state {state_id} path {path}: blob {} missing", entry.blob),
                 });
             }
         }
@@ -373,7 +374,7 @@ fn check_timeline_and_blobs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
 
 fn check_index(
     head: &StateId,
-    head_manifest: &HashMap<String, String>,
+    head_manifest: &ManifestMap,
     index: &HashMap<String, IndexEntry>,
     reach: &Reachability,
 ) -> Result<Vec<FsckFinding>, String> {
@@ -474,7 +475,7 @@ mod tests {
             .load_manifest(&kept_tip)
             .unwrap()
             .get("note.txt")
-            .cloned()
+            .map(|e| e.blob.clone())
             .unwrap();
         assert!(repo.blobs_store().contains(&kept_blob));
 

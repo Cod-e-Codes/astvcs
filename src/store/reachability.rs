@@ -1,5 +1,6 @@
 use super::{StateId, TimelineEntry};
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::store::manifest::ManifestMap;
+use std::collections::{HashSet, VecDeque};
 
 pub const ROOT_STATE_ID: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -22,7 +23,7 @@ pub fn reachable_from_tips<F, G>(
 ) -> Result<Reachability, String>
 where
     F: FnMut(&StateId) -> Result<TimelineEntry, String>,
-    G: FnMut(&StateId) -> Result<HashMap<String, String>, String>,
+    G: FnMut(&StateId) -> Result<ManifestMap, String>,
 {
     let mut out = Reachability::default();
     out.states.insert(ROOT_STATE_ID.to_string());
@@ -40,7 +41,7 @@ where
             continue;
         }
         let manifest = load_manifest(&id)?;
-        out.blobs.extend(manifest.into_values());
+        out.blobs.extend(manifest.values().map(|e| e.blob.clone()));
 
         let entry = load_timeline(&id)?;
         for parent in entry.parents.iter().chain(entry.parent.iter()) {
@@ -56,9 +57,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::manifest::{ManifestEntry, ManifestMap};
     use std::collections::HashMap;
 
-    fn fixture() -> HashMap<StateId, (TimelineEntry, HashMap<String, String>)> {
+    fn fixture() -> HashMap<StateId, (TimelineEntry, ManifestMap)> {
         let empty = ROOT_STATE_ID.to_string();
         let s1 = "1".repeat(64);
         let s2 = "2".repeat(64);
@@ -80,8 +82,8 @@ mod tests {
                 HashMap::new(),
             ),
         );
-        let mut m1 = HashMap::new();
-        m1.insert("a.txt".into(), "blob-a".into());
+        let mut m1 = ManifestMap::new();
+        m1.insert("a.txt".into(), ManifestEntry::regular("blob-a".into()));
         db.insert(
             s1.clone(),
             (
@@ -99,8 +101,8 @@ mod tests {
                 m1,
             ),
         );
-        let mut m2 = HashMap::new();
-        m2.insert("b.txt".into(), "blob-b".into());
+        let mut m2 = ManifestMap::new();
+        m2.insert("b.txt".into(), ManifestEntry::regular("blob-b".into()));
         db.insert(
             s2.clone(),
             (

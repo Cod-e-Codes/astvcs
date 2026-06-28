@@ -1,4 +1,4 @@
-use crate::store::{Repo, RepoError, StateId, TimelineEntry};
+use crate::store::{ManifestMap, Repo, RepoError, StateId, TimelineEntry};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -115,7 +115,7 @@ impl Transport {
         }
     }
 
-    pub fn get_state(&self, id: &StateId) -> Result<HashMap<String, String>, String> {
+    pub fn get_state(&self, id: &StateId) -> Result<ManifestMap, String> {
         match self {
             Self::File(repo) => map_repo(repo.load_manifest(id)),
             Self::Http { client, .. } => {
@@ -129,11 +129,7 @@ impl Transport {
         }
     }
 
-    pub fn put_state(
-        &self,
-        id: &StateId,
-        manifest: &HashMap<String, String>,
-    ) -> Result<(), String> {
+    pub fn put_state(&self, id: &StateId, manifest: &ManifestMap) -> Result<(), String> {
         match self {
             Self::File(repo) => map_repo(repo.import_state_manifest(id, manifest)),
             Self::Http { client, .. } => {

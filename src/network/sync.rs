@@ -74,7 +74,8 @@ fn collect_upload_states(
 fn import_state(local: &Repo, transport: &Transport, state_id: &StateId) -> Result<(), String> {
     let entry = transport.get_timeline(state_id)?;
     let manifest = transport.get_state(state_id)?;
-    for blob_id in manifest.values() {
+    for entry in manifest.values() {
+        let blob_id = &entry.blob;
         if !local.has_blob(blob_id) {
             let bytes = transport.get_blob(blob_id)?;
             map_repo(local.import_blob_bytes(blob_id, &bytes))?;
@@ -90,7 +91,8 @@ fn import_state(local: &Repo, transport: &Transport, state_id: &StateId) -> Resu
 fn upload_state(local: &Repo, transport: &Transport, state_id: &StateId) -> Result<(), String> {
     let entry = map_repo(local.load_timeline_entry(state_id))?;
     let manifest = map_repo(local.load_manifest(state_id))?;
-    for blob_id in manifest.values() {
+    for entry in manifest.values() {
+        let blob_id = &entry.blob;
         if !transport.has_blob(blob_id)? {
             let bytes = map_repo(local.read_blob_bytes(blob_id))?;
             transport.put_blob(blob_id, &bytes)?;

@@ -74,6 +74,19 @@ fn copy_identity_demo(dir: &TempDir) -> std::io::Result<()> {
     copy_fixture(dir, &identity_demo_root())
 }
 
+fn create_test_symlink(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("create symlink");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::symlink_file;
+        symlink_file(target, link)
+            .expect("create symlink (Windows requires Developer Mode or CI symlink enable step)");
+    }
+}
+
 #[test]
 fn workflow_demo_prepend_and_disjoint_merge() {
     let dir = TempDir::new().unwrap();
@@ -87,7 +100,7 @@ fn workflow_demo_prepend_and_disjoint_merge() {
     fs::write(dir.path().join("lib.rs"), with_doc).unwrap();
     let head = repo.head_state().unwrap();
     let base_files = repo.load_state_files(&head).unwrap();
-    let old_graph = match &base_files["lib.rs"] {
+    let old_graph = match &base_files["lib.rs"].content {
         astvcs::FileContent::Ast(g) => g,
         _ => panic!("expected ast"),
     };
@@ -135,17 +148,17 @@ fn workflow_demo_prepend_and_disjoint_merge() {
     );
 
     let files = repo.load_state_files(&merged).unwrap();
-    let lib_text = match &files["lib.rs"] {
+    let lib_text = match &files["lib.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
     assert!(lib_text.contains("workflow demo crate"));
-    let core_text = match &files["core.rs"] {
+    let core_text = match &files["core.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
     assert!(core_text.contains('3'));
-    let util_text = match &files["util.rs"] {
+    let util_text = match &files["util.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
@@ -177,7 +190,7 @@ fn identity_demo_payload_edit_disjoint_merge_and_conflict() {
 
     let head = repo.head_state().unwrap();
     let base_files = repo.load_state_files(&head).unwrap();
-    let old_core = match &base_files["core.rs"] {
+    let old_core = match &base_files["core.rs"].content {
         astvcs::FileContent::Ast(g) => g,
         _ => panic!("expected ast"),
     };
@@ -220,7 +233,7 @@ fn identity_demo_payload_edit_disjoint_merge_and_conflict() {
         .merge_branch("feature", "merge sibling literal edits")
         .unwrap();
     let files = repo.load_state_files(&merged).unwrap();
-    let labels = match &files["labels.rs"] {
+    let labels = match &files["labels.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
@@ -424,9 +437,9 @@ fn multi_language_repo_roundtrip() {
         "script.sh",
         "script.bash",
     ] {
-        assert!(files[path].is_ast(), "{path} should be AST");
+        assert!(files[path].content.is_ast(), "{path} should be AST");
     }
-    assert!(!files["notes.txt"].is_ast());
+    assert!(!files["notes.txt"].content.is_ast());
 }
 
 #[test]
@@ -453,7 +466,7 @@ fn blob_deduplication_across_states() {
     let id2 = repo.commit("v2").unwrap().state_id;
     let m1 = repo.load_manifest(&id1).unwrap();
     let m2 = repo.load_manifest(&id2).unwrap();
-    assert_eq!(m1["main.rs"], m2["main.rs"]);
+    assert_eq!(m1["main.rs"].blob, m2["main.rs"].blob);
 }
 
 #[test]
@@ -464,7 +477,7 @@ fn go_unparse_roundtrip_via_repo() {
     fs::write(dir.path().join("hello.go"), src).unwrap();
     let id = repo.commit("hello").unwrap().state_id;
     let files = repo.load_state_files(&id).unwrap();
-    if let astvcs::FileContent::Ast(graph) = &files["hello.go"] {
+    if let astvcs::FileContent::Ast(graph) = &files["hello.go"].content {
         assert_eq!(unparse(graph).as_bytes(), src.as_bytes());
     } else {
         panic!("expected ast");
@@ -482,7 +495,7 @@ fn rust_unparse_roundtrip_via_repo() {
     fs::write(dir.path().join("lib.rs"), src).unwrap();
     let id = repo.commit("add fn").unwrap().state_id;
     let files = repo.load_state_files(&id).unwrap();
-    if let astvcs::FileContent::Ast(graph) = &files["lib.rs"] {
+    if let astvcs::FileContent::Ast(graph) = &files["lib.rs"].content {
         assert_eq!(unparse(graph).as_bytes(), src.as_bytes());
     } else {
         panic!("expected ast");
@@ -586,7 +599,7 @@ fn same_file_demo_disjoint_merge() {
     repo.checkout_branch("main").unwrap();
     let merged = repo.merge_branch("feature", "merge feature").unwrap();
     let files = repo.load_state_files(&merged).unwrap();
-    let text = match &files["sample.rs"] {
+    let text = match &files["sample.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
@@ -724,7 +737,7 @@ fn branch_merge_with_merge_base() {
     repo.checkout_branch("main").unwrap();
     let merged = repo.merge_branch("feature", "merge feature").unwrap();
     let files = repo.load_state_files(&merged).unwrap();
-    let text = match &files["main.rs"] {
+    let text = match &files["main.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
@@ -763,7 +776,7 @@ fn merge_demo_add_add_and_deletion() {
     let merged = repo.merge_branch("feature", "merge add/add").unwrap();
     let files = repo.load_state_files(&merged).unwrap();
     assert!(files.contains_key("util.rs"));
-    let lib = match &files["lib.rs"] {
+    let lib = match &files["lib.rs"].content {
         astvcs::FileContent::Ast(g) => unparse(g),
         _ => panic!("expected ast"),
     };
@@ -833,8 +846,8 @@ fn config_files_use_ast_frontend() {
     fs::write(dir.path().join("config.yaml"), "key: value\nlist:\n  - a\n").unwrap();
     let id = repo.commit("config").unwrap().state_id;
     let files = repo.load_state_files(&id).unwrap();
-    assert!(files["Cargo.toml"].is_ast());
-    assert!(files["config.yaml"].is_ast());
+    assert!(files["Cargo.toml"].content.is_ast());
+    assert!(files["config.yaml"].content.is_ast());
 }
 
 #[test]
@@ -1588,7 +1601,7 @@ fn cli_fsck_detects_corruption() {
     repo.commit("init").unwrap();
     let head = repo.head_state().unwrap();
     let manifest = repo.load_manifest(&head).unwrap();
-    let note_blob = manifest.get("note.txt").unwrap().clone();
+    let note_blob = manifest.get("note.txt").unwrap().blob.clone();
     let shard = &note_blob[..2];
     fs::remove_file(
         dir.path()
@@ -1933,4 +1946,137 @@ fn binary_push_clone_roundtrip() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(fs::read(clone_dir.path().join("icon.png")).unwrap(), bytes);
+}
+
+#[test]
+fn binary_reset_hard_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    let payload: Vec<u8> = [PNG_HEADER.as_slice(), b"original"].concat();
+    fs::write(dir.path().join("data.bin"), &payload).unwrap();
+    repo.commit("add binary").unwrap();
+
+    fs::write(dir.path().join("data.bin"), b"dirty bytes").unwrap();
+    let head = repo.head_state().unwrap();
+    repo.reset(&head, false, false).unwrap();
+
+    assert_eq!(fs::read(dir.path().join("data.bin")).unwrap(), payload);
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn binary_diff_state() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("pic.bin"), PNG_HEADER).unwrap();
+    let id1 = repo.commit("v1").unwrap().state_id;
+    fs::write(
+        dir.path().join("pic.bin"),
+        [PNG_HEADER.as_slice(), &[0xFF]].concat(),
+    )
+    .unwrap();
+    let id2 = repo.commit("v2").unwrap().state_id;
+
+    let diff = repo.diff_state_path(&id1, &id2, "pic.bin").unwrap();
+    assert!(diff.contains("binary file"), "{diff}");
+    assert!(diff.contains("content diff omitted"), "{diff}");
+}
+
+#[test]
+fn symlink_commit_and_checkout() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("target.txt"), "hello\n").unwrap();
+    create_test_symlink(Path::new("target.txt"), &dir.path().join("link.txt"));
+    repo.commit("add symlink").unwrap();
+
+    fs::remove_file(dir.path().join("link.txt")).unwrap();
+    repo.checkout_branch("main").unwrap();
+
+    assert!(dir.path().join("link.txt").is_symlink());
+    assert_eq!(
+        fs::read_link(dir.path().join("link.txt"))
+            .unwrap()
+            .to_string_lossy(),
+        "target.txt"
+    );
+}
+
+#[test]
+fn executable_mode_commit_and_checkout() {
+    use astvcs::store::FileMode;
+
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    let script = dir.path().join("run.sh");
+    fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+    }
+    repo.commit("executable script").unwrap();
+
+    let state_id = repo.head_state().unwrap();
+    let files = repo.load_state_files(&state_id).unwrap();
+    assert_eq!(files.get("run.sh").unwrap().mode, FileMode::Executable);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&script, perms).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        fs::write(&script, "echo hi\n").unwrap();
+    }
+    repo.checkout_branch("main").unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let restored = fs::metadata(&script).unwrap().permissions().mode() & 0o111;
+        assert_ne!(restored, 0, "executable bit should be restored on checkout");
+    }
+    #[cfg(windows)]
+    {
+        let content = fs::read_to_string(&script).unwrap();
+        assert!(
+            content.starts_with("#!/"),
+            "checkout should restore shebang script content"
+        );
+        let files = repo.load_state_files(&repo.head_state().unwrap()).unwrap();
+        assert_eq!(files.get("run.sh").unwrap().mode, FileMode::Executable);
+        assert_eq!(
+            repo.status().unwrap().entries.get("run.sh"),
+            Some(&FileStatus::Unchanged)
+        );
+    }
+}
+
+#[test]
+fn symlink_vs_file_merge_conflict() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    create_test_symlink(Path::new("main.rs"), &dir.path().join("link.txt"));
+    repo.commit("symlink on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("link.txt"), "regular file content\n").unwrap();
+    repo.commit("regular file on main").unwrap();
+
+    let err = repo
+        .merge_branch("feature", "merge symlink vs file")
+        .unwrap_err();
+    assert!(err.contains("symlink and regular file conflict"), "{err}");
+    assert!(repo.working_tree_is_clean().unwrap());
 }

@@ -1,5 +1,6 @@
 mod binaryblob;
 mod languages;
+mod symlinkblob;
 mod textblob;
 mod treesitter;
 
@@ -7,6 +8,7 @@ pub use binaryblob::{BinaryBlob, is_binary_payload, load_working_content};
 pub use languages::{
     SourceLanguage, is_text_only_path, supported_extensions, supported_special_paths,
 };
+pub use symlinkblob::SymlinkBlob;
 pub use textblob::{TextBlob, parse_text_or_blob};
 pub use treesitter::{parse_language, parse_rust, parse_source};
 
@@ -19,6 +21,7 @@ pub enum FileContent {
     Ast(AstGraph),
     Text(TextBlob),
     Binary(BinaryBlob),
+    Symlink(SymlinkBlob),
 }
 
 impl FileContent {
@@ -30,11 +33,16 @@ impl FileContent {
         matches!(self, Self::Binary(_))
     }
 
+    pub fn is_symlink(&self) -> bool {
+        matches!(self, Self::Symlink(_))
+    }
+
     pub fn display_kind(&self) -> &'static str {
         match self {
             Self::Ast(_) => "ast",
             Self::Text(_) => "text",
             Self::Binary(_) => "binary",
+            Self::Symlink(_) => "symlink",
         }
     }
 
@@ -43,6 +51,7 @@ impl FileContent {
             (Self::Ast(a), Self::Ast(b)) => a.to_snapshot() == b.to_snapshot(),
             (Self::Text(a), Self::Text(b)) => a.content == b.content,
             (Self::Binary(a), Self::Binary(b)) => a.bytes == b.bytes,
+            (Self::Symlink(a), Self::Symlink(b)) => a.target == b.target,
             _ => false,
         }
     }
@@ -73,6 +82,12 @@ impl serde::Serialize for FileContent {
                 s.serialize_field("bytes", &STANDARD.encode(&blob.bytes))?;
                 s.end()
             }
+            Self::Symlink(blob) => {
+                let mut s = serializer.serialize_struct("FileContent", 2)?;
+                s.serialize_field("kind", "symlink")?;
+                s.serialize_field("target", &blob.target)?;
+                s.end()
+            }
         }
     }
 }
@@ -88,6 +103,7 @@ impl<'de> serde::Deserialize<'de> for FileContent {
             graph: Option<crate::graph::AstGraphSnapshot>,
             content: Option<String>,
             bytes: Option<String>,
+            target: Option<String>,
         }
         let raw = Raw::deserialize(deserializer)?;
         match raw.kind.as_str() {
@@ -112,9 +128,15 @@ impl<'de> serde::Deserialize<'de> for FileContent {
                     .map_err(serde::de::Error::custom)?;
                 Ok(Self::Binary(BinaryBlob::new(decoded)))
             }
+            "symlink" => {
+                let target = raw
+                    .target
+                    .ok_or_else(|| serde::de::Error::missing_field("target"))?;
+                Ok(Self::Symlink(SymlinkBlob::new(target)))
+            }
             other => Err(serde::de::Error::unknown_variant(
                 other,
-                &["ast", "text", "binary"],
+                &["ast", "text", "binary", "symlink"],
             )),
         }
     }

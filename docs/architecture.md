@@ -40,7 +40,9 @@ index.json           last committed manifest (working-tree baseline)
 
 **Working tree scan.** Honors `.gitignore`, `.astvcsignore`, and git exclude files (ripgrep semantics). Always skips `.astvcs/` and `.git/`. Non-UTF-8 path names are not tracked; file content may be binary.
 
-**Binary files.** Files whose bytes contain a NUL or are not valid UTF-8 are stored as `FileContent::Binary` blobs. UTF-8 text (including known text-only paths and parse-fallback sources) continues to use AST or text blobs. Binary payloads share the same content-addressed `blobs/` tree as AST and text: each blob is a JSON envelope `{"kind":"binary","bytes":"<base64>"}` hashed by the serialized bytes (same sharded layout as other kinds). A separate `blobs-bin/` tree was not added: one store keeps deduplication, `gc`, `fsck`, and network sync unified; the `kind` field distinguishes encodings on read. There is no maximum file size policy beyond available disk and memory. Materialization writes raw bytes via `atomic::write_atomic`. `status` reports binary paths as added, modified, or removed like text. `diff` and `diff --state` print path headers and `(binary file — content diff omitted)` instead of a byte-level diff. Three-way merge treats binary paths as opaque whole-file replace only (no structural or line merge); add/add with different bytes conflicts like text add/add.
+**Binary files.** Files whose bytes contain a NUL or are not valid UTF-8 are stored as `FileContent::Binary` blobs. UTF-8 text (including known text-only paths and parse-fallback sources) continues to use AST or text blobs. Binary payloads share the same content-addressed `blobs/` tree as AST and text: each blob is a JSON envelope `{"kind":"binary","bytes":"<base64>"}` hashed by the serialized bytes (same sharded layout as other kinds). A separate `blobs-bin/` tree was not added: one store keeps deduplication, `gc`, `fsck`, and network sync unified; the `kind` field distinguishes encodings on read. There is no maximum file size policy beyond available disk and memory. Materialization writes raw bytes via `atomic::write_atomic`. `status` reports binary paths as added, modified, or removed like text. `diff` and `diff --state` print path headers and `(binary file - content diff omitted)` instead of a byte-level diff. Three-way merge treats binary paths as opaque whole-file replace only (no structural or line merge); add/add with different bytes conflicts like text add/add.
+
+**File modes and symlinks.** Manifest entries are `path -> { blob, mode }` where `mode` is `regular` (default, serialized as a plain blob id string for backward compatibility), `executable`, or `symlink`. Mode metadata is separate from blob content hashing: the same text blob id with different modes produces different state ids (`hash_manifest` appends the mode tag only for non-regular entries). Symlink targets are stored as `FileContent::Symlink` blobs (`{"kind":"symlink","target":"..."}`) referenced from the manifest. On Unix, checkout creates symlinks via `symlink(2)` and restores the executable bit (`chmod +x`) for `executable` entries. On Windows, astvcs attempts `symlink_file`; if creation fails (common without Developer Mode or elevation), it emits `warning:` and skips the link rather than copying the target. CI enables Developer Mode on `windows-latest` so symlink integration tests run on both platforms. Executable detection on Unix uses the file mode bit; on Windows, `.sh`/`.bash`/`.zsh` files with a `#!` shebang are stored as `executable` (manifest round-trip; `+x` is not applied on disk). The working-tree scan includes symlinks (not followed). Merge treats symlinks as opaque whole-path values like binaries; replacing a symlink with a regular file (or vice versa) on one branch conflicts; mode-only edits merge when one side changed the mode from base.
 
 ## Parsing and storage
 
@@ -144,6 +146,7 @@ src/
     treesitter.rs parser and translator
     textblob.rs  text fallback
     binaryblob.rs binary detection and working-tree load
+    symlinkblob.rs symlink target blobs
   unparser.rs
   diff/
     lcs.rs       longest common subsequence matching
@@ -155,6 +158,9 @@ src/
   store/
     atomic.rs    same-directory rename writes, stray temp cleanup
     blobs.rs     content-addressed blob store
+    manifest.rs  manifest entries, file modes, hash_manifest
+    tracked.rs   TrackedFile (content + mode)
+    working.rs   load working-tree paths with mode detection
     error.rs     RepoError kinds and structured failures
     history.rs   timeline walk and merge-base (LCA)
     identity.rs  author config resolution and persistence
@@ -223,5 +229,11 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `binary_merge_add_add_conflict` | Add/add conflict on binary paths |
 | `binary_fsck_clean_after_commit` | NUL-containing binary: `fsck` clean |
 | `binary_push_clone_roundtrip` | Network clone preserves binary bytes |
+| `binary_reset_hard_roundtrip` | Hard reset restores binary bytes after working-tree edit |
+| `binary_diff_state` | `diff --state` omits binary content between commits |
+| `symlink_commit_and_checkout` | Symlink target round-trip (all CI platforms) |
+| `executable_mode_commit_and_checkout` | Executable manifest round-trip; Unix restores `+x` |
+| `symlink_vs_file_merge_conflict` | Merge conflict when one branch has symlink, other regular file |
+| `manifest_hash_regular_backward_compatible` | Regular-mode manifest hash matches legacy string map (unit, `store/manifest.rs`) |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

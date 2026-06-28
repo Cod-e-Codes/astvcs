@@ -2,6 +2,7 @@ use crate::diff::{DiffResult, TextEdit, diff_graphs, diff_text};
 use crate::frontend::FileContent;
 use crate::graph::{AstGraph, Mutation, NodeId};
 use crate::intent::{self};
+use crate::store::{FileMode, TrackedFile};
 
 /// Result of attempting to merge two file states.
 #[derive(Clone, Debug)]
@@ -176,6 +177,89 @@ pub fn merge_path(
     }
 }
 
+/// Three-way merge including file mode metadata (executable, symlink).
+pub fn merge_tracked_path(
+    path: &str,
+    base: Option<&TrackedFile>,
+    left: Option<&TrackedFile>,
+    right: Option<&TrackedFile>,
+) -> PathMergeTrackedOutcome {
+    if mode_kind_conflict(left, right) {
+        return PathMergeTrackedOutcome::Conflict(PathMergeConflict {
+            path: path.to_string(),
+            detail: MergeConflict {
+                message: "symlink and regular file conflict".into(),
+                left_mutations: vec![],
+                right_mutations: vec![],
+                left_intent_lines: vec![],
+                right_intent_lines: vec![],
+                overlapping: vec![],
+                text_line: None,
+            },
+        });
+    }
+
+    let content_out = merge_path(
+        path,
+        base.map(|t| &t.content),
+        left.map(|t| &t.content),
+        right.map(|t| &t.content),
+    );
+    match content_out {
+        PathMergeOutcome::Keep(content) => match merge_file_mode(base, left, right) {
+            Ok(mode) => PathMergeTrackedOutcome::Keep(TrackedFile::new(content, mode)),
+            Err(message) => PathMergeTrackedOutcome::Conflict(PathMergeConflict {
+                path: path.to_string(),
+                detail: MergeConflict {
+                    message,
+                    left_mutations: vec![],
+                    right_mutations: vec![],
+                    left_intent_lines: vec![],
+                    right_intent_lines: vec![],
+                    overlapping: vec![],
+                    text_line: None,
+                },
+            }),
+        },
+        PathMergeOutcome::Remove => PathMergeTrackedOutcome::Remove,
+        PathMergeOutcome::Conflict(c) => PathMergeTrackedOutcome::Conflict(c),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PathMergeTrackedOutcome {
+    Keep(TrackedFile),
+    Remove,
+    Conflict(PathMergeConflict),
+}
+
+fn mode_kind_conflict(left: Option<&TrackedFile>, right: Option<&TrackedFile>) -> bool {
+    let left_symlink = left.is_some_and(|f| f.mode == FileMode::Symlink);
+    let right_symlink = right.is_some_and(|f| f.mode == FileMode::Symlink);
+    left_symlink != right_symlink
+}
+
+fn merge_file_mode(
+    base: Option<&TrackedFile>,
+    left: Option<&TrackedFile>,
+    right: Option<&TrackedFile>,
+) -> Result<FileMode, String> {
+    let left_mode = left.map(|f| f.mode.clone()).unwrap_or(FileMode::Regular);
+    let right_mode = right.map(|f| f.mode.clone()).unwrap_or(FileMode::Regular);
+    if left_mode == right_mode {
+        return Ok(left_mode);
+    }
+    let base_mode = base.map(|f| f.mode.clone());
+    let left_changed = base_mode.as_ref() != Some(&left_mode);
+    let right_changed = base_mode.as_ref() != Some(&right_mode);
+    match (left_changed, right_changed) {
+        (true, false) => Ok(left_mode),
+        (false, true) => Ok(right_mode),
+        (false, false) => Ok(left_mode),
+        (true, true) => Err("both branches changed file mode".into()),
+    }
+}
+
 fn ast_merge_conflict(
     base: &AstGraph,
     message: String,
@@ -202,8 +286,11 @@ pub fn merge_files(base: &FileContent, left: &FileContent, right: &FileContent) 
         (FileContent::Binary(b), FileContent::Binary(l), FileContent::Binary(r)) => {
             merge_binary(b, l, r)
         }
+        (FileContent::Symlink(b), FileContent::Symlink(l), FileContent::Symlink(r)) => {
+            merge_symlink(b, l, r)
+        }
         _ => MergeOutcome::Conflict(MergeConflict {
-            message: "cannot merge different content kinds (ast, text, binary)".into(),
+            message: "cannot merge different content kinds (ast, text, binary, symlink)".into(),
             left_mutations: vec![],
             right_mutations: vec![],
             left_intent_lines: vec![],
@@ -338,6 +425,31 @@ fn merge_binary(
     }
     MergeOutcome::Conflict(MergeConflict {
         message: "both branches modified binary file".into(),
+        left_mutations: vec![],
+        right_mutations: vec![],
+        left_intent_lines: vec![],
+        right_intent_lines: vec![],
+        overlapping: vec![],
+        text_line: None,
+    })
+}
+
+fn merge_symlink(
+    base: &crate::frontend::SymlinkBlob,
+    left: &crate::frontend::SymlinkBlob,
+    right: &crate::frontend::SymlinkBlob,
+) -> MergeOutcome {
+    if left.target == right.target {
+        return MergeOutcome::Merged(FileContent::Symlink(left.clone()));
+    }
+    if left.target == base.target {
+        return MergeOutcome::Merged(FileContent::Symlink(right.clone()));
+    }
+    if right.target == base.target {
+        return MergeOutcome::Merged(FileContent::Symlink(left.clone()));
+    }
+    MergeOutcome::Conflict(MergeConflict {
+        message: "both branches modified symlink target".into(),
         left_mutations: vec![],
         right_mutations: vec![],
         left_intent_lines: vec![],
@@ -844,6 +956,25 @@ mod tests {
         assert!(matches!(
             merge_path("f.txt", Some(&base), Some(&modified), None),
             PathMergeOutcome::Keep(_)
+        ));
+    }
+
+    #[test]
+    fn tracked_symlink_vs_regular_file_conflicts() {
+        use crate::frontend::SymlinkBlob;
+        use crate::store::{FileMode, TrackedFile};
+
+        let regular = TrackedFile::new(
+            FileContent::Text(crate::frontend::TextBlob::new("data\n".into())),
+            FileMode::Regular,
+        );
+        let symlink = TrackedFile::new(
+            FileContent::Symlink(SymlinkBlob::new("target.txt".into())),
+            FileMode::Symlink,
+        );
+        assert!(matches!(
+            merge_tracked_path("link.txt", None, Some(&regular), Some(&symlink)),
+            PathMergeTrackedOutcome::Conflict(_)
         ));
     }
 }

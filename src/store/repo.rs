@@ -2,16 +2,19 @@ use crate::diff::{
     DiffResult, build_rename_map, detect_path_renames, diff_graphs, diff_text,
     rename_targets_conflict, side_path_for_base,
 };
-use crate::frontend::{FileContent, load_working_content};
+use crate::frontend::FileContent;
 use crate::intent;
-use crate::merge::{MergeConflict, PathMergeConflict, PathMergeOutcome, merge_path};
+use crate::merge::{MergeConflict, PathMergeConflict, PathMergeTrackedOutcome, merge_tracked_path};
 use crate::store::atomic::{self, write_atomic_json, write_atomic_text};
-use crate::store::blobs::{BlobStore, hash_manifest};
+use crate::store::blobs::BlobStore;
 use crate::store::error::{RepoError, RepoResult};
 use crate::store::history::{merge_base, walk_history};
 use crate::store::identity::{AuthorIdentity, resolve_author_identity};
 use crate::store::lock::{self, RepoLockGuard};
+use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_manifest};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
+use crate::store::tracked::{TrackedFile, tracked_eq};
+use crate::store::working::load_working_tracked;
 use crate::trace;
 use crate::unparser::unparse;
 use std::collections::{HashMap, HashSet};
@@ -103,8 +106,11 @@ pub struct TimelineEntry {
     pub author_name: String,
     #[serde(default)]
     pub author_email: String,
-    #[serde(default)]
-    pub manifest: HashMap<String, String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::store::manifest::deserialize_manifest_map"
+    )]
+    pub manifest: ManifestMap,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<HashMap<String, FileContent>>,
 }
@@ -149,7 +155,7 @@ pub struct MergePlan {
     pub base_id: StateId,
     pub head_id: StateId,
     pub other_id: StateId,
-    pub merged_files: HashMap<String, FileContent>,
+    pub merged_files: HashMap<String, TrackedFile>,
     pub conflicts: Vec<PathMergeConflict>,
 }
 
@@ -195,7 +201,7 @@ pub struct RevertPlan {
     pub target_id: StateId,
     pub parent_id: StateId,
     pub head_id: StateId,
-    pub reverted_files: HashMap<String, FileContent>,
+    pub reverted_files: HashMap<String, TrackedFile>,
     pub conflicts: Vec<PathMergeConflict>,
 }
 
@@ -341,7 +347,7 @@ impl Repo {
     fn check_index_consistency(
         &self,
         head: &StateId,
-        head_files: &HashMap<String, FileContent>,
+        head_files: &HashMap<String, TrackedFile>,
         index: &HashMap<String, IndexEntry>,
     ) {
         for (path, entry) in index {
@@ -354,8 +360,8 @@ impl Repo {
                     "index: {path} state_id {} differs from HEAD {head}",
                     entry.state_id
                 ));
-            } else if let Some(content) = head_files.get(path) {
-                let kind = content.display_kind();
+            } else if let Some(tracked) = head_files.get(path) {
+                let kind = index_content_kind(tracked);
                 if entry.content_kind != kind {
                     trace::warn(format!(
                         "index: {path} kind {} differs from HEAD kind {kind}",
@@ -494,15 +500,12 @@ impl Repo {
         Ok(())
     }
 
-    pub fn load_manifest(&self, state_id: &StateId) -> RepoResult<HashMap<String, String>> {
+    pub fn load_manifest(&self, state_id: &StateId) -> RepoResult<ManifestMap> {
         let _lock = self.repo_lock()?;
         self.load_manifest_unlocked(state_id)
     }
 
-    pub(crate) fn load_manifest_unlocked(
-        &self,
-        state_id: &StateId,
-    ) -> RepoResult<HashMap<String, String>> {
+    pub(crate) fn load_manifest_unlocked(&self, state_id: &StateId) -> RepoResult<ManifestMap> {
         let path = self
             .astvcs_dir()
             .join("states")
@@ -522,7 +525,7 @@ impl Repo {
         Ok(entry.manifest)
     }
 
-    pub fn load_state_files(&self, state_id: &StateId) -> RepoResult<HashMap<String, FileContent>> {
+    pub fn load_state_files(&self, state_id: &StateId) -> RepoResult<HashMap<String, TrackedFile>> {
         let _lock = self.repo_lock()?;
         self.load_state_files_unlocked(state_id)
     }
@@ -530,12 +533,13 @@ impl Repo {
     fn load_state_files_unlocked(
         &self,
         state_id: &StateId,
-    ) -> RepoResult<HashMap<String, FileContent>> {
+    ) -> RepoResult<HashMap<String, TrackedFile>> {
         let manifest = self.load_manifest_unlocked(state_id)?;
         let store = self.blobs();
         let mut files = HashMap::new();
-        for (path, blob_id) in manifest {
-            files.insert(path, store.read(&blob_id)?);
+        for (path, entry) in manifest {
+            let content = store.read(&entry.blob)?;
+            files.insert(path, TrackedFile::new(content, entry.mode));
         }
         Ok(files)
     }
@@ -581,12 +585,11 @@ impl Repo {
         let working_files = self.scan_working()?;
         let mut working_map = HashMap::new();
         for path in &working_files {
-            let bytes = read_working_bytes(&self.root, path)?;
-            let current = load_working_content(path, bytes);
+            let current = load_working_tracked(&self.root, path)?;
             working_map.insert(path.clone(), current.clone());
             let status = match head_files.get(path) {
                 None => FileStatus::Added,
-                Some(stored) if !content_eq(stored, &current) => FileStatus::Modified,
+                Some(stored) if !tracked_eq(stored, &current) => FileStatus::Modified,
                 Some(_) => FileStatus::Unchanged,
             };
             if !matches!(status, FileStatus::Unchanged) {
@@ -602,7 +605,10 @@ impl Repo {
             }
         }
 
-        let renames = detect_path_renames(&head_files, &working_map);
+        let renames = detect_path_renames(
+            &tracked_content_map(&head_files),
+            &tracked_content_map(&working_map),
+        );
         for rename in &renames {
             entries.remove(&rename.from);
             entries.insert(
@@ -620,24 +626,25 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
-        let bytes = read_working_bytes(&self.root, path)?;
-        let working = load_working_content(path, bytes);
+        let working = load_working_tracked(&self.root, path)?;
         let mut working_map = HashMap::new();
         working_map.insert(path.to_string(), working.clone());
         for p in self.scan_working()? {
             if p != path {
-                let bytes = read_working_bytes(&self.root, &p)?;
-                working_map.insert(p.clone(), load_working_content(&p, bytes));
+                working_map.insert(p.clone(), load_working_tracked(&self.root, &p)?);
             }
         }
-        let renames = detect_path_renames(&head_files, &working_map);
+        let renames = detect_path_renames(
+            &tracked_content_map(&head_files),
+            &tracked_content_map(&working_map),
+        );
         if let Some(rename) = renames.iter().find(|r| r.to == path) {
             let old = head_files.get(&rename.from).unwrap();
-            return Ok(format_path_rename(rename, old, &working));
+            return Ok(format_path_rename(rename, &old.content, &working.content));
         }
         match head_files.get(path) {
             None => Ok(format!("--- /dev/null\n+++ {path}\n(new file)\n")),
-            Some(base) => format_diff(path, base, &working),
+            Some(base) => format_diff(path, &base.content, &working.content),
         }
     }
 
@@ -727,9 +734,9 @@ impl Repo {
                 (None, None, None) => out.push('\n'),
                 (base_c, left_c, right_c) => {
                     if let (Some(b), Some(l)) = (base_c, left_c) {
-                        if !content_eq(b, l) {
+                        if !tracked_eq(b, l) {
                             out.push_str("\nbase -> left:\n");
-                            out.push_str(&format_mutation_diff(b, l));
+                            out.push_str(&format_mutation_diff(&b.content, &l.content));
                         } else {
                             out.push_str("\nbase -> left: (unchanged)\n");
                         }
@@ -739,9 +746,9 @@ impl Repo {
                         out.push_str("\nbase -> left: (removed on left)\n");
                     }
                     if let (Some(b), Some(r)) = (base_c, right_c) {
-                        if !content_eq(b, r) {
+                        if !tracked_eq(b, r) {
                             out.push_str("\nbase -> right:\n");
-                            out.push_str(&format_mutation_diff(b, r));
+                            out.push_str(&format_mutation_diff(&b.content, &r.content));
                         } else {
                             out.push_str("\nbase -> right: (unchanged)\n");
                         }
@@ -780,8 +787,14 @@ impl Repo {
         let head_files = self.load_state_files_unlocked(&head)?;
         let other_files = self.load_state_files_unlocked(&other)?;
 
-        let head_renames = detect_path_renames(&base_files, &head_files);
-        let other_renames = detect_path_renames(&base_files, &other_files);
+        let head_renames = detect_path_renames(
+            &tracked_content_map(&base_files),
+            &tracked_content_map(&head_files),
+        );
+        let other_renames = detect_path_renames(
+            &tracked_content_map(&base_files),
+            &tracked_content_map(&other_files),
+        );
         let head_rename_map = build_rename_map(&head_renames);
         let other_rename_map = build_rename_map(&other_renames);
 
@@ -837,26 +850,31 @@ impl Repo {
                 .or_else(|| other_rename_map.get(base_path))
                 .cloned()
                 .unwrap_or_else(|| base_path.clone());
-            let head_path =
-                side_path_for_base(base_path, &head_files, &head_rename_map).or_else(|| {
-                    if head_files.contains_key(&result_path)
-                        && !base_files.contains_key(&result_path)
-                    {
-                        Some(result_path.clone())
-                    } else {
-                        None
-                    }
-                });
-            let other_path = side_path_for_base(base_path, &other_files, &other_rename_map)
-                .or_else(|| {
-                    if other_files.contains_key(&result_path)
-                        && !base_files.contains_key(&result_path)
-                    {
-                        Some(result_path.clone())
-                    } else {
-                        None
-                    }
-                });
+            let head_path = side_path_for_base(
+                base_path,
+                &tracked_content_map(&head_files),
+                &head_rename_map,
+            )
+            .or_else(|| {
+                if head_files.contains_key(&result_path) && !base_files.contains_key(&result_path) {
+                    Some(result_path.clone())
+                } else {
+                    None
+                }
+            });
+            let other_path = side_path_for_base(
+                base_path,
+                &tracked_content_map(&other_files),
+                &other_rename_map,
+            )
+            .or_else(|| {
+                if other_files.contains_key(&result_path) && !base_files.contains_key(&result_path)
+                {
+                    Some(result_path.clone())
+                } else {
+                    None
+                }
+            });
 
             if (other_rename_map.contains_key(base_path) || head_rename_map.contains_key(base_path))
                 && head_files.contains_key(base_path)
@@ -864,7 +882,7 @@ impl Repo {
                     head_files.get(&result_path),
                     other_path.as_ref().and_then(|p| other_files.get(p)),
                 )
-                && !content_eq(head_dest, other_dest)
+                && !tracked_eq(head_dest, other_dest)
             {
                 conflicts.push(PathMergeConflict {
                     path: result_path.clone(),
@@ -901,20 +919,20 @@ impl Repo {
                 continue;
             }
 
-            match merge_path(
+            match merge_tracked_path(
                 &result_path,
                 base_files.get(base_path),
                 head_path.as_ref().and_then(|p| head_files.get(p)),
                 other_path.as_ref().and_then(|p| other_files.get(p)),
             ) {
-                PathMergeOutcome::Keep(content) => {
+                PathMergeTrackedOutcome::Keep(tracked) => {
                     trace::notice(format!("merge plan: {result_path} keep"));
-                    merged_files.insert(result_path, content);
+                    merged_files.insert(result_path, tracked);
                 }
-                PathMergeOutcome::Remove => {
+                PathMergeTrackedOutcome::Remove => {
                     trace::notice(format!("merge plan: {result_path} remove"));
                 }
-                PathMergeOutcome::Conflict(c) => {
+                PathMergeTrackedOutcome::Conflict(c) => {
                     trace::warn(format!("merge plan: {} conflict", c.path));
                     conflicts.push(c);
                 }
@@ -936,15 +954,15 @@ impl Repo {
             let base = base_files.get(&path);
             let left = head_files.get(&path);
             let right = other_files.get(&path);
-            match merge_path(&path, base, left, right) {
-                PathMergeOutcome::Keep(content) => {
+            match merge_tracked_path(&path, base, left, right) {
+                PathMergeTrackedOutcome::Keep(tracked) => {
                     trace::notice(format!("merge plan: {path} keep"));
-                    merged_files.insert(path, content);
+                    merged_files.insert(path, tracked);
                 }
-                PathMergeOutcome::Remove => {
+                PathMergeTrackedOutcome::Remove => {
                     trace::notice(format!("merge plan: {path} remove"));
                 }
-                PathMergeOutcome::Conflict(c) => {
+                PathMergeTrackedOutcome::Conflict(c) => {
                     trace::warn(format!("merge plan: {} conflict", c.path));
                     conflicts.push(c);
                 }
@@ -1009,8 +1027,8 @@ impl Repo {
             let base = base_files.get(&path);
             let left = left_files.get(&path);
             let right = head_files.get(&path);
-            match merge_path(&path, base, left, right) {
-                PathMergeOutcome::Keep(content) => {
+            match merge_tracked_path(&path, base, left, right) {
+                PathMergeTrackedOutcome::Keep(tracked) => {
                     if let (Some(b), None, Some(r)) = (base, left, right)
                         && !r.semantic_eq(b)
                     {
@@ -1032,13 +1050,13 @@ impl Repo {
                         continue;
                     }
                     trace::notice(format!("revert plan: {path} keep"));
-                    reverted_files.insert(path, content);
+                    reverted_files.insert(path, tracked);
                 }
-                PathMergeOutcome::Remove => {
+                PathMergeTrackedOutcome::Remove => {
                     trace::notice(format!("revert plan: {path} remove"));
                     reverted_files.remove(&path);
                 }
-                PathMergeOutcome::Conflict(c) => {
+                PathMergeTrackedOutcome::Conflict(c) => {
                     trace::warn(format!("revert plan: {} conflict", c.path));
                     conflicts.push(c);
                 }
@@ -1202,20 +1220,25 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let from_files = self.load_state_files_unlocked(from)?;
         let to_files = self.load_state_files_unlocked(to)?;
-        let renames = detect_path_renames(&from_files, &to_files);
+        let renames = detect_path_renames(
+            &tracked_content_map(&from_files),
+            &tracked_content_map(&to_files),
+        );
         if let Some(rename) = renames.iter().find(|r| r.from == path || r.to == path) {
             let old = from_files.get(&rename.from).unwrap();
             let new = to_files.get(&rename.to).unwrap();
-            return Ok(format_path_rename(rename, old, new));
+            return Ok(format_path_rename(rename, &old.content, &new.content));
         }
         match (from_files.get(path), to_files.get(path)) {
             (None, Some(new)) => {
                 let mut out = format!("--- /dev/null\n+++ {path}\n(new file)\n");
-                out.push_str(&content_preview(new));
+                out.push_str(&content_preview(&new.content));
                 Ok(out)
             }
             (Some(_), None) => Ok(format!("--- {path}\n+++ /dev/null\n(deleted)\n")),
-            (Some(old), Some(new)) if !content_eq(old, new) => format_diff(path, old, new),
+            (Some(old), Some(new)) if !tracked_eq(old, new) => {
+                format_diff(path, &old.content, &new.content)
+            }
             _ => Ok(format!("--- {path}\n+++ {path}\n(no changes)\n")),
         }
     }
@@ -1224,14 +1247,17 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let from_files = self.load_state_files_unlocked(from)?;
         let to_files = self.load_state_files_unlocked(to)?;
-        let renames = detect_path_renames(&from_files, &to_files);
+        let renames = detect_path_renames(
+            &tracked_content_map(&from_files),
+            &tracked_content_map(&to_files),
+        );
         let renamed_from: HashSet<String> = renames.iter().map(|r| r.from.clone()).collect();
         let renamed_to: HashSet<String> = renames.iter().map(|r| r.to.clone()).collect();
         let mut out = String::new();
         for rename in &renames {
             let old = from_files.get(&rename.from).unwrap();
             let new = to_files.get(&rename.to).unwrap();
-            out.push_str(&format_path_rename(rename, old, new));
+            out.push_str(&format_path_rename(rename, &old.content, &new.content));
         }
         let mut paths: HashSet<String> = from_files.keys().cloned().collect();
         paths.extend(to_files.keys().cloned());
@@ -1244,13 +1270,13 @@ impl Repo {
             match (from_files.get(&path), to_files.get(&path)) {
                 (None, Some(new)) => {
                     out.push_str(&format!("--- /dev/null\n+++ {path}\n(new file)\n"));
-                    out.push_str(&content_preview(new));
+                    out.push_str(&content_preview(&new.content));
                 }
                 (Some(_), None) => {
                     out.push_str(&format!("--- {path}\n+++ /dev/null\n(deleted)\n"));
                 }
-                (Some(old), Some(new)) if !content_eq(old, new) => {
-                    out.push_str(&format_diff(&path, old, new)?);
+                (Some(old), Some(new)) if !tracked_eq(old, new) => {
+                    out.push_str(&format_diff(&path, &old.content, &new.content)?);
                 }
                 _ => {}
             }
@@ -1266,14 +1292,13 @@ impl Repo {
 
         let mut new_files = head_files.clone();
         for path in &working_files {
-            let bytes = read_working_bytes(&self.root, path)?;
-            let content = load_working_content(path, bytes);
+            let tracked = load_working_tracked(&self.root, path)?;
             match head_files.get(path) {
-                Some(old) if content_eq(old, &content) => {}
+                Some(old) if tracked_eq(old, &tracked) => {}
                 Some(_) => trace::notice(format!("commit: {path} modified")),
                 None => trace::notice(format!("commit: {path} added")),
             }
-            new_files.insert(path.clone(), content);
+            new_files.insert(path.clone(), tracked);
         }
         for path in head_files.keys().cloned().collect::<Vec<_>>() {
             if !working_files.contains(&path) {
@@ -1435,19 +1460,32 @@ impl Repo {
         for path in index.keys() {
             if !state_paths.contains(path) {
                 let full = self.root.join(path);
-                if full.is_file() {
-                    fs::remove_file(&full).map_err(|e| e.to_string())?;
+                if full.exists() {
+                    remove_working_path(&full)?;
                     trace::notice(format!("materialize: removed {path}"));
                 }
             }
         }
 
-        for (path, content) in &files {
+        for (path, tracked) in &files {
             let full = self.root.join(path);
             if let Some(parent) = full.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            match content {
+            if full.is_symlink() || full.exists() {
+                remove_working_path(&full)?;
+            }
+            if tracked.mode == FileMode::Symlink {
+                if let FileContent::Symlink(link) = &tracked.content {
+                    materialize_symlink(&full, &link.target)?;
+                    trace::notice(format!(
+                        "materialize: wrote {path} (symlink -> {})",
+                        link.target
+                    ));
+                }
+                continue;
+            }
+            match &tracked.content {
                 FileContent::Binary(blob) => {
                     atomic::write_atomic(&full, &blob.bytes)?;
                 }
@@ -1455,9 +1493,11 @@ impl Repo {
                     atomic::write_atomic_text(&full, &content_to_string(other))?;
                 }
             }
+            #[cfg(unix)]
+            set_unix_mode(&full, tracked.mode)?;
             trace::notice(format!(
                 "materialize: wrote {path} ({})",
-                content.display_kind()
+                index_content_kind(tracked)
             ));
         }
 
@@ -1504,17 +1544,20 @@ impl Repo {
 
     fn persist_state(
         &self,
-        files: &HashMap<String, FileContent>,
+        files: &HashMap<String, TrackedFile>,
         message: &str,
         author: &AuthorIdentity,
         parent: Option<StateId>,
         parents: Vec<StateId>,
     ) -> RepoResult<StateId> {
         let store = self.blobs();
-        let mut manifest = HashMap::new();
-        for (path, content) in files {
-            let blob_id = store.write(content)?;
-            manifest.insert(path.clone(), blob_id);
+        let mut manifest = ManifestMap::new();
+        for (path, tracked) in files {
+            let blob_id = store.write(&tracked.content)?;
+            manifest.insert(
+                path.clone(),
+                ManifestEntry::with_mode(blob_id, tracked.mode.clone()),
+            );
         }
         let state_id = hash_manifest(&manifest);
 
@@ -1555,30 +1598,30 @@ impl Repo {
     fn migrate_inline_files(
         &self,
         files: &HashMap<String, FileContent>,
-    ) -> RepoResult<HashMap<String, String>> {
+    ) -> RepoResult<ManifestMap> {
         let store = self.blobs();
-        let mut manifest = HashMap::new();
+        let mut manifest = ManifestMap::new();
         for (path, content) in files {
-            manifest.insert(path.clone(), store.write(content)?);
+            manifest.insert(path.clone(), ManifestEntry::regular(store.write(content)?));
         }
         Ok(manifest)
     }
 
     fn sync_index_to_state(
         &self,
-        files: &HashMap<String, FileContent>,
+        files: &HashMap<String, TrackedFile>,
         state_id: &StateId,
     ) -> RepoResult<()> {
         let mut index: HashMap<String, IndexEntry> =
             read_json(&self.astvcs_dir().join(INDEX_FILE))?;
         let paths: HashSet<String> = files.keys().cloned().collect();
         index.retain(|path, _| paths.contains(path));
-        for (path, content) in files {
+        for (path, tracked) in files {
             index.insert(
                 path.clone(),
                 IndexEntry {
                     state_id: state_id.to_string(),
-                    content_kind: content.display_kind().to_string(),
+                    content_kind: index_content_kind(tracked),
                 },
             );
         }
@@ -1668,7 +1711,7 @@ impl Repo {
     pub fn import_state_manifest(
         &self,
         state_id: &StateId,
-        manifest: &HashMap<String, String>,
+        manifest: &ManifestMap,
     ) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         if hash_manifest(manifest) != *state_id {
@@ -1776,25 +1819,79 @@ impl Repo {
     }
 }
 
-fn content_eq(a: &FileContent, b: &FileContent) -> bool {
-    match (BlobStore::hash_content(a), BlobStore::hash_content(b)) {
-        (Ok(ha), Ok(hb)) => ha == hb,
-        (Err(e), _) | (_, Err(e)) => {
-            trace::warn(format!("content hash failed: {e}"));
-            false
-        }
-    }
-}
-
 fn manifest_unchanged(
-    head: &HashMap<String, FileContent>,
-    working: &HashMap<String, FileContent>,
+    head: &HashMap<String, TrackedFile>,
+    working: &HashMap<String, TrackedFile>,
 ) -> bool {
     if head.len() != working.len() {
         return false;
     }
     head.iter()
-        .all(|(path, content)| working.get(path).is_some_and(|w| content_eq(content, w)))
+        .all(|(path, tracked)| working.get(path).is_some_and(|w| tracked_eq(tracked, w)))
+}
+
+fn tracked_content_map(files: &HashMap<String, TrackedFile>) -> HashMap<String, FileContent> {
+    files
+        .iter()
+        .map(|(k, v)| (k.clone(), v.content.clone()))
+        .collect()
+}
+
+fn index_content_kind(tracked: &TrackedFile) -> String {
+    match tracked.mode {
+        FileMode::Regular => tracked.content.display_kind().to_string(),
+        FileMode::Executable => format!("executable:{}", tracked.content.display_kind()),
+        FileMode::Symlink => "symlink".to_string(),
+    }
+}
+
+fn remove_working_path(path: &Path) -> Result<(), String> {
+    if path.is_symlink() {
+        fs::remove_file(path).map_err(|e| e.to_string())
+    } else if path.is_dir() {
+        Err(format!(
+            "refusing to remove directory at {}",
+            path.display()
+        ))
+    } else {
+        fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
+fn materialize_symlink(path: &Path, target: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, path).map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::symlink_file;
+        if let Err(e) = symlink_file(target, path) {
+            crate::trace::warn(format!(
+                "materialize: could not create symlink at {} -> {target}: {e}; skipped",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn set_unix_mode(path: &Path, mode: FileMode) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+    match mode {
+        FileMode::Executable => {
+            perms.set_mode(perms.mode() | 0o111);
+            fs::set_permissions(path, perms).map_err(|e| e.to_string())?;
+        }
+        FileMode::Regular => {
+            perms.set_mode(perms.mode() & !0o111);
+            fs::set_permissions(path, perms).map_err(|e| e.to_string())?;
+        }
+        FileMode::Symlink => {}
+    }
+    Ok(())
 }
 
 fn is_state_id(s: &str) -> bool {
@@ -1808,12 +1905,14 @@ fn content_to_string(content: &FileContent) -> String {
         FileContent::Binary(_) => {
             panic!("content_to_string called on binary blob; use write_atomic with raw bytes")
         }
+        FileContent::Symlink(blob) => blob.target.clone(),
     }
 }
 
 fn content_preview(content: &FileContent) -> String {
     match content {
         FileContent::Binary(blob) => format!("(binary file, {} bytes)\n", blob.bytes.len()),
+        FileContent::Symlink(blob) => format!("(symlink -> {})\n", blob.target),
         other => {
             let text = content_to_string(other);
             if text.len() > 200 {
@@ -1848,9 +1947,9 @@ fn format_path_rename(
 fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
     if old.is_binary() || new.is_binary() {
         if old.semantic_eq(new) {
-            return "(binary file — unchanged)\n".into();
+            return "(binary file - unchanged)\n".into();
         }
-        return "(binary file — content diff omitted)\n".into();
+        return "(binary file - content diff omitted)\n".into();
     }
     match (old, new) {
         (FileContent::Ast(o), FileContent::Ast(n)) => {
@@ -1902,10 +2001,6 @@ fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> RepoResult<S
     Ok(out)
 }
 
-fn read_working_bytes(root: &Path, rel: &str) -> RepoResult<Vec<u8>> {
-    fs::read(root.join(rel)).map_err(|e| RepoError::from_io("read working file", e))
-}
-
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> RepoResult<T> {
     let text = fs::read_to_string(path)
         .map_err(|e| RepoError::from_io(&format!("read {}", path.display()), e))?;
@@ -1946,7 +2041,7 @@ mod tests {
         assert!(files.contains_key("main.rs"));
         assert!(
             repo.blobs()
-                .contains(&repo.load_manifest(&id).unwrap()["main.rs"])
+                .contains(&repo.load_manifest(&id).unwrap()["main.rs"].blob)
         );
     }
 
@@ -2106,7 +2201,7 @@ mod tests {
         repo.checkout_branch("main").unwrap();
         let merged = repo.merge_branch("feature", "merge").unwrap();
         let files = repo.load_state_files(&merged).unwrap();
-        let text = match &files["main.rs"] {
+        let text = match &files["main.rs"].content {
             FileContent::Ast(g) => unparse(g),
             _ => panic!("expected ast"),
         };
@@ -2134,7 +2229,7 @@ mod tests {
         let files = repo.load_state_files(&merged).unwrap();
         assert!(files.contains_key("lib.rs"));
         assert!(dir.path().join("lib.rs").exists());
-        let main_text = match &files["main.rs"] {
+        let main_text = match &files["main.rs"].content {
             FileContent::Ast(g) => unparse(g),
             _ => panic!("expected ast"),
         };
@@ -2240,7 +2335,7 @@ mod tests {
             )
             .unwrap();
         let files = repo.load_state_files(&merged).unwrap();
-        let text = match &files["main.rs"] {
+        let text = match &files["main.rs"].content {
             FileContent::Ast(g) => unparse(g),
             _ => panic!("expected ast"),
         };
@@ -2274,7 +2369,7 @@ mod tests {
             )
             .unwrap();
         let files = repo.load_state_files(&merged).unwrap();
-        let text = match &files["main.rs"] {
+        let text = match &files["main.rs"].content {
             FileContent::Ast(g) => unparse(g),
             _ => panic!("expected ast"),
         };
@@ -2353,7 +2448,7 @@ mod tests {
             )
             .unwrap();
         let files = repo.load_state_files(&merged).unwrap();
-        let text = match &files["lib.rs"] {
+        let text = match &files["lib.rs"].content {
             FileContent::Ast(g) => unparse(g),
             _ => panic!("expected ast"),
         };
@@ -2713,7 +2808,7 @@ mod tests {
         let files = repo.load_state_files(&v3).unwrap();
         assert!(files.contains_key("extra.txt"));
         assert_eq!(
-            match &files["note.txt"] {
+            match &files["note.txt"].content {
                 FileContent::Text(t) => t.content.as_str(),
                 _ => panic!(),
             },
@@ -2734,7 +2829,7 @@ mod tests {
         assert!(outcome.created);
         let files = repo.load_state_files(&outcome.state_id).unwrap();
         assert_eq!(
-            match &files["note.txt"] {
+            match &files["note.txt"].content {
                 FileContent::Text(t) => t.content.as_str(),
                 _ => panic!(),
             },
@@ -2758,7 +2853,7 @@ mod tests {
         let files = repo.load_state_files(&outcome.state_id).unwrap();
         assert!(!files.contains_key("extra.txt"));
         assert_eq!(
-            match &files["note.txt"] {
+            match &files["note.txt"].content {
                 FileContent::Text(t) => t.content.as_str(),
                 _ => panic!(),
             },
@@ -2863,7 +2958,7 @@ mod tests {
         repo.revert_state(&target, "revert doc").unwrap();
         let head = repo.head_state().unwrap();
         let files = repo.load_state_files(&head).unwrap();
-        let text = match &files["lib.rs"] {
+        let text = match &files["lib.rs"].content {
             FileContent::Ast(g) => unparse(g),
             _ => panic!("expected ast"),
         };
@@ -3391,10 +3486,11 @@ mod tests {
 
         let merged = repo.merge_branch("feature", "merge rename + edit").unwrap();
         let files = repo.load_state_files(&merged).unwrap();
-        let text = match files.get("renamed.rs").unwrap() {
+        let text = match &files.get("renamed.rs").unwrap().content {
             FileContent::Ast(g) => unparse(g),
             FileContent::Text(t) => t.content.clone(),
             FileContent::Binary(_) => panic!("unexpected binary"),
+            FileContent::Symlink(_) => panic!("unexpected symlink"),
         };
         assert!(
             text.contains("42"),
@@ -3464,7 +3560,7 @@ mod tests {
 
         let merged = repo.merge_branch("feature", "merge").unwrap();
         let files = repo.load_state_files(&merged).unwrap();
-        let text = match files.get("dst.txt").unwrap() {
+        let text = match &files.get("dst.txt").unwrap().content {
             FileContent::Text(t) => t.content.clone(),
             _ => panic!(),
         };

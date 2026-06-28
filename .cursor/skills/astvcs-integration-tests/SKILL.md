@@ -69,7 +69,8 @@ assert!(out.status.success());
 - `same_file_demo_disjoint_merge` is the main stress test for same-file alignment heuristics; watch overlapping cases when changing diff/merge.
 - Path rename tests: `path_rename_status_and_diff_integration`, `path_rename_merges_with_independent_content_edit`, `path_rename_conflicts_with_independent_add_at_destination`, `conflicting_path_renames_report_conflict`.
 - Move tests: `move_subtree_and_sibling_payload_edit_merge`, `moved_function_reports_move_not_delete_insert`.
-- Binary tests: `binary_commit_status_and_diff`, `binary_roundtrip_checkout_on_branch`, `binary_merge_add_add_conflict`, `binary_fsck_clean_after_commit`, `binary_push_clone_roundtrip`.
+- Binary tests: `binary_commit_status_and_diff`, `binary_roundtrip_checkout_on_branch`, `binary_merge_add_add_conflict`, `binary_fsck_clean_after_commit`, `binary_push_clone_roundtrip`, `binary_reset_hard_roundtrip`, `binary_diff_state`.
+- Symlink/mode tests: `symlink_commit_and_checkout`, `executable_mode_commit_and_checkout`, `symlink_vs_file_merge_conflict` (all platforms; CI enables Windows symlinks); unit coverage in `store/manifest.rs`, `store/working.rs`, `merge::tracked_symlink_vs_regular_file_conflicts`.
 
 ### What to avoid
 

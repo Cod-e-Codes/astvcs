@@ -34,10 +34,22 @@ pub fn scan_working_files(root: &Path) -> Result<ScanReport, String> {
 
     for result in walker {
         let entry = result.map_err(|e| e.to_string())?;
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() && !file_type.is_symlink() {
             continue;
         }
         let path = entry.path();
+        if file_type.is_symlink() {
+            let rel = path
+                .strip_prefix(root)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.insert(rel);
+            continue;
+        }
         let rel = path
             .strip_prefix(root)
             .map_err(|e| e.to_string())?

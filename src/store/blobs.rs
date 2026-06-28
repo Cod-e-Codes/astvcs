@@ -147,18 +147,6 @@ fn list_blob_ids_recursive(dir: &Path, out: &mut Vec<BlobId>) -> Result<(), Stri
     Ok(())
 }
 
-pub fn hash_manifest(manifest: &std::collections::HashMap<String, BlobId>) -> String {
-    let mut paths: Vec<_> = manifest.keys().collect();
-    paths.sort();
-    let mut hasher = Sha256::new();
-    for path in paths {
-        hasher.update(path.as_bytes());
-        hasher.update([0]);
-        hasher.update(manifest.get(path).unwrap().as_bytes());
-    }
-    hex::encode(hasher.finalize())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,15 +184,5 @@ mod tests {
         let id = store.write(&content).unwrap();
         let loaded = store.read(&id).unwrap();
         assert_eq!(content, loaded);
-    }
-
-    #[test]
-    fn manifest_hash_is_stable() {
-        let mut m = std::collections::HashMap::new();
-        m.insert("a.rs".into(), "abc".into());
-        m.insert("b.py".into(), "def".into());
-        let h1 = hash_manifest(&m);
-        let h2 = hash_manifest(&m);
-        assert_eq!(h1, h2);
     }
 }

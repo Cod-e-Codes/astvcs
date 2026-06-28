@@ -180,7 +180,7 @@ fn handle_state(
             if repo.has_state(&state_id) {
                 return Ok(text_response(409, "state already exists"));
             }
-            let manifest: HashMap<String, String> =
+            let manifest: crate::store::ManifestMap =
                 serde_json::from_slice(body).map_err(|e| e.to_string())?;
             map_repo(repo.import_state_manifest(&state_id, &manifest))?;
             Ok(text_response(201, "created"))

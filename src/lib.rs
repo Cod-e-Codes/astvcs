@@ -13,9 +13,9 @@ pub use diff::{
     diff_graphs, diff_text, rename_targets_conflict, side_path_for_base,
 };
 pub use frontend::{
-    BinaryBlob, FileContent, SourceLanguage, TextBlob, is_binary_payload, load_working_content,
-    parse_language, parse_rust, parse_source, parse_text_or_blob, supported_extensions,
-    supported_special_paths,
+    BinaryBlob, FileContent, SourceLanguage, SymlinkBlob, TextBlob, is_binary_payload,
+    load_working_content, parse_language, parse_rust, parse_source, parse_text_or_blob,
+    supported_extensions, supported_special_paths,
 };
 pub use graph::{AstGraph, Mutation, Node, NodeId, NodeKind, TriviaSlot};
 pub use merge::{
@@ -26,11 +26,12 @@ pub use network::{
     RemoteConfig, add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 pub use store::{
-    AuthorIdentity, BlobId, BlobStore, BranchInfo, CommitOutcome, FileStatus, FsckReport, GcReport,
-    MergePlan, MergeResolution, MergeResolveSide, Repo, RepoConfig, RepoError, RepoErrorKind,
-    RepoResult, RevertOutcome, RevertPlan, StateEntry, StateId, TimelineEntry, WorkingStatus,
-    ancestors, configured_identity, hash_manifest, merge_base, parse_merge_resolution,
-    parse_merge_resolutions, resolve_author_identity, set_identity, walk_history,
+    AuthorIdentity, BlobId, BlobStore, BranchInfo, CommitOutcome, FileMode, FileStatus, FsckReport,
+    GcReport, ManifestEntry, ManifestMap, MergePlan, MergeResolution, MergeResolveSide, Repo,
+    RepoConfig, RepoError, RepoErrorKind, RepoResult, RevertOutcome, RevertPlan, StateEntry,
+    StateId, TimelineEntry, TrackedFile, WorkingStatus, ancestors, configured_identity,
+    hash_manifest, merge_base, parse_merge_resolution, parse_merge_resolutions,
+    resolve_author_identity, set_identity, walk_history,
 };
 pub use trace::{is_verbose, notice, set_verbose, warn};
 pub use unparser::unparse;

@@ -1,5 +1,5 @@
-use crate::frontend::FileContent;
 use crate::store::repo::MergePlan;
+use crate::store::tracked::TrackedFile;
 use crate::trace;
 use std::collections::{HashMap, HashSet};
 
@@ -64,8 +64,8 @@ pub fn parse_merge_resolutions(values: &[String]) -> Result<Vec<MergeResolution>
 
 pub fn apply_merge_resolutions(
     plan: &mut MergePlan,
-    head_files: &HashMap<String, FileContent>,
-    other_files: &HashMap<String, FileContent>,
+    head_files: &HashMap<String, TrackedFile>,
+    other_files: &HashMap<String, TrackedFile>,
     resolutions: &[MergeResolution],
 ) -> Result<(), String> {
     let conflict_paths: HashSet<&str> = plan.conflicts.iter().map(|c| c.path.as_str()).collect();
