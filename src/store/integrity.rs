@@ -1,4 +1,5 @@
 use crate::store::atomic;
+use crate::store::error::{RepoError, RepoResult};
 use crate::store::reachability::{Reachability, reachable_from_tips};
 use crate::store::repo::IndexEntry;
 use crate::store::{Repo, StateId};
@@ -94,16 +95,20 @@ impl FsckReport {
 }
 
 impl Repo {
-    fn reachability_unlocked(&self) -> Result<Reachability, String> {
+    fn reachability_unlocked(&self) -> RepoResult<Reachability> {
         let tips = self.ref_tips_unlocked()?;
         reachable_from_tips(
             tips,
-            |id| self.load_timeline_entry_unlocked(id),
-            |id| self.load_manifest_unlocked(id),
+            |id| {
+                self.load_timeline_entry_unlocked(id)
+                    .map_err(|e| e.to_string())
+            },
+            |id| self.load_manifest_unlocked(id).map_err(|e| e.to_string()),
         )
+        .map_err(RepoError::from_message)
     }
 
-    fn ref_tips_unlocked(&self) -> Result<Vec<StateId>, String> {
+    fn ref_tips_unlocked(&self) -> RepoResult<Vec<StateId>> {
         let mut tips = Vec::new();
         for branch in self.list_branches_unlocked()? {
             tips.push(branch.state_id);
@@ -115,27 +120,33 @@ impl Repo {
         Ok(tips)
     }
 
-    fn list_remote_ref_tips_unlocked(&self) -> Result<Vec<StateId>, String> {
+    fn list_remote_ref_tips_unlocked(&self) -> RepoResult<Vec<StateId>> {
         let mut tips = Vec::new();
         let remotes_dir = self.astvcs_dir().join("refs/remotes");
         if !remotes_dir.is_dir() {
             return Ok(tips);
         }
-        for remote_entry in fs::read_dir(&remotes_dir).map_err(|e| e.to_string())? {
-            let remote_entry = remote_entry.map_err(|e| e.to_string())?;
+        for remote_entry in
+            fs::read_dir(&remotes_dir).map_err(|e| RepoError::from_io("read remotes", e))?
+        {
+            let remote_entry =
+                remote_entry.map_err(|e| RepoError::from_io("read remote entry", e))?;
             if !remote_entry
                 .file_type()
-                .map_err(|e| e.to_string())?
+                .map_err(|e| RepoError::from_io("remote file type", e))?
                 .is_dir()
             {
                 continue;
             }
             let remote_name = remote_entry.file_name().to_string_lossy().to_string();
-            for branch_entry in fs::read_dir(remote_entry.path()).map_err(|e| e.to_string())? {
-                let branch_entry = branch_entry.map_err(|e| e.to_string())?;
+            for branch_entry in fs::read_dir(remote_entry.path())
+                .map_err(|e| RepoError::from_io("read remote branches", e))?
+            {
+                let branch_entry =
+                    branch_entry.map_err(|e| RepoError::from_io("read branch entry", e))?;
                 if !branch_entry
                     .file_type()
-                    .map_err(|e| e.to_string())?
+                    .map_err(|e| RepoError::from_io("branch file type", e))?
                     .is_file()
                 {
                     continue;
@@ -157,7 +168,7 @@ impl Repo {
     }
 
     /// Remove unreachable blobs. Dry-run unless `prune` is true.
-    pub fn gc(&self, prune: bool) -> Result<GcReport, String> {
+    pub fn gc(&self, prune: bool) -> RepoResult<GcReport> {
         let _lock = self.repo_lock()?;
         let reach = self.reachability_unlocked()?;
         let store = self.blobs_store();
@@ -185,7 +196,7 @@ impl Repo {
     }
 
     /// Check repository consistency without modifying anything.
-    pub fn fsck(&self) -> Result<FsckReport, String> {
+    pub fn fsck(&self) -> RepoResult<FsckReport> {
         let _lock = self.repo_lock()?;
         let mut findings = Vec::new();
 
@@ -241,16 +252,16 @@ impl Repo {
     }
 }
 
-fn read_index(repo: &Repo) -> Result<HashMap<String, IndexEntry>, String> {
+fn read_index(repo: &Repo) -> RepoResult<HashMap<String, IndexEntry>> {
     let path = repo.astvcs_dir().join("index.json");
     if !path.is_file() {
         return Ok(HashMap::new());
     }
-    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+    let text = fs::read_to_string(&path).map_err(|e| RepoError::from_io("read index", e))?;
+    serde_json::from_str(&text).map_err(|e| RepoError::other(format!("parse index: {e}")))
 }
 
-fn check_head_branch(repo: &Repo) -> Result<Vec<FsckFinding>, String> {
+fn check_head_branch(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     let mut findings = Vec::new();
     let head_path = repo.astvcs_dir().join("HEAD");
     let text = fs::read_to_string(&head_path).map_err(|e| e.to_string())?;
@@ -268,7 +279,7 @@ fn check_head_branch(repo: &Repo) -> Result<Vec<FsckFinding>, String> {
     Ok(findings)
 }
 
-fn check_refs(repo: &Repo) -> Result<Vec<FsckFinding>, String> {
+fn check_refs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     let mut findings = Vec::new();
     for branch in repo.list_branches_unlocked()? {
         if !repo.has_timeline_unlocked(&branch.state_id) {
@@ -319,7 +330,7 @@ fn check_refs(repo: &Repo) -> Result<Vec<FsckFinding>, String> {
     Ok(findings)
 }
 
-fn check_timeline_and_blobs(repo: &Repo) -> Result<Vec<FsckFinding>, String> {
+fn check_timeline_and_blobs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     let mut findings = Vec::new();
     let timeline_dir = repo.astvcs_dir().join("timeline");
     if !timeline_dir.is_dir() {
@@ -393,9 +404,9 @@ fn check_index(
     Ok(findings)
 }
 
-fn check_orphan_temps(root: &Path) -> Result<Vec<FsckFinding>, String> {
+fn check_orphan_temps(root: &Path) -> RepoResult<Vec<FsckFinding>> {
     let mut findings = Vec::new();
-    for path in atomic::find_orphan_temp_files(root)? {
+    for path in atomic::find_orphan_temp_files(root).map_err(RepoError::from_message)? {
         findings.push(FsckFinding {
             kind: FsckKind::OrphanTempFile,
             detail: path.display().to_string(),
@@ -426,7 +437,7 @@ mod tests {
 
     fn sample_repo() -> (TempDir, Repo) {
         let dir = TempDir::new().unwrap();
-        let repo = Repo::init(dir.path()).unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
         (dir, repo)
     }
 

@@ -1,3 +1,4 @@
+use super::error::{RepoError, RepoResult};
 use std::cell::{Cell, RefCell};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
@@ -28,7 +29,7 @@ pub struct RepoLockGuard {
 }
 
 impl RepoLockGuard {
-    pub fn acquire(astvcs_dir: &Path) -> Result<Self, String> {
+    pub fn acquire(astvcs_dir: &Path) -> RepoResult<Self> {
         let path = astvcs_dir.join(LOCK_FILE);
         if LOCK_DEPTH.with(|depth| depth.get()) > 0 {
             LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
@@ -47,7 +48,7 @@ impl RepoLockGuard {
     }
 }
 
-fn open_lock_file(path: &Path) -> Result<(), String> {
+fn open_lock_file(path: &Path) -> RepoResult<()> {
     LOCK_STATE.with(|state| {
         let mut state = state.borrow_mut();
         let need_new = match state.as_ref() {
@@ -61,7 +62,8 @@ fn open_lock_file(path: &Path) -> Result<(), String> {
             let _ = old.unlock();
         }
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| RepoError::from_io("create lock dir", e))?;
         }
         let file = OpenOptions::new()
             .read(true)
@@ -69,30 +71,33 @@ fn open_lock_file(path: &Path) -> Result<(), String> {
             .create(true)
             .truncate(false)
             .open(path)
-            .map_err(|e| format!("open lock file {}: {e}", path.display()))?;
+            .map_err(|e| RepoError::other(format!("open lock file {}: {e}", path.display())))?;
         *state = Some((path.to_path_buf(), file));
         Ok(())
     })
 }
 
-fn try_lock_cached(path: &Path) -> Result<(), String> {
+fn try_lock_cached(path: &Path) -> RepoResult<()> {
     LOCK_STATE.with(|state| {
         let state = state.borrow();
         let Some((stored, file)) = state.as_ref() else {
-            return Err(format!("open lock file {}: missing handle", path.display()));
+            return Err(RepoError::other(format!(
+                "open lock file {}: missing handle",
+                path.display()
+            )));
         };
         if stored != path {
-            return Err(format!(
+            return Err(RepoError::other(format!(
                 "open lock file {}: path mismatch with cached handle",
                 path.display()
-            ));
+            )));
         }
         file.try_lock().map_err(|err| match err {
-            TryLockError::WouldBlock => format!(
+            TryLockError::WouldBlock => RepoError::lock_contention(format!(
                 "repository is locked by another process; cannot acquire {}",
                 path.display()
-            ),
-            TryLockError::Error(e) => format!("lock {}: {e}", path.display()),
+            )),
+            TryLockError::Error(e) => RepoError::other(format!("lock {}: {e}", path.display())),
         })
     })
 }

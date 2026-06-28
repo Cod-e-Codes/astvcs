@@ -7,7 +7,9 @@ use crate::intent;
 use crate::merge::{MergeConflict, PathMergeConflict, PathMergeOutcome, merge_path};
 use crate::store::atomic::{self, write_atomic_json, write_atomic_text};
 use crate::store::blobs::{BlobStore, hash_manifest};
+use crate::store::error::{RepoError, RepoResult};
 use crate::store::history::{merge_base, walk_history};
+use crate::store::identity::{AuthorIdentity, resolve_author_identity};
 use crate::store::lock::{self, RepoLockGuard};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
 use crate::trace;
@@ -97,6 +99,10 @@ pub struct TimelineEntry {
     pub parents: Vec<StateId>,
     pub message: String,
     pub timestamp: String,
+    #[serde(default)]
+    pub author_name: String,
+    #[serde(default)]
+    pub author_email: String,
     #[serde(default)]
     pub manifest: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -238,7 +244,7 @@ impl Repo {
     ///
     /// Reentrant on the same thread. Stray atomic-write temp files are removed
     /// on the outermost acquisition.
-    pub fn repo_lock(&self) -> Result<RepoLockGuard, String> {
+    pub fn repo_lock(&self) -> RepoResult<RepoLockGuard> {
         let outer = !lock::lock_held();
         let guard = RepoLockGuard::acquire(&self.astvcs_dir())?;
         if outer {
@@ -247,23 +253,33 @@ impl Repo {
         Ok(guard)
     }
 
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub fn open(path: impl AsRef<Path>) -> RepoResult<Self> {
         let root = path.as_ref().to_path_buf();
         if !root.join(ASTVCS_DIR).is_dir() {
-            return Err(format!("not an astvcs repository: {}", root.display()));
+            return Err(RepoError::not_found(format!(
+                "not an astvcs repository: {}",
+                root.display()
+            )));
         }
         Ok(Self { root })
     }
 
-    pub fn init(path: impl AsRef<Path>) -> Result<Self, String> {
+    /// Initialize a repository and set default author identity (for tests and tooling).
+    pub fn init_with_identity(path: impl AsRef<Path>) -> RepoResult<Self> {
+        let repo = Self::init(path)?;
+        super::identity::set_identity(&repo, "Test User", "test@example.com", false)?;
+        Ok(repo)
+    }
+
+    pub fn init(path: impl AsRef<Path>) -> RepoResult<Self> {
         let root = path.as_ref().to_path_buf();
         let astvcs = root.join(ASTVCS_DIR);
         if astvcs.exists() {
-            return Err("repository already exists".into());
+            return Err(RepoError::already_exists("repository already exists"));
         }
-        fs::create_dir_all(astvcs.join("refs/heads")).map_err(|e| e.to_string())?;
-        fs::create_dir_all(astvcs.join("states")).map_err(|e| e.to_string())?;
-        fs::create_dir_all(astvcs.join("timeline")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(astvcs.join("refs/heads")).map_err(|e| RepoError::from_io("init", e))?;
+        fs::create_dir_all(astvcs.join("states")).map_err(|e| RepoError::from_io("init", e))?;
+        fs::create_dir_all(astvcs.join("timeline")).map_err(|e| RepoError::from_io("init", e))?;
         BlobStore::new(&astvcs).ensure_dirs()?;
 
         write_atomic_json(
@@ -288,6 +304,8 @@ impl Repo {
             parents: vec![],
             message: "initial empty state".into(),
             timestamp: now_iso(),
+            author_name: String::new(),
+            author_email: String::new(),
             manifest: HashMap::new(),
             files: None,
         };
@@ -307,7 +325,7 @@ impl Repo {
         Ok(Self { root })
     }
 
-    fn scan_working(&self) -> Result<HashSet<String>, String> {
+    fn scan_working(&self) -> RepoResult<HashSet<String>> {
         let report = walk::scan_working_files(&self.root)?;
         for skip in &report.skipped {
             trace::warn(format!("scan: skipped {} ({})", skip.path, skip.reason));
@@ -360,7 +378,7 @@ impl Repo {
         self.blobs()
     }
 
-    pub fn head_branch(&self) -> Result<Option<String>, String> {
+    pub fn head_branch(&self) -> RepoResult<Option<String>> {
         let _lock = self.repo_lock()?;
         match self.read_head_target()? {
             HeadTarget::Branch(name) => Ok(Some(name)),
@@ -368,12 +386,12 @@ impl Repo {
         }
     }
 
-    pub fn is_detached(&self) -> Result<bool, String> {
+    pub fn is_detached(&self) -> RepoResult<bool> {
         let _lock = self.repo_lock()?;
         Ok(matches!(self.read_head_target()?, HeadTarget::Detached(_)))
     }
 
-    pub fn head_state(&self) -> Result<StateId, String> {
+    pub fn head_state(&self) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         match self.read_head_target()? {
             HeadTarget::Branch(name) => self.read_branch_ref(&name),
@@ -381,23 +399,23 @@ impl Repo {
         }
     }
 
-    pub fn branch_state(&self, branch: &str) -> Result<StateId, String> {
+    pub fn branch_state(&self, branch: &str) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         self.read_branch_ref(branch)
     }
 
-    pub(crate) fn read_branch_ref(&self, branch: &str) -> Result<StateId, String> {
+    pub(crate) fn read_branch_ref(&self, branch: &str) -> RepoResult<StateId> {
         let text = fs::read_to_string(self.astvcs_dir().join("refs/heads").join(branch))
             .map_err(|e| e.to_string())?;
         Ok(text.trim().to_string())
     }
 
-    pub fn list_branches(&self) -> Result<Vec<BranchInfo>, String> {
+    pub fn list_branches(&self) -> RepoResult<Vec<BranchInfo>> {
         let _lock = self.repo_lock()?;
         self.list_branches_unlocked()
     }
 
-    pub(crate) fn list_branches_unlocked(&self) -> Result<Vec<BranchInfo>, String> {
+    pub(crate) fn list_branches_unlocked(&self) -> RepoResult<Vec<BranchInfo>> {
         let dir = self.astvcs_dir().join("refs/heads");
         let mut branches = Vec::new();
         if !dir.is_dir() {
@@ -415,11 +433,13 @@ impl Repo {
         Ok(branches)
     }
 
-    pub fn create_branch(&self, name: &str, from: Option<&str>) -> Result<(), String> {
+    pub fn create_branch(&self, name: &str, from: Option<&str>) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         let ref_path = self.astvcs_dir().join("refs/heads").join(name);
         if ref_path.exists() {
-            return Err(format!("branch already exists: {name}"));
+            return Err(RepoError::already_exists(format!(
+                "branch already exists: {name}"
+            )));
         }
         let state = match from {
             Some(b) => self.read_branch_ref(b)?,
@@ -431,32 +451,34 @@ impl Repo {
     }
 
     /// Remove a branch ref. States remain in the store; only the named ref is deleted.
-    pub fn remove_branch(&self, name: &str) -> Result<(), String> {
+    pub fn remove_branch(&self, name: &str) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         let ref_path = self.astvcs_dir().join("refs/heads").join(name);
         if !ref_path.exists() {
-            return Err(format!("branch not found: {name}"));
+            return Err(RepoError::not_found(format!("branch not found: {name}")));
         }
         if self.head_branch_unlocked()? == Some(name.to_string()) {
-            return Err(format!("cannot remove the checked-out branch: {name}"));
+            return Err(RepoError::branch_guard(format!(
+                "cannot remove the checked-out branch: {name}"
+            )));
         }
         if self.list_branches_unlocked()?.len() <= 1 {
-            return Err("cannot remove the last branch".into());
+            return Err(RepoError::branch_guard("cannot remove the last branch"));
         }
         fs::remove_file(ref_path).map_err(|e| e.to_string())?;
         trace::notice(format!("branch: removed {name}"));
         Ok(())
     }
 
-    pub fn checkout_branch(&self, name: &str) -> Result<(), String> {
+    pub fn checkout_branch(&self, name: &str) -> RepoResult<()> {
         self.checkout_branch_with_force(name, false)
     }
 
-    pub fn checkout_branch_with_force(&self, name: &str, force: bool) -> Result<(), String> {
+    pub fn checkout_branch_with_force(&self, name: &str, force: bool) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         let ref_path = self.astvcs_dir().join("refs/heads").join(name);
         if !ref_path.exists() {
-            return Err(format!("branch not found: {name}"));
+            return Err(RepoError::not_found(format!("branch not found: {name}")));
         }
         let prior_branch = self.head_branch_unlocked()?;
         let prior_head = self.head_state_unlocked()?;
@@ -472,7 +494,7 @@ impl Repo {
         Ok(())
     }
 
-    pub fn load_manifest(&self, state_id: &StateId) -> Result<HashMap<String, String>, String> {
+    pub fn load_manifest(&self, state_id: &StateId) -> RepoResult<HashMap<String, String>> {
         let _lock = self.repo_lock()?;
         self.load_manifest_unlocked(state_id)
     }
@@ -480,7 +502,7 @@ impl Repo {
     pub(crate) fn load_manifest_unlocked(
         &self,
         state_id: &StateId,
-    ) -> Result<HashMap<String, String>, String> {
+    ) -> RepoResult<HashMap<String, String>> {
         let path = self
             .astvcs_dir()
             .join("states")
@@ -500,10 +522,7 @@ impl Repo {
         Ok(entry.manifest)
     }
 
-    pub fn load_state_files(
-        &self,
-        state_id: &StateId,
-    ) -> Result<HashMap<String, FileContent>, String> {
+    pub fn load_state_files(&self, state_id: &StateId) -> RepoResult<HashMap<String, FileContent>> {
         let _lock = self.repo_lock()?;
         self.load_state_files_unlocked(state_id)
     }
@@ -511,7 +530,7 @@ impl Repo {
     fn load_state_files_unlocked(
         &self,
         state_id: &StateId,
-    ) -> Result<HashMap<String, FileContent>, String> {
+    ) -> RepoResult<HashMap<String, FileContent>> {
         let manifest = self.load_manifest_unlocked(state_id)?;
         let store = self.blobs();
         let mut files = HashMap::new();
@@ -521,7 +540,7 @@ impl Repo {
         Ok(files)
     }
 
-    pub fn load_timeline_entry(&self, state_id: &StateId) -> Result<TimelineEntry, String> {
+    pub fn load_timeline_entry(&self, state_id: &StateId) -> RepoResult<TimelineEntry> {
         let _lock = self.repo_lock()?;
         self.load_timeline_entry_unlocked(state_id)
     }
@@ -529,7 +548,7 @@ impl Repo {
     pub(crate) fn load_timeline_entry_unlocked(
         &self,
         state_id: &StateId,
-    ) -> Result<TimelineEntry, String> {
+    ) -> RepoResult<TimelineEntry> {
         let path = self
             .astvcs_dir()
             .join("timeline")
@@ -537,18 +556,22 @@ impl Repo {
         read_json(&path)
     }
 
-    pub fn history(&self, limit: usize) -> Result<Vec<TimelineEntry>, String> {
+    pub fn history(&self, limit: usize) -> RepoResult<Vec<TimelineEntry>> {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
-        walk_history(&head, limit, |id| self.load_timeline_entry_unlocked(id))
+        walk_history(&head, limit, |id| {
+            self.load_timeline_entry_unlocked(id)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(RepoError::from_message)
     }
 
-    pub fn status(&self) -> Result<WorkingStatus, String> {
+    pub fn status(&self) -> RepoResult<WorkingStatus> {
         let _lock = self.repo_lock()?;
         self.status_unlocked()
     }
 
-    fn status_unlocked(&self) -> Result<WorkingStatus, String> {
+    fn status_unlocked(&self) -> RepoResult<WorkingStatus> {
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
         let index: HashMap<String, IndexEntry> = read_json(&self.astvcs_dir().join(INDEX_FILE))?;
@@ -593,7 +616,7 @@ impl Repo {
         Ok(WorkingStatus { entries })
     }
 
-    pub fn diff_working(&self, path: &str) -> Result<String, String> {
+    pub fn diff_working(&self, path: &str) -> RepoResult<String> {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
@@ -619,12 +642,12 @@ impl Repo {
     }
 
     /// Resolve a branch name, remote-tracking ref, or 64-character state id.
-    pub fn resolve_state_ref(&self, reference: &str) -> Result<StateId, String> {
+    pub fn resolve_state_ref(&self, reference: &str) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         self.resolve_state_ref_unlocked(reference)
     }
 
-    fn resolve_state_ref_unlocked(&self, reference: &str) -> Result<StateId, String> {
+    fn resolve_state_ref_unlocked(&self, reference: &str) -> RepoResult<StateId> {
         if is_state_id(reference) {
             self.load_timeline_entry_unlocked(&reference.to_string())?;
             trace::notice(format!("resolved state {reference}"));
@@ -642,16 +665,17 @@ impl Repo {
             trace::notice(format!("resolved remote ref {reference} -> state {id}"));
             return Ok(id);
         }
-        Err(format!("unknown branch or state: {reference}"))
+        Err(RepoError::unknown_ref(reference))
     }
 
     /// Lowest common ancestor of two branch names or state ids.
-    pub fn merge_base_refs(&self, left: &str, right: &str) -> Result<StateId, String> {
+    pub fn merge_base_refs(&self, left: &str, right: &str) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         let left_id = self.resolve_state_ref_unlocked(left)?;
         let right_id = self.resolve_state_ref_unlocked(right)?;
         let base = merge_base(&left_id, &right_id, |id| {
             self.load_timeline_entry_unlocked(id)
+                .map_err(|e| e.to_string())
         })?;
         trace::notice(format!("merge-base: {left_id} + {right_id} -> {base}"));
         Ok(base)
@@ -663,7 +687,7 @@ impl Repo {
         left: &StateId,
         right: &StateId,
         path: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> RepoResult<String> {
         let _lock = self.repo_lock()?;
         trace::notice(format!(
             "diff three-way: base={base} left={left} right={right}{}",
@@ -679,7 +703,7 @@ impl Repo {
                     && !left_files.contains_key(p)
                     && !right_files.contains_key(p)
                 {
-                    return Err(format!("path not tracked in base, left, or right: {p}"));
+                    return Err(format!("path not tracked in base, left, or right: {p}").into());
                 }
                 vec![p.to_string()]
             }
@@ -733,19 +757,22 @@ impl Repo {
         Ok(out)
     }
 
-    pub fn plan_merge(&self, branch: &str) -> Result<MergePlan, String> {
+    pub fn plan_merge(&self, branch: &str) -> RepoResult<MergePlan> {
         let _lock = self.repo_lock()?;
         self.plan_merge_unlocked(branch)
     }
 
-    fn plan_merge_unlocked(&self, branch: &str) -> Result<MergePlan, String> {
+    fn plan_merge_unlocked(&self, branch: &str) -> RepoResult<MergePlan> {
         let head = self.head_state_unlocked()?;
         let other = self.read_branch_ref(branch)?;
         if head == other {
             return Err("already up to date".into());
         }
 
-        let base_id = merge_base(&head, &other, |id| self.load_timeline_entry_unlocked(id))?;
+        let base_id = merge_base(&head, &other, |id| {
+            self.load_timeline_entry_unlocked(id)
+                .map_err(|e| e.to_string())
+        })?;
         trace::notice(format!(
             "merge plan: base={base_id} head={head} other={other}"
         ));
@@ -933,15 +960,17 @@ impl Repo {
         })
     }
 
-    pub fn plan_revert(&self, target_id: &StateId) -> Result<RevertPlan, String> {
+    pub fn plan_revert(&self, target_id: &StateId) -> RepoResult<RevertPlan> {
         let _lock = self.repo_lock()?;
         self.plan_revert_unlocked(target_id)
     }
 
-    fn plan_revert_unlocked(&self, target_id: &StateId) -> Result<RevertPlan, String> {
+    fn plan_revert_unlocked(&self, target_id: &StateId) -> RepoResult<RevertPlan> {
         let entry = self.load_timeline_entry_unlocked(target_id)?;
         if entry.parents.len() > 1 {
-            return Err(format!("cannot revert merge state {target_id}"));
+            return Err(RepoError::revert_precondition(format!(
+                "cannot revert merge state {target_id}"
+            )));
         }
         let parent_id = match entry
             .parent
@@ -949,14 +978,18 @@ impl Repo {
             .or_else(|| entry.parents.first().cloned())
         {
             Some(id) => id,
-            None => return Err(format!("cannot revert root state {target_id}")),
+            None => {
+                return Err(RepoError::revert_precondition(format!(
+                    "cannot revert root state {target_id}"
+                )));
+            }
         };
 
         let head = self.head_state_unlocked()?;
         if !self.is_ancestor_of_unlocked(target_id, &head)? {
-            return Err(format!(
+            return Err(RepoError::revert_precondition(format!(
                 "state {target_id} is not an ancestor of HEAD {head}"
-            ));
+            )));
         }
 
         trace::notice(format!(
@@ -1021,7 +1054,7 @@ impl Repo {
         })
     }
 
-    pub fn revert_state(&self, reference: &str, message: &str) -> Result<RevertOutcome, String> {
+    pub fn revert_state(&self, reference: &str, message: &str) -> RepoResult<RevertOutcome> {
         self.revert_state_with_force(reference, message, false)
     }
 
@@ -1030,18 +1063,18 @@ impl Repo {
         reference: &str,
         message: &str,
         force: bool,
-    ) -> Result<RevertOutcome, String> {
+    ) -> RepoResult<RevertOutcome> {
         let _lock = self.repo_lock()?;
         let target_id = self.resolve_state_ref_unlocked(reference)?;
         let plan = self.plan_revert_unlocked(&target_id)?;
         if !plan.is_clean() {
             trace::warn("revert: aborted due to conflicts");
-            return Err(plan.format_conflicts());
+            return Err(RepoError::revert_conflict(plan.format_conflicts()));
         }
         self.finish_revert(&plan, message, force)
     }
 
-    pub fn revert_state_dry_run(&self, reference: &str) -> Result<RevertPlan, String> {
+    pub fn revert_state_dry_run(&self, reference: &str) -> RepoResult<RevertPlan> {
         let _lock = self.repo_lock()?;
         let target_id = self.resolve_state_ref_unlocked(reference)?;
         self.plan_revert_unlocked(&target_id)
@@ -1052,7 +1085,7 @@ impl Repo {
         plan: &RevertPlan,
         message: &str,
         force: bool,
-    ) -> Result<RevertOutcome, String> {
+    ) -> RepoResult<RevertOutcome> {
         let materialize_opts = MaterializeOptions::new("revert").force(force);
         let head = plan.head_id.clone();
         let head_files = self.load_state_files_unlocked(&head)?;
@@ -1093,9 +1126,11 @@ impl Repo {
         }
 
         let clobbered = self.materialize_guard(&materialize_opts)?;
+        let author = resolve_author_identity(self)?;
         let state_id = self.persist_state(
             &plan.reverted_files,
             message,
+            &author,
             Some(head.clone()),
             vec![head.clone()],
         )?;
@@ -1120,7 +1155,7 @@ impl Repo {
         })
     }
 
-    pub fn reset(&self, reference: &str, soft: bool, force: bool) -> Result<StateId, String> {
+    pub fn reset(&self, reference: &str, soft: bool, force: bool) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         let target = self.resolve_state_ref_unlocked(reference)?;
         let prior_head = self.head_state_unlocked()?;
@@ -1163,12 +1198,7 @@ impl Repo {
         Ok(target)
     }
 
-    pub fn diff_state_path(
-        &self,
-        from: &StateId,
-        to: &StateId,
-        path: &str,
-    ) -> Result<String, String> {
+    pub fn diff_state_path(&self, from: &StateId, to: &StateId, path: &str) -> RepoResult<String> {
         let _lock = self.repo_lock()?;
         let from_files = self.load_state_files_unlocked(from)?;
         let to_files = self.load_state_files_unlocked(to)?;
@@ -1190,7 +1220,7 @@ impl Repo {
         }
     }
 
-    pub fn diff_states(&self, from: &StateId, to: &StateId) -> Result<String, String> {
+    pub fn diff_states(&self, from: &StateId, to: &StateId) -> RepoResult<String> {
         let _lock = self.repo_lock()?;
         let from_files = self.load_state_files_unlocked(from)?;
         let to_files = self.load_state_files_unlocked(to)?;
@@ -1228,7 +1258,7 @@ impl Repo {
         Ok(out)
     }
 
-    pub fn commit(&self, message: &str) -> Result<CommitOutcome, String> {
+    pub fn commit(&self, message: &str) -> RepoResult<CommitOutcome> {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
@@ -1260,7 +1290,9 @@ impl Repo {
             });
         }
 
-        let state_id = self.persist_state(&new_files, message, Some(head.clone()), vec![head])?;
+        let author = resolve_author_identity(self)?;
+        let state_id =
+            self.persist_state(&new_files, message, &author, Some(head.clone()), vec![head])?;
         self.sync_index_to_state(&new_files, &state_id)?;
         match self.read_head_target()? {
             HeadTarget::Branch(branch) => {
@@ -1279,7 +1311,7 @@ impl Repo {
         })
     }
 
-    pub fn merge_branch(&self, branch: &str, message: &str) -> Result<StateId, String> {
+    pub fn merge_branch(&self, branch: &str, message: &str) -> RepoResult<StateId> {
         self.merge_branch_with_resolutions(branch, message, &[])
     }
 
@@ -1288,7 +1320,7 @@ impl Repo {
         branch: &str,
         message: &str,
         resolutions: &[MergeResolution],
-    ) -> Result<StateId, String> {
+    ) -> RepoResult<StateId> {
         self.merge_branch_with_resolutions_force(branch, message, resolutions, false)
     }
 
@@ -1298,12 +1330,12 @@ impl Repo {
         message: &str,
         resolutions: &[MergeResolution],
         force: bool,
-    ) -> Result<StateId, String> {
+    ) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         let plan = self.prepare_merge_unlocked(branch, resolutions)?;
         if !plan.is_clean() {
             trace::warn("merge: aborted due to conflicts");
-            return Err(plan.format_conflicts());
+            return Err(RepoError::merge_conflict(plan.format_conflicts()));
         }
         self.finish_merge(&plan, message, force)
     }
@@ -1312,7 +1344,7 @@ impl Repo {
         &self,
         branch: &str,
         resolutions: &[MergeResolution],
-    ) -> Result<MergePlan, String> {
+    ) -> RepoResult<MergePlan> {
         let mut plan = self.plan_merge_unlocked(branch)?;
         if !resolutions.is_empty() {
             let head_files = self.load_state_files_unlocked(&plan.head_id)?;
@@ -1326,26 +1358,23 @@ impl Repo {
         &self,
         branch: &str,
         resolutions: &[MergeResolution],
-    ) -> Result<MergePlan, String> {
+    ) -> RepoResult<MergePlan> {
         let _lock = self.repo_lock()?;
         self.prepare_merge_unlocked(branch, resolutions)
     }
 
-    fn finish_merge(
-        &self,
-        plan: &MergePlan,
-        message: &str,
-        force: bool,
-    ) -> Result<StateId, String> {
+    fn finish_merge(&self, plan: &MergePlan, message: &str, force: bool) -> RepoResult<StateId> {
         let head = plan.head_id.clone();
         let other = plan.other_id.clone();
         let merged_files = plan.merged_files.clone();
         let materialize_opts = MaterializeOptions::new("merge").force(force);
         let clobbered = self.materialize_guard(&materialize_opts)?;
 
+        let author = resolve_author_identity(self)?;
         let state_id = self.persist_state(
             &merged_files,
             message,
+            &author,
             None,
             vec![head.clone(), other.clone()],
         )?;
@@ -1362,7 +1391,7 @@ impl Repo {
         Ok(state_id)
     }
 
-    fn clobbered_paths(&self) -> Result<Vec<String>, String> {
+    fn clobbered_paths(&self) -> RepoResult<Vec<String>> {
         Ok(self
             .status_unlocked()?
             .entries
@@ -1372,7 +1401,7 @@ impl Repo {
             .collect())
     }
 
-    fn materialize_guard(&self, opts: &MaterializeOptions<'_>) -> Result<Vec<String>, String> {
+    fn materialize_guard(&self, opts: &MaterializeOptions<'_>) -> RepoResult<Vec<String>> {
         if self.working_tree_is_clean_unlocked()? {
             return Ok(Vec::new());
         }
@@ -1382,7 +1411,7 @@ impl Repo {
         if opts.allow_dirty {
             return Ok(Vec::new());
         }
-        Err(opts.refuse_message.into())
+        Err(RepoError::dirty_working_tree(opts.refuse_message))
     }
 
     fn emit_materialize_clobber_warnings(&self, clobbered: &[String], command: &str) {
@@ -1398,7 +1427,7 @@ impl Repo {
         state_id: &StateId,
         clobbered: Vec<String>,
         opts: &MaterializeOptions<'_>,
-    ) -> Result<(), String> {
+    ) -> RepoResult<()> {
         let files = self.load_state_files_unlocked(state_id)?;
         let state_paths: HashSet<String> = files.keys().cloned().collect();
 
@@ -1434,11 +1463,11 @@ impl Repo {
         Ok(())
     }
 
-    pub fn checkout_state(&self, state_id: &StateId) -> Result<(), String> {
+    pub fn checkout_state(&self, state_id: &StateId) -> RepoResult<()> {
         self.checkout_state_with_force(state_id, false)
     }
 
-    pub fn checkout_state_with_force(&self, state_id: &StateId, force: bool) -> Result<(), String> {
+    pub fn checkout_state_with_force(&self, state_id: &StateId, force: bool) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         self.load_timeline_entry_unlocked(state_id)?;
         let prior_head = self.head_state_unlocked()?;
@@ -1453,12 +1482,12 @@ impl Repo {
         Ok(())
     }
 
-    pub fn working_tree_is_clean(&self) -> Result<bool, String> {
+    pub fn working_tree_is_clean(&self) -> RepoResult<bool> {
         let _lock = self.repo_lock()?;
         self.working_tree_is_clean_unlocked()
     }
 
-    fn working_tree_is_clean_unlocked(&self) -> Result<bool, String> {
+    fn working_tree_is_clean_unlocked(&self) -> RepoResult<bool> {
         Ok(self
             .status_unlocked()?
             .entries
@@ -1470,9 +1499,10 @@ impl Repo {
         &self,
         files: &HashMap<String, FileContent>,
         message: &str,
+        author: &AuthorIdentity,
         parent: Option<StateId>,
         parents: Vec<StateId>,
-    ) -> Result<StateId, String> {
+    ) -> RepoResult<StateId> {
         let store = self.blobs();
         let mut manifest = HashMap::new();
         for (path, content) in files {
@@ -1496,6 +1526,8 @@ impl Repo {
             parents,
             message: message.to_string(),
             timestamp: now_iso(),
+            author_name: author.name.clone(),
+            author_email: author.email.clone(),
             manifest: manifest.clone(),
             files: None,
         };
@@ -1516,7 +1548,7 @@ impl Repo {
     fn migrate_inline_files(
         &self,
         files: &HashMap<String, FileContent>,
-    ) -> Result<HashMap<String, String>, String> {
+    ) -> RepoResult<HashMap<String, String>> {
         let store = self.blobs();
         let mut manifest = HashMap::new();
         for (path, content) in files {
@@ -1529,7 +1561,7 @@ impl Repo {
         &self,
         files: &HashMap<String, FileContent>,
         state_id: &StateId,
-    ) -> Result<(), String> {
+    ) -> RepoResult<()> {
         let mut index: HashMap<String, IndexEntry> =
             read_json(&self.astvcs_dir().join(INDEX_FILE))?;
         let paths: HashSet<String> = files.keys().cloned().collect();
@@ -1543,10 +1575,11 @@ impl Repo {
                 },
             );
         }
-        write_atomic_json(&self.astvcs_dir().join(INDEX_FILE), &index)
+        write_atomic_json(&self.astvcs_dir().join(INDEX_FILE), &index)?;
+        Ok(())
     }
 
-    pub(crate) fn read_head_target(&self) -> Result<HeadTarget, String> {
+    pub(crate) fn read_head_target(&self) -> RepoResult<HeadTarget> {
         let text =
             fs::read_to_string(self.astvcs_dir().join(HEAD_FILE)).map_err(|e| e.to_string())?;
         let line = text.trim();
@@ -1557,37 +1590,38 @@ impl Repo {
         }
     }
 
-    pub(crate) fn head_branch_unlocked(&self) -> Result<Option<String>, String> {
+    pub(crate) fn head_branch_unlocked(&self) -> RepoResult<Option<String>> {
         match self.read_head_target()? {
             HeadTarget::Branch(name) => Ok(Some(name)),
             HeadTarget::Detached(_) => Ok(None),
         }
     }
 
-    pub(crate) fn is_detached_unlocked(&self) -> Result<bool, String> {
+    pub(crate) fn is_detached_unlocked(&self) -> RepoResult<bool> {
         Ok(matches!(self.read_head_target()?, HeadTarget::Detached(_)))
     }
 
-    pub(crate) fn head_state_unlocked(&self) -> Result<StateId, String> {
+    pub(crate) fn head_state_unlocked(&self) -> RepoResult<StateId> {
         match self.read_head_target()? {
             HeadTarget::Branch(name) => self.read_branch_ref(&name),
             HeadTarget::Detached(id) => Ok(id),
         }
     }
 
-    fn write_head_target(&self, target: &HeadTarget) -> Result<(), String> {
+    fn write_head_target(&self, target: &HeadTarget) -> RepoResult<()> {
         let line = match target {
             HeadTarget::Branch(name) => name.as_str(),
             HeadTarget::Detached(id) => id.as_str(),
         };
-        write_atomic_text(&self.astvcs_dir().join(HEAD_FILE), &format!("{line}\n"))
+        write_atomic_text(&self.astvcs_dir().join(HEAD_FILE), &format!("{line}\n"))?;
+        Ok(())
     }
 
     pub fn root_path(&self) -> &Path {
         &self.root
     }
 
-    pub fn load_config(&self) -> Result<RepoConfig, String> {
+    pub fn load_config(&self) -> RepoResult<RepoConfig> {
         let _lock = self.repo_lock()?;
         read_json(&self.astvcs_dir().join(CONFIG_FILE))
     }
@@ -1610,24 +1644,30 @@ impl Repo {
             .is_file()
     }
 
-    pub fn read_blob_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
+    pub fn read_blob_bytes(&self, id: &str) -> RepoResult<Vec<u8>> {
         let _lock = self.repo_lock()?;
-        self.blobs().read_bytes(&id.to_string())
+        self.blobs()
+            .read_bytes(&id.to_string())
+            .map_err(RepoError::from_message)
     }
 
-    pub fn import_blob_bytes(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
+    pub fn import_blob_bytes(&self, id: &str, bytes: &[u8]) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
-        self.blobs().write_bytes(&id.to_string(), bytes)
+        self.blobs()
+            .write_bytes(&id.to_string(), bytes)
+            .map_err(RepoError::from_message)
     }
 
     pub fn import_state_manifest(
         &self,
         state_id: &StateId,
         manifest: &HashMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         if hash_manifest(manifest) != *state_id {
-            return Err(format!("state id mismatch for {state_id}"));
+            return Err(RepoError::other(format!(
+                "state id mismatch for {state_id}"
+            )));
         }
         write_atomic_json(
             &self
@@ -1635,10 +1675,11 @@ impl Repo {
                 .join("states")
                 .join(format!("{state_id}.json")),
             manifest,
-        )
+        )?;
+        Ok(())
     }
 
-    pub fn import_timeline_entry(&self, entry: &TimelineEntry) -> Result<(), String> {
+    pub fn import_timeline_entry(&self, entry: &TimelineEntry) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         write_atomic_json(
             &self
@@ -1646,22 +1687,24 @@ impl Repo {
                 .join("timeline")
                 .join(format!("{}.json", entry.id)),
             entry,
-        )
+        )?;
+        Ok(())
     }
 
-    pub fn write_branch_ref(&self, branch: &str, state_id: &StateId) -> Result<(), String> {
+    pub fn write_branch_ref(&self, branch: &str, state_id: &StateId) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         self.write_branch_ref_unlocked(branch, state_id)
     }
 
-    fn write_branch_ref_unlocked(&self, branch: &str, state_id: &StateId) -> Result<(), String> {
+    fn write_branch_ref_unlocked(&self, branch: &str, state_id: &StateId) -> RepoResult<()> {
         write_atomic_text(
             &self.astvcs_dir().join("refs/heads").join(branch),
             &format!("{state_id}\n"),
-        )
+        )?;
+        Ok(())
     }
 
-    pub fn read_remote_ref(&self, remote: &str, branch: &str) -> Result<Option<StateId>, String> {
+    pub fn read_remote_ref(&self, remote: &str, branch: &str) -> RepoResult<Option<StateId>> {
         let _lock = self.repo_lock()?;
         self.read_remote_ref_unlocked(remote, branch)
     }
@@ -1670,7 +1713,7 @@ impl Repo {
         &self,
         remote: &str,
         branch: &str,
-    ) -> Result<Option<StateId>, String> {
+    ) -> RepoResult<Option<StateId>> {
         let path = self
             .astvcs_dir()
             .join("refs/remotes")
@@ -1679,7 +1722,8 @@ impl Repo {
         if !path.is_file() {
             return Ok(None);
         }
-        let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let text =
+            fs::read_to_string(path).map_err(|e| RepoError::from_io("read remote ref", e))?;
         Ok(Some(text.trim().to_string()))
     }
 
@@ -1688,7 +1732,7 @@ impl Repo {
         remote: &str,
         branch: &str,
         state_id: &StateId,
-    ) -> Result<(), String> {
+    ) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         let path = self
             .astvcs_dir()
@@ -1696,12 +1740,14 @@ impl Repo {
             .join(remote)
             .join(branch);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            fs::create_dir_all(parent)
+                .map_err(|e| RepoError::from_io("create remote ref dir", e))?;
         }
-        write_atomic_text(&path, &format!("{state_id}\n"))
+        write_atomic_text(&path, &format!("{state_id}\n"))?;
+        Ok(())
     }
 
-    pub fn is_ancestor_of(&self, ancestor: &StateId, descendant: &StateId) -> Result<bool, String> {
+    pub fn is_ancestor_of(&self, ancestor: &StateId, descendant: &StateId) -> RepoResult<bool> {
         let _lock = self.repo_lock()?;
         self.is_ancestor_of_unlocked(ancestor, descendant)
     }
@@ -1710,13 +1756,15 @@ impl Repo {
         &self,
         ancestor: &StateId,
         descendant: &StateId,
-    ) -> Result<bool, String> {
+    ) -> RepoResult<bool> {
         if ancestor == descendant {
             return Ok(true);
         }
         let anc = crate::store::history::ancestors(descendant, |id| {
             self.load_timeline_entry_unlocked(id)
-        })?;
+                .map_err(|e| e.to_string())
+        })
+        .map_err(RepoError::from_message)?;
         Ok(anc.contains(ancestor))
     }
 }
@@ -1823,19 +1871,21 @@ fn format_mutation_diff(old: &FileContent, new: &FileContent) -> String {
     }
 }
 
-fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> Result<String, String> {
+fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> RepoResult<String> {
     let mut out = format!("--- {path}\n+++ {path}\n");
     out.push_str(&format_mutation_diff(old, new));
     Ok(out)
 }
 
-fn read_working_file(root: &Path, rel: &str) -> Result<String, String> {
-    fs::read_to_string(root.join(rel)).map_err(|e| e.to_string())
+fn read_working_file(root: &Path, rel: &str) -> RepoResult<String> {
+    fs::read_to_string(root.join(rel)).map_err(|e| RepoError::from_io("read working file", e))
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> RepoResult<T> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| RepoError::from_io(&format!("read {}", path.display()), e))?;
+    serde_json::from_str(&text)
+        .map_err(|e| RepoError::other(format!("parse {}: {e}", path.display())))
 }
 
 fn now_iso() -> String {
@@ -1858,7 +1908,7 @@ mod tests {
 
     fn sample_repo() -> (TempDir, Repo) {
         let dir = TempDir::new().unwrap();
-        let repo = Repo::init(dir.path()).unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
         (dir, repo)
     }
 
@@ -1887,7 +1937,10 @@ mod tests {
         fs::write(dir.path().join("main.rs"), "fn main() { let y = 2; }\n").unwrap();
         let feature_id = repo.commit("on feature").unwrap().state_id;
         let main_id = repo.branch_state("main").unwrap();
-        let lca = merge_base(&main_id, &feature_id, |id| repo.load_timeline_entry(id)).unwrap();
+        let lca = merge_base(&main_id, &feature_id, |id| {
+            repo.load_timeline_entry(id).map_err(|e| e.to_string())
+        })
+        .unwrap();
         assert_eq!(lca, base_id);
     }
 
@@ -2859,7 +2912,7 @@ mod tests {
         assert!(repo.remove_branch("archive").is_err());
 
         let solo = TempDir::new().unwrap();
-        let solo_repo = Repo::init(solo.path()).unwrap();
+        let solo_repo = Repo::init_with_identity(solo.path()).unwrap();
         fs::write(solo.path().join("note.txt"), "solo\n").unwrap();
         solo_repo.commit("solo").unwrap();
         assert!(solo_repo.remove_branch("main").is_err());
@@ -3205,7 +3258,7 @@ mod tests {
         use std::thread;
 
         let dir = TempDir::new().unwrap();
-        let repo = Repo::init(dir.path()).unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
         let astvcs = Arc::new(dir.path().join(".astvcs"));
         let barrier = Arc::new(Barrier::new(2));

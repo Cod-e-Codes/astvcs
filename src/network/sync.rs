@@ -1,10 +1,14 @@
 use crate::network::remote::{ensure_remote_dir, remote_url};
 use crate::network::transport::Transport;
-use crate::store::{Repo, StateId};
+use crate::store::{Repo, RepoError, StateId};
 use crate::trace;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+
+fn map_repo<T>(result: Result<T, RepoError>) -> Result<T, String> {
+    result.map_err(|e| e.to_string())
+}
 
 fn collect_missing_states(
     local: &Repo,
@@ -56,7 +60,7 @@ fn collect_upload_states(
             return Err(format!("missing local timeline entry: {id}"));
         }
         upload.push(id.clone());
-        let entry = local.load_timeline_entry(&id)?;
+        let entry = map_repo(local.load_timeline_entry(&id))?;
         for parent in entry.parents.iter().chain(entry.parent.iter()) {
             if !seen.contains(parent) {
                 queue.push_back(parent.clone());
@@ -73,22 +77,22 @@ fn import_state(local: &Repo, transport: &Transport, state_id: &StateId) -> Resu
     for blob_id in manifest.values() {
         if !local.has_blob(blob_id) {
             let bytes = transport.get_blob(blob_id)?;
-            local.import_blob_bytes(blob_id, &bytes)?;
+            map_repo(local.import_blob_bytes(blob_id, &bytes))?;
             trace::notice(format!("fetch: blob {blob_id}"));
         }
     }
-    local.import_state_manifest(state_id, &manifest)?;
-    local.import_timeline_entry(&entry)?;
+    map_repo(local.import_state_manifest(state_id, &manifest))?;
+    map_repo(local.import_timeline_entry(&entry))?;
     trace::notice(format!("fetch: state {state_id}"));
     Ok(())
 }
 
 fn upload_state(local: &Repo, transport: &Transport, state_id: &StateId) -> Result<(), String> {
-    let entry = local.load_timeline_entry(state_id)?;
-    let manifest = local.load_manifest(state_id)?;
+    let entry = map_repo(local.load_timeline_entry(state_id))?;
+    let manifest = map_repo(local.load_manifest(state_id))?;
     for blob_id in manifest.values() {
         if !transport.has_blob(blob_id)? {
-            let bytes = local.read_blob_bytes(blob_id)?;
+            let bytes = map_repo(local.read_blob_bytes(blob_id))?;
             transport.put_blob(blob_id, &bytes)?;
             trace::notice(format!("push: blob {blob_id}"));
         }
@@ -104,7 +108,7 @@ pub struct FetchOutcome {
 }
 
 pub fn fetch(repo: &Repo, remote_name: &str, branch: Option<&str>) -> Result<FetchOutcome, String> {
-    let _lock = repo.repo_lock()?;
+    let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
     let transport = Transport::open(&url)?;
     ensure_remote_dir(repo, remote_name)?;
@@ -126,7 +130,7 @@ pub fn fetch(repo: &Repo, remote_name: &str, branch: Option<&str>) -> Result<Fet
         for state_id in missing {
             import_state(repo, &transport, &state_id)?;
         }
-        repo.write_remote_ref(remote_name, name, tip)?;
+        map_repo(repo.write_remote_ref(remote_name, name, tip))?;
         trace::notice(format!("fetch: {remote_name}/{name} -> {tip}"));
     }
 
@@ -144,18 +148,17 @@ pub fn push(
     branch: Option<&str>,
     force: bool,
 ) -> Result<PushOutcome, String> {
-    let _lock = repo.repo_lock()?;
+    let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
     let transport = Transport::open(&url)?;
 
     let branch_name = match branch {
         Some(name) => name.to_string(),
-        None => repo
-            .head_branch()?
+        None => map_repo(repo.head_branch())?
             .ok_or_else(|| "detached HEAD; specify a branch to push".to_string())?,
     };
 
-    let local_tip = repo.branch_state(&branch_name)?;
+    let local_tip = map_repo(repo.branch_state(&branch_name))?;
     let remote_tip = transport.get_ref(&branch_name)?;
 
     if let Some(ref remote_id) = remote_tip {
@@ -166,7 +169,7 @@ pub fn push(
                 state_id: local_tip,
             });
         }
-        if !force && !repo.is_ancestor_of(remote_id, &local_tip)? {
+        if !force && !map_repo(repo.is_ancestor_of(remote_id, &local_tip))? {
             return Err(format!(
                 "non-fast-forward push for {branch_name}; use --force"
             ));
@@ -196,7 +199,7 @@ pub fn clone_repo(url: &str, path: &Path) -> Result<(Repo, String), String> {
         fs::create_dir_all(path).map_err(|e| e.to_string())?;
     }
 
-    let repo = Repo::init(path)?;
+    let repo = map_repo(Repo::init(path))?;
     crate::network::remote::add_remote(&repo, "origin", url)?;
 
     let transport = Transport::open(url)?;
@@ -214,11 +217,11 @@ pub fn clone_repo(url: &str, path: &Path) -> Result<(Repo, String), String> {
 
     ensure_remote_dir(&repo, "origin")?;
     for (name, state_id) in &refs {
-        repo.write_remote_ref("origin", name, state_id)?;
+        map_repo(repo.write_remote_ref("origin", name, state_id))?;
     }
 
-    repo.write_branch_ref(&default_branch, &tip)?;
-    repo.checkout_branch(&default_branch)?;
+    map_repo(repo.write_branch_ref(&default_branch, &tip))?;
+    map_repo(repo.checkout_branch(&default_branch))?;
 
     Ok((repo, default_branch))
 }
@@ -230,7 +233,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn init_with_commit(dir: &Path, message: &str) -> Repo {
-        let repo = Repo::init(dir).unwrap();
+        let repo = Repo::init_with_identity(dir).unwrap();
         fs::write(dir.join("hello.txt"), "hello\n").unwrap();
         repo.commit(message).unwrap();
         repo
@@ -242,7 +245,7 @@ mod tests {
         let downstream = TempDir::new().unwrap();
         let upstream_repo = init_with_commit(upstream.path(), "upstream change");
 
-        let downstream_repo = Repo::init(downstream.path()).unwrap();
+        let downstream_repo = Repo::init_with_identity(downstream.path()).unwrap();
         add_remote(
             &downstream_repo,
             "origin",

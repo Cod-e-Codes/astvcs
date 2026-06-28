@@ -1,6 +1,10 @@
-use crate::store::{Repo, StateId, TimelineEntry};
+use crate::store::{Repo, RepoError, StateId, TimelineEntry};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+fn map_repo<T>(result: Result<T, RepoError>) -> Result<T, String> {
+    result.map_err(|e| e.to_string())
+}
 
 const API_PREFIX: &str = "/v1";
 
@@ -46,7 +50,7 @@ impl Transport {
             return Ok(Self::Http { base, client });
         }
         let path = parse_remote_url(url)?;
-        let repo = Repo::open(&path)?;
+        let repo = map_repo(Repo::open(&path))?;
         Ok(Self::File(repo))
     }
 
@@ -70,7 +74,7 @@ impl Transport {
 
     pub fn get_blob(&self, id: &str) -> Result<Vec<u8>, String> {
         match self {
-            Self::File(repo) => repo.read_blob_bytes(id),
+            Self::File(repo) => map_repo(repo.read_blob_bytes(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
                 let resp = client.get(&url).send().map_err(|e| e.to_string())?;
@@ -84,7 +88,7 @@ impl Transport {
 
     pub fn put_blob(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
         match self {
-            Self::File(repo) => repo.import_blob_bytes(id, bytes),
+            Self::File(repo) => map_repo(repo.import_blob_bytes(id, bytes)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
                 let resp = client
@@ -113,7 +117,7 @@ impl Transport {
 
     pub fn get_state(&self, id: &StateId) -> Result<HashMap<String, String>, String> {
         match self {
-            Self::File(repo) => repo.load_manifest(id),
+            Self::File(repo) => map_repo(repo.load_manifest(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
                 let resp = client.get(&url).send().map_err(|e| e.to_string())?;
@@ -131,7 +135,7 @@ impl Transport {
         manifest: &HashMap<String, String>,
     ) -> Result<(), String> {
         match self {
-            Self::File(repo) => repo.import_state_manifest(id, manifest),
+            Self::File(repo) => map_repo(repo.import_state_manifest(id, manifest)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
                 let resp = client
@@ -160,7 +164,7 @@ impl Transport {
 
     pub fn get_timeline(&self, id: &StateId) -> Result<TimelineEntry, String> {
         match self {
-            Self::File(repo) => repo.load_timeline_entry(id),
+            Self::File(repo) => map_repo(repo.load_timeline_entry(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{id}"))?;
                 let resp = client.get(&url).send().map_err(|e| e.to_string())?;
@@ -174,7 +178,7 @@ impl Transport {
 
     pub fn put_timeline(&self, entry: &TimelineEntry) -> Result<(), String> {
         match self {
-            Self::File(repo) => repo.import_timeline_entry(entry),
+            Self::File(repo) => map_repo(repo.import_timeline_entry(entry)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{}", entry.id))?;
                 let resp = client
@@ -194,7 +198,7 @@ impl Transport {
         match self {
             Self::File(repo) => {
                 let mut out = HashMap::new();
-                for branch in repo.list_branches()? {
+                for branch in map_repo(repo.list_branches())? {
                     out.insert(branch.name, branch.state_id);
                 }
                 Ok(out)
@@ -217,7 +221,7 @@ impl Transport {
                 if !path.is_file() {
                     return Ok(None);
                 }
-                Ok(Some(repo.branch_state(branch)?))
+                Ok(Some(map_repo(repo.branch_state(branch))?))
             }
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/heads/{branch}"))?;
@@ -238,13 +242,13 @@ impl Transport {
         match self {
             Self::File(repo) => {
                 if !force
-                    && let Ok(current) = repo.branch_state(branch)
+                    && let Ok(current) = map_repo(repo.branch_state(branch))
                     && current != *state_id
-                    && !repo.is_ancestor_of(&current, state_id)?
+                    && !map_repo(repo.is_ancestor_of(&current, state_id))?
                 {
                     return Err(format!("non-fast-forward update for refs/heads/{branch}"));
                 }
-                repo.write_branch_ref(branch, state_id)
+                map_repo(repo.write_branch_ref(branch, state_id))
             }
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/heads/{branch}"))?;
@@ -265,7 +269,7 @@ impl Transport {
 
     pub fn default_branch(&self) -> Result<String, String> {
         match self {
-            Self::File(repo) => Ok(repo.load_config()?.default_branch),
+            Self::File(repo) => Ok(map_repo(repo.load_config())?.default_branch),
             Self::Http { client, .. } => {
                 let url = self.http_url("/config")?;
                 let resp = client.get(&url).send().map_err(|e| e.to_string())?;

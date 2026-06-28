@@ -52,3 +52,8 @@
 | `conflicting_path_renames_report_conflict` | Both branches rename same path to different destinations (unit) |
 | `move_subtree_and_sibling_payload_edit_merge` | Move + payload edit merge cleanly (unit) |
 | `moved_function_reports_move_not_delete_insert` | Intra-file reposition avoids delete+insert (unit) |
+| `commit_without_identity_fails_with_actionable_error` | Commit without identity configured |
+| `identity_set_and_read_roundtrip_via_repo_open` | Repository identity config round-trip |
+| `identity_recorded_on_commit_merge_and_revert` | Author metadata on commit, merge, and revert states |
+| `identity_does_not_change_content_addressed_state_id` | Manifest-only state ids unchanged by identity |
+| `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind`, `--json` stderr, plain string parity |

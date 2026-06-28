@@ -1,7 +1,7 @@
 use astvcs::diff::diff_graphs;
 use astvcs::frontend::parse_source;
 use astvcs::graph::Mutation;
-use astvcs::store::{FileStatus, Repo};
+use astvcs::store::{FileStatus, Repo, RepoErrorKind, configured_identity, set_identity};
 use astvcs::trace;
 use astvcs::unparse;
 use std::fs;
@@ -78,7 +78,7 @@ fn copy_identity_demo(dir: &TempDir) -> std::io::Result<()> {
 fn workflow_demo_prepend_and_disjoint_merge() {
     let dir = TempDir::new().unwrap();
     copy_workflow_demo(&dir).unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
 
     fs::write(dir.path().join("lib.rs"), "pub mod core;\npub mod util;\n").unwrap();
     repo.commit("baseline").unwrap();
@@ -156,7 +156,7 @@ fn workflow_demo_prepend_and_disjoint_merge() {
 fn identity_demo_payload_edit_disjoint_merge_and_conflict() {
     let dir = TempDir::new().unwrap();
     copy_identity_demo(&dir).unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
 
     fs::write(
         dir.path().join("core.rs"),
@@ -267,6 +267,20 @@ fn cli_merge_resolve_conflict() {
             .status
             .success()
     );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(root),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Test User",
+                "--email",
+                "test@example.com",
+            ],
+        ),
+        "identity set",
+    );
     assert!(
         run_astvcs(Some(root), &["commit", "-m", "baseline"])
             .status
@@ -344,7 +358,7 @@ fn cli_merge_resolve_conflict() {
 #[test]
 fn commit_respects_gitignore() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join(".gitignore"), "build/\nsecret.txt\n").unwrap();
     fs::create_dir_all(dir.path().join("build")).unwrap();
     fs::write(dir.path().join("build").join("out.rs"), "fn out() {}\n").unwrap();
@@ -361,7 +375,7 @@ fn commit_respects_gitignore() {
 #[test]
 fn multi_language_repo_roundtrip() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(dir.path().join("app.py"), "def main():\n    pass\n").unwrap();
     fs::write(dir.path().join("data.json"), "{\"a\": 1}\n").unwrap();
@@ -418,7 +432,7 @@ fn multi_language_repo_roundtrip() {
 #[test]
 fn history_walk_and_log_order() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     repo.commit("first").unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
@@ -432,7 +446,7 @@ fn history_walk_and_log_order() {
 #[test]
 fn blob_deduplication_across_states() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     let id1 = repo.commit("v1").unwrap().state_id;
     fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
@@ -445,7 +459,7 @@ fn blob_deduplication_across_states() {
 #[test]
 fn go_unparse_roundtrip_via_repo() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     let src = "package main\n\nimport \"fmt\"\n\nfunc greet(name string) string {\n    return fmt.Sprintf(\"Hi, %s!\", name)\n}\n\nfunc main() {\n    fmt.Println(greet(\"world\"))\n}\n";
     fs::write(dir.path().join("hello.go"), src).unwrap();
     let id = repo.commit("hello").unwrap().state_id;
@@ -463,7 +477,7 @@ fn go_unparse_roundtrip_via_repo() {
 #[test]
 fn rust_unparse_roundtrip_via_repo() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
     fs::write(dir.path().join("lib.rs"), src).unwrap();
     let id = repo.commit("add fn").unwrap().state_id;
@@ -545,7 +559,7 @@ fn same_file_demo_disjoint_merge() {
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/same-file-demo"),
     )
     .unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(
         dir.path().join("sample.rs"),
         "fn foo() {\n    let x = 1;\n}\n",
@@ -683,7 +697,7 @@ fn edit_roundtrip_preserves_structure_across_languages() {
 #[test]
 fn branch_merge_with_merge_base() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(
         dir.path().join("main.rs"),
         "fn foo() {\n    let x = 1;\n}\n",
@@ -722,7 +736,7 @@ fn branch_merge_with_merge_base() {
 fn merge_demo_add_add_and_deletion() {
     let dir = TempDir::new().unwrap();
     copy_merge_demo(&dir).unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
 
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(
@@ -763,7 +777,7 @@ fn merge_demo_add_add_and_deletion() {
 fn merge_demo_deletion_when_other_branch_unchanged() {
     let dir = TempDir::new().unwrap();
     copy_merge_demo(&dir).unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
 
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(
@@ -790,7 +804,7 @@ fn merge_demo_deletion_when_other_branch_unchanged() {
 #[test]
 fn checkout_state_and_empty_commit() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     let v1 = repo.commit("v1").unwrap().state_id;
     fs::write(dir.path().join("main.rs"), "fn main() { let x = 1; }\n").unwrap();
@@ -810,7 +824,7 @@ fn checkout_state_and_empty_commit() {
 #[test]
 fn config_files_use_ast_frontend() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(
         dir.path().join("Cargo.toml"),
         "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
@@ -826,7 +840,7 @@ fn config_files_use_ast_frontend() {
 #[test]
 fn merge_conflict_diagnostics_without_side_effects() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(
         dir.path().join("main.rs"),
         "fn foo() {\n    let x = 1;\n}\n",
@@ -877,7 +891,7 @@ fn merge_conflict_diagnostics_without_side_effects() {
 #[test]
 fn rename_vs_parent_delete_reports_overlap() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(
         dir.path().join("main.rs"),
         "fn foo() {\n    let x = 1;\n    let z = 2;\n}\n",
@@ -927,7 +941,7 @@ fn transparency_scan_and_parse_notices() {
     trace::clear_log();
     trace::set_verbose(true);
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(dir.path().join("app.ts"), "function main(): void {}\n").unwrap();
     fs::write(dir.path().join("notes.md"), "# doc\n").unwrap();
@@ -958,7 +972,7 @@ fn notices_suppressed_without_verbose() {
     trace::clear_log();
     trace::set_verbose(false);
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     assert!(
         !trace::take_log().iter().any(|l| l.contains("notice:")),
         "init notices should be gated"
@@ -988,7 +1002,7 @@ fn notices_suppressed_without_verbose() {
 #[test]
 fn network_file_remote_fetch_push_and_clone() {
     let upstream = TempDir::new().unwrap();
-    let upstream_repo = Repo::init(upstream.path()).unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
     fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
     upstream_repo.commit("v1").unwrap();
 
@@ -1011,6 +1025,20 @@ fn network_file_remote_fetch_push_and_clone() {
         "v1\n"
     );
 
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Test User",
+                "--email",
+                "test@example.com",
+            ],
+        ),
+        "identity set",
+    );
     fs::write(clone_dir.path().join("note.txt"), "v2\n").unwrap();
     let out = run_astvcs(Some(clone_dir.path()), &["commit", "-m", "v2"]);
     assert!(out.status.success());
@@ -1032,7 +1060,7 @@ fn network_file_remote_fetch_push_and_clone() {
 #[test]
 fn cli_reset_hard_soft_and_force() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
     let v1 = repo.commit("v1").unwrap().state_id;
     fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
@@ -1078,7 +1106,7 @@ fn cli_reset_hard_soft_and_force() {
 #[test]
 fn cli_revert_and_dry_run() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
     fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
     repo.commit("seed").unwrap();
@@ -1115,7 +1143,7 @@ fn cli_revert_and_dry_run() {
 #[test]
 fn cli_revert_of_revert_restores_content() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
     let v1 = repo.commit("v1").unwrap().state_id;
     fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
@@ -1160,7 +1188,7 @@ fn cli_revert_of_revert_restores_content() {
 #[test]
 fn resolve_remote_ref_for_diff_merge_base_and_checkout() {
     let upstream = TempDir::new().unwrap();
-    let upstream_repo = Repo::init(upstream.path()).unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
     fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
     upstream_repo.commit("v1").unwrap();
     fs::write(upstream.path().join("note.txt"), "v2\n").unwrap();
@@ -1176,6 +1204,7 @@ fn resolve_remote_ref_for_diff_merge_base_and_checkout() {
         ],
     );
     let clone_repo = Repo::open(clone_dir.path()).unwrap();
+    set_identity(&clone_repo, "Test User", "test@example.com", false).unwrap();
     fs::write(clone_dir.path().join("note.txt"), "v3\n").unwrap();
     clone_repo.commit("v3").unwrap();
 
@@ -1227,7 +1256,7 @@ fn go_sum_and_ps1_status_are_quiet() {
     trace::clear_log();
     trace::clear_warned();
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("go.sum"), "hash example\n").unwrap();
     fs::write(dir.path().join("run.ps1"), "Write-Host hi\n").unwrap();
     repo.commit("deps and script").unwrap();
@@ -1244,7 +1273,7 @@ fn go_sum_and_ps1_status_are_quiet() {
 #[test]
 fn cli_status_clean_tree_summary() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
     repo.commit("v1").unwrap();
 
@@ -1265,7 +1294,7 @@ fn cli_status_clean_tree_summary() {
 fn trailing_comment_and_literal_edit_merge() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    Repo::init(root).unwrap();
+    Repo::init_with_identity(root).unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
         root.join("src/main.rs"),
@@ -1323,7 +1352,7 @@ fn trailing_comment_and_literal_edit_merge() {
 fn cli_trivia_only_commit() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    Repo::init(root).unwrap();
+    Repo::init_with_identity(root).unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/main.rs"), "fn main(){\n    let x=1;\n}\n").unwrap();
     assert_astvcs_ok(
@@ -1343,7 +1372,7 @@ fn cli_trivia_only_commit() {
 fn cli_branch_remove_guardrails() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    Repo::init(root).unwrap();
+    Repo::init_with_identity(root).unwrap();
     fs::write(root.join("note.txt"), "v1\n").unwrap();
     assert_astvcs_ok(
         &run_astvcs(Some(root), &["commit", "-m", "baseline"]),
@@ -1384,7 +1413,7 @@ fn cli_branch_remove_guardrails() {
 
     let dir2 = TempDir::new().unwrap();
     let root2 = dir2.path();
-    let solo = Repo::init(root2).unwrap();
+    let solo = Repo::init_with_identity(root2).unwrap();
     fs::write(root2.join("note.txt"), "solo\n").unwrap();
     solo.commit("solo").unwrap();
     let head = solo.head_state().unwrap();
@@ -1408,7 +1437,7 @@ fn cli_branch_remove_guardrails() {
 #[test]
 fn cli_materialize_refuses_dirty_tree_and_force_overrides() {
     let dir = TempDir::new().unwrap();
-    let repo = Repo::init(dir.path()).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("base.txt"), "base\n").unwrap();
     repo.commit("base").unwrap();
     repo.create_branch("feature", None).unwrap();
@@ -1520,7 +1549,7 @@ fn cli_reports_repository_lock_contention() {
     use astvcs::store::RepoLockGuard;
 
     let dir = TempDir::new().unwrap();
-    Repo::init(dir.path()).unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
     let astvcs = dir.path().join(".astvcs");
     let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
 
@@ -1537,7 +1566,7 @@ fn cli_reports_repository_lock_contention() {
 #[test]
 fn cli_fsck_clean_repository() {
     let dir = TempDir::new().unwrap();
-    Repo::init(dir.path()).unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     let out = run_astvcs(Some(dir.path()), &["fsck"]);
     assert_astvcs_ok(&out, "fsck clean");
@@ -1548,7 +1577,7 @@ fn cli_fsck_clean_repository() {
 #[test]
 fn cli_fsck_detects_corruption() {
     let dir = TempDir::new().unwrap();
-    Repo::init(dir.path()).unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(dir.path().join("note.txt"), "data\n").unwrap();
     let repo = Repo::open(dir.path()).unwrap();
@@ -1598,7 +1627,7 @@ fn cli_fsck_detects_corruption() {
 #[test]
 fn cli_gc_dry_run_and_prune() {
     let dir = TempDir::new().unwrap();
-    Repo::init(dir.path()).unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     let repo = Repo::open(dir.path()).unwrap();
     repo.commit("base").unwrap();
@@ -1634,7 +1663,7 @@ fn cli_gc_and_fsck_fail_under_external_lock() {
     use astvcs::store::RepoLockGuard;
 
     let dir = TempDir::new().unwrap();
-    Repo::init(dir.path()).unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
     let astvcs = dir.path().join(".astvcs");
     let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
 
@@ -1653,7 +1682,7 @@ fn cli_gc_and_fsck_fail_under_external_lock() {
 #[test]
 fn path_rename_status_and_diff_integration() {
     let dir = TempDir::new().unwrap();
-    Repo::init(dir.path()).unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
     fs::write(dir.path().join("old.rs"), "fn foo() {}\n").unwrap();
     let repo = Repo::open(dir.path()).unwrap();
     repo.commit("add").unwrap();
@@ -1672,4 +1701,118 @@ fn path_rename_status_and_diff_integration() {
     assert_astvcs_ok(&diff, "diff renamed path");
     let out = String::from_utf8_lossy(&diff.stdout);
     assert!(out.contains("rename path `old.rs` -> `new.rs`"), "{out}");
+}
+
+#[test]
+fn commit_without_identity_fails_with_actionable_error() {
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let out = run_astvcs(Some(dir.path()), &["commit", "-m", "blocked"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("author identity not configured"), "{err}");
+    assert!(err.contains("identity set"), "{err}");
+}
+
+#[test]
+fn identity_set_and_read_roundtrip_via_repo_open() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    set_identity(&repo, "Ada Lovelace", "ada@example.com", false).unwrap();
+    let repo2 = Repo::open(dir.path()).unwrap();
+    let id = configured_identity(&repo2, false).unwrap().unwrap();
+    assert_eq!(id.name, "Ada Lovelace");
+    assert_eq!(id.email, "ada@example.com");
+}
+
+#[test]
+fn identity_recorded_on_commit_merge_and_revert() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    set_identity(&repo, "Record Author", "record@example.com", false).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let commit_id = repo.commit("commit").unwrap().state_id;
+    let commit_entry = repo.load_timeline_entry(&commit_id).unwrap();
+    assert_eq!(commit_entry.author_name, "Record Author");
+    assert_eq!(commit_entry.author_email, "record@example.com");
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("note.txt"), "feature\n").unwrap();
+    repo.commit("feature").unwrap();
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() { /* edit */ }\n").unwrap();
+    let main_edit_id = repo.commit("main edit").unwrap().state_id;
+    let merge_id = repo.merge_branch("feature", "merge").unwrap();
+    let merge_entry = repo.load_timeline_entry(&merge_id).unwrap();
+    assert_eq!(merge_entry.author_name, "Record Author");
+    assert_eq!(merge_entry.author_email, "record@example.com");
+
+    let revert_id = repo
+        .revert_state(&main_edit_id, "revert main edit")
+        .unwrap()
+        .state_id;
+    let revert_entry = repo.load_timeline_entry(&revert_id).unwrap();
+    assert_eq!(revert_entry.author_name, "Record Author");
+    assert_eq!(revert_entry.author_email, "record@example.com");
+}
+
+#[test]
+fn identity_does_not_change_content_addressed_state_id() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let id = repo.commit("v1").unwrap().state_id;
+    let manifest = repo.load_manifest(&id).unwrap();
+    assert_eq!(id, astvcs::hash_manifest(&manifest));
+    let entry = repo.load_timeline_entry(&id).unwrap();
+    assert_eq!(entry.author_name, "Test User");
+    assert_eq!(entry.author_email, "test@example.com");
+}
+
+#[test]
+fn structured_errors_match_plain_messages_and_kinds() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("dirty.txt"), "dirty\n").unwrap();
+    repo.commit("base").unwrap();
+
+    let plain = repo.resolve_state_ref("no-such-branch").unwrap_err();
+    assert_eq!(plain.kind, RepoErrorKind::UnknownRef);
+    assert!(plain.contains("unknown branch or state"));
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feature.txt"), "feature\n").unwrap();
+    repo.commit("feature").unwrap();
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("dirty.txt"), "changed\n").unwrap();
+
+    let dirty = repo.merge_branch("feature", "merge").unwrap_err();
+    assert_eq!(dirty.kind, RepoErrorKind::DirtyWorkingTree);
+    assert!(dirty.contains("uncommitted changes"));
+
+    use astvcs::store::RepoLockGuard;
+
+    let _guard = RepoLockGuard::acquire(&repo.astvcs_dir()).unwrap();
+    let lock_out = run_astvcs(Some(dir.path()), &["--json", "status"]);
+    assert!(!lock_out.status.success());
+    let lock_json = String::from_utf8_lossy(&lock_out.stderr);
+    assert!(
+        lock_json.contains("\"kind\":\"lock_contention\""),
+        "{lock_json}"
+    );
+    assert!(
+        lock_json.contains("repository is locked by another process"),
+        "{lock_json}"
+    );
+    drop(_guard);
+
+    let json_out = run_astvcs(Some(dir.path()), &["--json", "branch", "remove", "main"]);
+    assert!(!json_out.status.success());
+    let json_err = String::from_utf8_lossy(&json_out.stderr);
+    assert!(json_err.contains("\"kind\":\"branch_guard\""), "{json_err}");
+    assert!(json_err.contains("checked-out branch"), "{json_err}");
+    assert!(!json_err.starts_with("error:"), "{json_err}");
 }

@@ -6,17 +6,20 @@ Global flags:
 |------|-------------|
 | `--repo <path>` | Repository root (default: current directory) |
 | `-v`, `--verbose` | Print operational `notice:` detail to stderr |
+| `--json` | On failure, print a structured JSON error object on stderr instead of `error: …` |
 
 ## Subcommands
 
 | Command | Description |
 |---------|-------------|
 | `init [path]` | Create a new repository (default path: `.`) |
+| `identity get [--global]` | Show configured author name and email (repository or global config) |
+| `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
 | `status` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. |
 | `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
-| `commit -m <msg>` | Commit working tree as a new state (prints when unchanged) |
+| `commit -m <msg>` | Commit working tree as a new state (prints when unchanged). Requires configured author identity. |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |
@@ -32,7 +35,7 @@ Global flags:
 | `reset <ref> [--soft] [--force]` | Move HEAD or the current branch tip to `<ref>` (default: hard, syncs disk) |
 | `revert <ref> -m <msg> [--dry-run]` | Create a new state that undoes `<ref>` on top of HEAD |
 | `revert <ref> -m <msg> --force` | Revert when the working tree is dirty (warns per clobbered path) |
-| `log [-n N]` | Walk timeline history (default 20 entries) |
+| `log [-n N]` | Walk timeline history (default 20 entries); shows author when present |
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
@@ -179,6 +182,14 @@ error: repository is locked by another process; cannot acquire <absolute-or-rela
 ```
 
 There is no wait/retry; run the command again after the other process finishes.
+
+With `--json`, failures print a single JSON object on stderr, for example:
+
+```json
+{"kind":"missing_identity","message":"author identity not configured; run `astvcs identity set --name <name> --email <email>` or set ASTVCS_AUTHOR_NAME and ASTVCS_AUTHOR_EMAIL"}
+```
+
+The `message` field matches the text shown after `error:` when `--json` is omitted.
 
 ## Ignore rules
 

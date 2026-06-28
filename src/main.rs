@@ -1,7 +1,10 @@
 use astvcs::network::{
     add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
-use astvcs::store::{FileStatus, Repo, parse_merge_resolutions};
+use astvcs::store::{
+    FileStatus, Repo, RepoError, RepoResult, configured_identity, parse_merge_resolutions,
+    set_identity,
+};
 use astvcs::trace;
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
@@ -19,6 +22,10 @@ struct Cli {
     /// Print operational detail (notice:) to stderr.
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Emit structured JSON errors on failure (stderr).
+    #[arg(long, global = true)]
+    json: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -111,6 +118,30 @@ enum Commands {
         prune: bool,
     },
     Fsck,
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum IdentityAction {
+    /// Show configured author identity (repository or global).
+    Get {
+        /// Read global identity from ~/.astvcs/config.json instead of the repository.
+        #[arg(long)]
+        global: bool,
+    },
+    /// Set author name and email for future commits, merges, and reverts.
+    Set {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        email: String,
+        /// Write to global identity config instead of the repository.
+        #[arg(long)]
+        global: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -180,14 +211,26 @@ fn repo_root(cli: &Cli) -> PathBuf {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json;
     if let Err(e) = run(cli) {
-        eprintln!("error: {e}");
+        print_cli_error(json, &e);
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+fn print_cli_error(json: bool, err: &RepoError) {
+    if json {
+        eprintln!(
+            "{}",
+            serde_json::to_string(err).expect("serialize structured error")
+        );
+    } else {
+        eprintln!("error: {err}");
+    }
+}
+
+fn run(cli: Cli) -> RepoResult<()> {
     trace::set_verbose(cli.verbose);
     let root = repo_root(&cli);
     match cli.command {
@@ -301,7 +344,8 @@ fn run(cli: Cli) -> Result<(), String> {
         },
         Commands::Merge(args) => {
             let repo = Repo::open(&root)?;
-            let resolutions = parse_merge_resolutions(&args.resolve)?;
+            let resolutions =
+                parse_merge_resolutions(&args.resolve).map_err(RepoError::from_message)?;
             if args.dry_run {
                 let plan = repo.prepare_merge(&args.branch, &resolutions)?;
                 if plan.is_clean() {
@@ -309,7 +353,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 } else {
                     print!("{}", plan.format_conflicts());
                     trace::warn("merge dry-run: would conflict");
-                    return Err("merge would conflict".into());
+                    return Err(RepoError::merge_conflict("merge would conflict"));
                 }
             } else {
                 let message = args.message.expect("message required");
@@ -344,7 +388,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 repo.checkout_state_with_force(&id, force)?;
                 println!("Checked out state {id} (detached HEAD)");
             } else {
-                return Err("specify --branch or --state".into());
+                return Err(RepoError::invalid_input("specify --branch or --state"));
             }
         }
         Commands::Reset {
@@ -379,7 +423,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 } else {
                     print!("{}", plan.format_conflicts());
                     trace::warn("revert dry-run: would conflict");
-                    return Err("revert would conflict".into());
+                    return Err(RepoError::revert_conflict("revert would conflict"));
                 }
             } else {
                 let outcome = repo.revert_state_with_force(&reference, &message, force)?;
@@ -399,6 +443,9 @@ fn run(cli: Cli) -> Result<(), String> {
                 println!("state {}", entry.id);
                 println!("  message: {}", entry.message);
                 println!("  timestamp: {}", entry.timestamp);
+                if !entry.author_name.is_empty() || !entry.author_email.is_empty() {
+                    println!("  author: {} <{}>", entry.author_name, entry.author_email);
+                }
                 if let Some(parent) = &entry.parent {
                     println!("  parent: {parent}");
                 }
@@ -410,27 +457,51 @@ fn run(cli: Cli) -> Result<(), String> {
                 println!();
             }
         }
+        Commands::Identity { action } => {
+            let repo = Repo::open(&root)?;
+            match action {
+                IdentityAction::Get { global } => match configured_identity(&repo, global)? {
+                    Some(id) => println!("{} <{}>", id.name, id.email),
+                    None => {
+                        return Err(RepoError::missing_identity());
+                    }
+                },
+                IdentityAction::Set {
+                    name,
+                    email,
+                    global,
+                } => {
+                    set_identity(&repo, &name, &email, global)?;
+                    if global {
+                        println!("Set global author identity to {name} <{email}>");
+                    } else {
+                        println!("Set repository author identity to {name} <{email}>");
+                    }
+                }
+            }
+        }
         Commands::Remote { action } => {
             let repo = Repo::open(&root)?;
             match action {
                 RemoteAction::Add { name, url } => {
-                    add_remote(&repo, &name, &url)?;
+                    add_remote(&repo, &name, &url).map_err(RepoError::from_message)?;
                     println!("Added remote {name} ({url})");
                 }
                 RemoteAction::List => {
-                    for (name, url) in list_remotes(&repo)? {
+                    for (name, url) in list_remotes(&repo).map_err(RepoError::from_message)? {
                         println!("{name}\t{url}");
                     }
                 }
                 RemoteAction::Remove { name } => {
-                    remove_remote(&repo, &name)?;
+                    remove_remote(&repo, &name).map_err(RepoError::from_message)?;
                     println!("Removed remote {name}");
                 }
             }
         }
         Commands::Fetch { remote, branch } => {
             let repo = Repo::open(&root)?;
-            let outcome = fetch(&repo, &remote, branch.as_deref())?;
+            let outcome =
+                fetch(&repo, &remote, branch.as_deref()).map_err(RepoError::from_message)?;
             for (name, tip) in outcome.branches {
                 println!("Fetched {remote}/{name} -> {tip}");
             }
@@ -441,14 +512,15 @@ fn run(cli: Cli) -> Result<(), String> {
             force,
         } => {
             let repo = Repo::open(&root)?;
-            let outcome = push(&repo, &remote, branch.as_deref(), force)?;
+            let outcome =
+                push(&repo, &remote, branch.as_deref(), force).map_err(RepoError::from_message)?;
             println!(
                 "Pushed {} to {}/{} ({})",
                 outcome.branch, remote, outcome.branch, outcome.state_id
             );
         }
         Commands::Clone { url, path } => {
-            let (_, branch) = clone_repo(&url, &path)?;
+            let (_, branch) = clone_repo(&url, &path).map_err(RepoError::from_message)?;
             println!(
                 "Cloned into {} (checked out branch {branch})",
                 path.display()
@@ -456,7 +528,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Commands::Serve { bind, port } => {
             let repo = Repo::open(&root)?;
-            serve_repo(&repo, &bind, port)?;
+            serve_repo(&repo, &bind, port).map_err(RepoError::from_message)?;
         }
         Commands::Gc { prune } => {
             let repo = Repo::open(&root)?;
@@ -468,7 +540,9 @@ fn run(cli: Cli) -> Result<(), String> {
             let report = repo.fsck()?;
             print!("{}", report.format_output());
             if !report.is_clean() {
-                return Err("repository integrity check failed".into());
+                return Err(RepoError::integrity_check(
+                    "repository integrity check failed",
+                ));
             }
         }
     }

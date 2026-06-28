@@ -4,6 +4,10 @@
 
 **States.** Each `commit` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Committing with no file changes is a no-op.
 
+**Author identity.** Timeline entries record `author_name` and `author_email` metadata for every state created by `commit`, `merge`, and `revert`. Identity is resolved at state-creation time from, in precedence order: `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL` environment variables, repository-local `config.json` (`author` object), then global `~/.astvcs/config.json`. If none are set, those commands fail with an actionable error rather than guessing from the OS user account. The initial empty root state and other pre-existing timeline entries without author fields deserialize with empty author strings. Identity is **not** part of the content-addressed state id: state ids remain `hash_manifest(manifest)` only, so adding author metadata does not change ids for unchanged file content.
+
+**Structured errors.** Repository operations return `RepoResult<T>` (`Result<T, RepoError>`). `RepoError` carries a `kind` enum (for example `lock_contention`, `dirty_working_tree`, `merge_conflict`, `missing_identity`), a human-readable `message` (matching legacy string output for `.contains(...)` compatibility via `Deref` to `str`), and optional `path` / `reference` fields. The library exposes the full struct; the CLI accepts `--json` on any command to print one JSON object on stderr on failure instead of `error: …`. Plain stderr output is unchanged when `--json` is omitted.
+
 **HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `commit` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
 
 **Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` materialize a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in a shared materialize guard (checked before refs, timeline writes, and disk sync) so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization.
@@ -148,7 +152,9 @@ src/
   store/
     atomic.rs    same-directory rename writes, stray temp cleanup
     blobs.rs     content-addressed blob store
+    error.rs     RepoError kinds and structured failures
     history.rs   timeline walk and merge-base (LCA)
+    identity.rs  author config resolution and persistence
     integrity.rs gc and fsck (calls reachability)
     lock.rs      exclusive advisory repo lock (repo.lock)
     reachability.rs ref-tip reachability walk (shared by gc/fsck)
@@ -197,6 +203,11 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `cli_fsck_clean_repository`, `cli_fsck_detects_corruption` | fsck clean vs corrupted fixture (integration) |
 | `cli_gc_dry_run_and_prune` | gc dry-run default; `--prune` deletes unreachable blobs (integration) |
 | `path_rename_status_and_diff_integration` | Path rename in `status` (`R old -> new`) and `diff` (`RenamePath` intent) |
+| `commit_without_identity_fails_with_actionable_error` | `commit` without configured identity fails (no OS-user fallback) |
+| `identity_set_and_read_roundtrip_via_repo_open` | Repository `identity set` survives `Repo::open` |
+| `identity_recorded_on_commit_merge_and_revert` | Author on timeline entries from commit, merge, and revert |
+| `identity_does_not_change_content_addressed_state_id` | State id remains manifest hash; identity is separate metadata |
+| `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind` and `--json` stderr; plain message matches string path |
 | `path_rename_exact_reports_rename_intent_in_diff` | Exact path rename intent, not delete+add (unit) |
 | `path_rename_with_edits_reports_rename_with_edits` | AST rename+edit pairing (unit) |
 | `path_rename_merges_with_independent_content_edit` | Rename on one branch + content edit on other merges at renamed path (unit) |

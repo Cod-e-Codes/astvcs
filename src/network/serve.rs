@@ -1,14 +1,18 @@
-use crate::store::{Repo, TimelineEntry};
+use crate::store::{Repo, RepoError, TimelineEntry};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+
+fn map_repo<T>(result: Result<T, RepoError>) -> Result<T, String> {
+    result.map_err(|e| e.to_string())
+}
 
 const API_PREFIX: &str = "/v1";
 
 pub fn serve_repo(repo: &Repo, bind: &str, port: u16) -> Result<(), String> {
     let addr = format!("{bind}:{port}");
     let server = tiny_http::Server::http(&addr).map_err(|e| e.to_string())?;
-    let repo = Arc::new(Mutex::new(Repo::open(repo.root_path())?));
+    let repo = Arc::new(Mutex::new(map_repo(Repo::open(repo.root_path()))?));
     eprintln!("astvcs serve listening on http://{addr}/");
 
     for mut request in server.incoming_requests() {
@@ -38,7 +42,7 @@ fn dispatch(
 
     if path == format!("{API_PREFIX}/config") && method == tiny_http::Method::Get {
         let repo = repo.lock().map_err(|e| e.to_string())?;
-        let config = repo.load_config()?;
+        let config = map_repo(repo.load_config())?;
         return Ok(json_response(
             200,
             &serde_json::to_vec(&config).map_err(|e| e.to_string())?,
@@ -47,7 +51,7 @@ fn dispatch(
     if path == format!("{API_PREFIX}/refs/heads") && method == tiny_http::Method::Get {
         let repo = repo.lock().map_err(|e| e.to_string())?;
         let mut refs = HashMap::new();
-        for branch in repo.list_branches()? {
+        for branch in map_repo(repo.list_branches())? {
             refs.insert(branch.name, branch.state_id);
         }
         return Ok(json_response(
@@ -96,7 +100,7 @@ fn handle_ref(
             if !path.is_file() {
                 return Ok(text_response(404, "branch not found"));
             }
-            let state_id = repo.branch_state(branch)?;
+            let state_id = map_repo(repo.branch_state(branch))?;
             Ok(text_response(200, &format!("{state_id}\n")))
         }
         tiny_http::Method::Put => {
@@ -105,13 +109,13 @@ fn handle_ref(
                 .trim()
                 .to_string();
             if !force
-                && let Ok(current) = repo.branch_state(branch)
+                && let Ok(current) = map_repo(repo.branch_state(branch))
                 && current != state_id
-                && !repo.is_ancestor_of(&current, &state_id)?
+                && !map_repo(repo.is_ancestor_of(&current, &state_id))?
             {
                 return Ok(text_response(409, "non-fast-forward update rejected"));
             }
-            repo.write_branch_ref(branch, &state_id)?;
+            map_repo(repo.write_branch_ref(branch, &state_id))?;
             Ok(text_response(200, "ok"))
         }
         tiny_http::Method::Head => {
@@ -135,14 +139,14 @@ fn handle_blob(
             if !repo.has_blob(id) {
                 return Ok(text_response(404, "blob not found"));
             }
-            let bytes = repo.read_blob_bytes(id)?;
+            let bytes = map_repo(repo.read_blob_bytes(id))?;
             Ok(bytes_response(200, &bytes))
         }
         tiny_http::Method::Put => {
             if repo.has_blob(id) {
                 return Ok(text_response(409, "blob already exists"));
             }
-            repo.import_blob_bytes(id, body)?;
+            map_repo(repo.import_blob_bytes(id, body))?;
             Ok(text_response(201, "created"))
         }
         tiny_http::Method::Head => {
@@ -166,7 +170,7 @@ fn handle_state(
             if !repo.has_state(&state_id) {
                 return Ok(text_response(404, "state not found"));
             }
-            let manifest = repo.load_manifest(&state_id)?;
+            let manifest = map_repo(repo.load_manifest(&state_id))?;
             Ok(json_response(
                 200,
                 &serde_json::to_vec(&manifest).map_err(|e| e.to_string())?,
@@ -178,7 +182,7 @@ fn handle_state(
             }
             let manifest: HashMap<String, String> =
                 serde_json::from_slice(body).map_err(|e| e.to_string())?;
-            repo.import_state_manifest(&state_id, &manifest)?;
+            map_repo(repo.import_state_manifest(&state_id, &manifest))?;
             Ok(text_response(201, "created"))
         }
         tiny_http::Method::Head => {
@@ -202,7 +206,7 @@ fn handle_timeline(
             if !repo.has_timeline(&state_id) {
                 return Ok(text_response(404, "timeline entry not found"));
             }
-            let entry = repo.load_timeline_entry(&state_id)?;
+            let entry = map_repo(repo.load_timeline_entry(&state_id))?;
             Ok(json_response(
                 200,
                 &serde_json::to_vec(&entry).map_err(|e| e.to_string())?,
@@ -216,7 +220,7 @@ fn handle_timeline(
             if entry.id != state_id {
                 return Ok(text_response(400, "timeline id mismatch"));
             }
-            repo.import_timeline_entry(&entry)?;
+            map_repo(repo.import_timeline_entry(&entry))?;
             Ok(text_response(201, "created"))
         }
         tiny_http::Method::Head => {

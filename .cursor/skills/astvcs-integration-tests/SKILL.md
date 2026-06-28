@@ -20,7 +20,7 @@ metadata:
 
 ### Test patterns
 
-**Library API** (diff/merge internals):
+**Library API** (diff/merge internals). Use `Repo::init_with_identity` in tests that call `commit`, `merge`, or `revert` (or call `set_identity` after `Repo::init`).
 
 ```rust
 let old_graph = parse_source("lib.rs", old_src).unwrap();
@@ -57,6 +57,10 @@ assert!(out.status.success());
 - `gc` defaults to dry-run; `--prune` deletes only blobs unreachable from ref tips; timeline entries are kept (see `gc_*` tests in `store/integrity.rs`, `cli_gc_dry_run_and_prune`).
 - `fsck` is report-only with no `--repair`; clean repos print `fsck: repository ok` (see `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`).
 - `gc` and `fsck` fail fast under external lock with the same `repository is locked by another process` message (see `cli_gc_and_fsck_fail_under_external_lock`).
+- `commit`, `merge`, and `revert` require configured author identity (`identity set` or env vars); see `commit_without_identity_fails_with_actionable_error`.
+- `identity set` / `identity get` use locked atomic writes to `config.json` (repository) or `~/.astvcs/config.json` (global); see `identity_set_and_read_roundtrip_via_repo_open`.
+- Author metadata is stored on timeline entries but not in state id hashes; see `identity_does_not_change_content_addressed_state_id` and `identity_recorded_on_commit_merge_and_revert`.
+- CLI `--json` prints structured `RepoError` JSON on stderr; message text matches plain `error:` output (see `structured_errors_match_plain_messages_and_kinds`).
 - `merge`, `checkout`, and `revert` refuse by default when the working tree is dirty; `--force` emits `warning: <command> --force: discarded uncommitted changes in <path>` per clobbered path (same contract as hard `reset`).
 - Merge planning reads committed states only; `merge_force_on_dirty_overlapping_path_applies_committed_plan` guards against uncommitted edits affecting the merge result.
 - No-op reverts skip the dirty-tree guard even when the working tree is dirty (`revert_noop_with_dirty_working_tree_skips_materialize_guard`).

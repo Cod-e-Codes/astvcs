@@ -25,10 +25,11 @@ pub use network::{
     RemoteConfig, add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 pub use store::{
-    BlobId, BlobStore, BranchInfo, CommitOutcome, FileStatus, FsckReport, GcReport, MergePlan,
-    MergeResolution, MergeResolveSide, Repo, StateEntry, StateId, TimelineEntry, WorkingStatus,
-    ancestors, hash_manifest, merge_base, parse_merge_resolution, parse_merge_resolutions,
-    walk_history,
+    AuthorIdentity, BlobId, BlobStore, BranchInfo, CommitOutcome, FileStatus, FsckReport, GcReport,
+    MergePlan, MergeResolution, MergeResolveSide, Repo, RepoConfig, RepoError, RepoErrorKind,
+    RepoResult, RevertOutcome, RevertPlan, StateEntry, StateId, TimelineEntry, WorkingStatus,
+    ancestors, configured_identity, hash_manifest, merge_base, parse_merge_resolution,
+    parse_merge_resolutions, resolve_author_identity, set_identity, walk_history,
 };
 pub use trace::{is_verbose, notice, set_verbose, warn};
 pub use unparser::unparse;

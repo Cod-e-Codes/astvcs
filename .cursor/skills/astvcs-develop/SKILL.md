@@ -48,7 +48,7 @@ cargo build --release
 | `diff/` | structural alignment (LCS), text Myers diff |
 | `intent/` | human-readable edit intents, overlap checks |
 | `merge/` | three-way merge, conflict detection |
-| `store/` | blobs, timeline, repo CLI backend, working-tree scan; `lock.rs`, `atomic.rs`, `reachability.rs`, `integrity.rs` (`gc`, `fsck`) |
+| `store/` | blobs, timeline, repo CLI backend, working-tree scan; `error.rs`, `identity.rs`, `lock.rs`, `atomic.rs`, `reachability.rs`, `integrity.rs` (`gc`, `fsck`) |
 | `network/` | remotes, fetch/push/clone, HTTP serve |
 | `unparser.rs` | AST back to source text (leading trivia between siblings) |
 
@@ -56,6 +56,6 @@ cargo build --release
 
 - All tests pass (`cargo test`).
 - Clippy is clean with `-D warnings`.
-- If CLI behavior changed (including `reset`, `revert`, `merge`, `checkout`, `branch remove`, `gc`, `fsck`, materialize dirty-tree guard, remote ref resolution, or repository lock errors), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network, locking, atomicity, reachability, gc/fsck, or repository model semantics change.
+- If CLI behavior changed (including `identity`, `--json`, `reset`, `revert`, `merge`, `checkout`, `branch remove`, `gc`, `fsck`, materialize dirty-tree guard, remote ref resolution, or repository lock errors), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network, locking, atomicity, reachability, gc/fsck, author identity, structured errors, or repository model semantics change.
 - If merge, revert, or diff semantics changed, update the matching fixture under `examples/` and its row in [examples/README.md](../../../examples/README.md).
 - If network sync behavior changed, update [docs/architecture.md](../../../docs/architecture.md) network section and extend `tests/integration.rs` or `src/network/sync.rs` tests.

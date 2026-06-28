@@ -30,7 +30,7 @@ fn save_remotes(repo: &Repo, config: &RemoteConfig) -> Result<(), String> {
 }
 
 pub fn add_remote(repo: &Repo, name: &str, url: &str) -> Result<(), String> {
-    let _lock = repo.repo_lock()?;
+    let _lock = repo.repo_lock().map_err(|e| e.to_string())?;
     if name.is_empty() {
         return Err("remote name cannot be empty".into());
     }
@@ -49,7 +49,7 @@ pub fn add_remote(repo: &Repo, name: &str, url: &str) -> Result<(), String> {
 }
 
 pub fn remove_remote(repo: &Repo, name: &str) -> Result<(), String> {
-    let _lock = repo.repo_lock()?;
+    let _lock = repo.repo_lock().map_err(|e| e.to_string())?;
     let mut config = load_remotes(repo)?;
     if config.remotes.remove(name).is_none() {
         return Err(format!("remote not found: {name}"));
@@ -63,7 +63,7 @@ pub fn remove_remote(repo: &Repo, name: &str) -> Result<(), String> {
 }
 
 pub fn list_remotes(repo: &Repo) -> Result<Vec<(String, String)>, String> {
-    let _lock = repo.repo_lock()?;
+    let _lock = repo.repo_lock().map_err(|e| e.to_string())?;
     let config = load_remotes(repo)?;
     let mut out: Vec<_> = config
         .remotes
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn add_list_remove_remote() {
         let dir = TempDir::new().unwrap();
-        let repo = Repo::init(dir.path()).unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
         add_remote(&repo, "origin", dir.path().to_str().unwrap()).unwrap();
         let list = list_remotes(&repo).unwrap();
         assert_eq!(list.len(), 1);
