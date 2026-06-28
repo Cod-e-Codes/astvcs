@@ -14,7 +14,7 @@
 | `rust_unparse_roundtrip_via_repo` | Parse, commit, checkout round-trip |
 | `go_unparse_roundtrip_via_repo` | Go parse, commit, checkout round-trip (block closing newlines) |
 | `parse_all_supported_languages` | Every supported extension and special path parses |
-| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural stability and text matches edited source (Rust, Python, JS, JSON, TS, Go) |
+| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural stability and text matches edited source (Rust, Python, JS, JSON, TS, Go, HTML, CSS) |
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
 | `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |

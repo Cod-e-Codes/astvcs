@@ -73,6 +73,8 @@ Supported extensions are parsed with tree-sitter into an `AstGraph` DAG. Each no
 | `.zig` | Zig |
 | `.sql` | SQL (`tree-sitter-sequel` on crates.io) |
 | `.sh`, `.bash` | Bash |
+| `.html`, `.htm` | HTML |
+| `.css` | CSS |
 
 All other paths use line-oriented text blob storage when the file is valid UTF-8 without NUL bytes. NUL-containing or invalid UTF-8 content is stored as a binary blob regardless of extension. Parse failures on supported extensions fall back to text and emit `warning:` on stderr. Known text-only paths (for example `.gitignore`, `.md`, `.txt`, `go.sum`, `.ps1`) store as text blobs silently; use `-v` to see `stored as text blob` notices. Unknown extensions warn once per path per process. Commits are not blocked on text fallback (partially broken sources still need versioning).
 
@@ -193,7 +195,7 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | Test | What it guards |
 |------|----------------|
 | `parse_all_supported_languages` | Every `supported_extensions()` entry and `supported_special_paths()` basename parses and validates |
-| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial `EditPayload` diff, apply, unparse, re-parse: no structural drift; text matches edited source (Rust, Python, JS, JSON, TS, Go with multiline block returns) |
+| `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial `EditPayload` diff, apply, unparse, re-parse: no structural drift; text matches edited source (Rust, Python, JS, JSON, TS, Go, HTML, CSS) |
 | `rust_unparse_roundtrip_via_repo` | Commit and reload preserves Rust source bytes |
 | `go_unparse_roundtrip_via_repo` | Commit, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |

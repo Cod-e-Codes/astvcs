@@ -542,6 +542,12 @@ fn parse_all_supported_languages() {
         ("query.sql", "SELECT 1;\n"),
         ("script.sh", "#!/bin/sh\necho hi\n"),
         ("script.bash", "echo hi\n"),
+        (
+            "index.html",
+            "<!DOCTYPE html><html><body><p>1</p></body></html>\n",
+        ),
+        ("page.htm", "<html><body>ok</body></html>\n"),
+        ("style.css", "body { color: red; }\n"),
     ];
     let mut covered = std::collections::HashSet::new();
     for (path, src) in samples {
@@ -700,6 +706,16 @@ fn edit_roundtrip_preserves_structure_across_languages() {
             "main.go",
             "package main\n\nimport \"fmt\"\n\nfunc foo() string {\n    return fmt.Sprintf(\"%d\", 1)\n}\n",
             "package main\n\nimport \"fmt\"\n\nfunc foo() string {\n    return fmt.Sprintf(\"%d\", 2)\n}\n",
+        ),
+        (
+            "index.html",
+            "<!DOCTYPE html><html><body><p>1</p></body></html>\n",
+            "<!DOCTYPE html><html><body><p>2</p></body></html>\n",
+        ),
+        (
+            "style.css",
+            "body { color: red; }\n",
+            "body { color: blue; }\n",
         ),
     ];
     for (path, before, after) in cases {

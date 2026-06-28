@@ -96,7 +96,7 @@ impl NodeKind {
 
     pub fn from_ts_kind(kind: &str) -> Self {
         match kind {
-            "source_file" | "module" | "program" => Self::Module,
+            "source_file" | "module" | "program" | "document" | "stylesheet" => Self::Module,
             "function_item"
             | "function_signature"
             | "function_definition"
@@ -127,7 +127,7 @@ impl NodeKind {
             "type_identifier" | "primitive_type" | "reference_type" => Self::Type,
             "identifier" => Self::Identifier,
             "integer_literal" | "float_literal" | "string_literal" | "char_literal" | "number"
-            | "string" | "true" | "false" | "null" => Self::Literal,
+            | "string" | "true" | "false" | "null" | "text" | "plain_value" => Self::Literal,
             "line_comment" | "block_comment" | "comment" => Self::Comment,
             "" => Self::Token,
             other => Self::Unknown(other.to_string()),

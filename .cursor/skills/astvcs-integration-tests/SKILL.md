@@ -65,7 +65,7 @@ assert!(out.status.success());
 - Merge planning reads committed states only; `merge_force_on_dirty_overlapping_path_applies_committed_plan` guards against uncommitted edits affecting the merge result.
 - No-op reverts skip the dirty-tree guard even when the working tree is dirty (`revert_noop_with_dirty_working_tree_skips_materialize_guard`).
 - `parse_all_supported_languages` covers every `supported_extensions()` entry and `supported_special_paths()` basename (for example `go.mod`).
-- `edit_roundtrip_preserves_structure_across_languages` checks parse → apply trivial edit → unparse → re-parse; roundtrip text must match edited source bytes.
+- `edit_roundtrip_preserves_structure_across_languages` checks parse → apply trivial edit → unparse → re-parse; roundtrip text must match edited source bytes (includes HTML and CSS).
 - `same_file_demo_disjoint_merge` is the main stress test for same-file alignment heuristics; watch overlapping cases when changing diff/merge.
 - Path rename tests: `path_rename_status_and_diff_integration`, `path_rename_merges_with_independent_content_edit`, `path_rename_conflicts_with_independent_add_at_destination`, `conflicting_path_renames_report_conflict`.
 - Move tests: `move_subtree_and_sibling_payload_edit_merge`, `moved_function_reports_move_not_delete_insert`.

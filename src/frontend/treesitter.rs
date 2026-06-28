@@ -243,4 +243,18 @@ mod tests {
             "jsx_self_closing_element"
         ));
     }
+
+    #[test]
+    fn parses_html() {
+        let src = "<!DOCTYPE html><html><body><p>hi</p></body></html>\n";
+        let graph = parse_language(SourceLanguage::Html, src).unwrap();
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_css() {
+        let src = "body { color: red; }\n";
+        let graph = parse_language(SourceLanguage::Css, src).unwrap();
+        graph.validate().unwrap();
+    }
 }

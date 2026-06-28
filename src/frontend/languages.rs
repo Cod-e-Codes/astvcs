@@ -22,6 +22,8 @@ pub enum SourceLanguage {
     Sql,
     Bash,
     GoMod,
+    Html,
+    Css,
 }
 
 impl SourceLanguage {
@@ -53,6 +55,8 @@ impl SourceLanguage {
             "zig" => Some(Self::Zig),
             "sql" => Some(Self::Sql),
             "sh" | "bash" => Some(Self::Bash),
+            "html" | "htm" => Some(Self::Html),
+            "css" => Some(Self::Css),
             _ => None,
         }
     }
@@ -78,6 +82,8 @@ impl SourceLanguage {
             Self::Sql => tree_sitter_sequel::LANGUAGE.into(),
             Self::Bash => tree_sitter_bash::LANGUAGE.into(),
             Self::GoMod => tree_sitter_gomod_orchard::LANGUAGE.into(),
+            Self::Html => tree_sitter_html::LANGUAGE.into(),
+            Self::Css => tree_sitter_css::LANGUAGE.into(),
         }
     }
 
@@ -102,6 +108,8 @@ impl SourceLanguage {
             Self::Sql => "sql",
             Self::Bash => "bash",
             Self::GoMod => "gomod",
+            Self::Html => "html",
+            Self::Css => "css",
         }
     }
 }
@@ -110,7 +118,7 @@ pub fn supported_extensions() -> &'static [&'static str] {
     &[
         "rs", "py", "pyw", "js", "mjs", "cjs", "c", "h", "go", "json", "toml", "yaml", "yml", "ts",
         "tsx", "cpp", "cc", "cxx", "hpp", "hh", "java", "cs", "swift", "kt", "kts", "zig", "sql",
-        "sh", "bash",
+        "sh", "bash", "html", "htm", "css",
     ]
 }
 
@@ -250,6 +258,18 @@ mod tests {
         assert_eq!(
             SourceLanguage::from_path("script.sh"),
             Some(SourceLanguage::Bash)
+        );
+        assert_eq!(
+            SourceLanguage::from_path("index.html"),
+            Some(SourceLanguage::Html)
+        );
+        assert_eq!(
+            SourceLanguage::from_path("page.htm"),
+            Some(SourceLanguage::Html)
+        );
+        assert_eq!(
+            SourceLanguage::from_path("style.css"),
+            Some(SourceLanguage::Css)
         );
         assert_eq!(
             SourceLanguage::from_path("go.mod"),
