@@ -6,7 +6,7 @@
 
 **HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `commit` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
 
-**Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` call `materialize_state` to write a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in `materialize_state` so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization.
+**Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` materialize a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in a shared materialize guard (checked before refs, timeline writes, and disk sync) so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization.
 
 **Merge planning is commit-only.** Three-way merge plans are built from blob manifests at the merge base, HEAD, and the other branch tip (`load_state_files` only). The working tree is not consulted, so a forced merge cannot incorporate uncommitted edits into conflict detection or the merged file set; `--force` only clobbers dirty paths when writing the already-computed plan to disk.
 
@@ -59,7 +59,7 @@ All other paths use line-oriented text blob storage. Parse failures on supported
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
-Checkout and merge call `materialize_state` to write the state manifest to disk and sync `index.json` (see **Working tree materialization** above). AST materialization uses trivia-aware unparsing: leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte.
+Materialization uses trivia-aware unparsing (see **Working tree materialization** above): leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte.
 
 ## Structural diff
 

@@ -23,13 +23,16 @@
 | `checkout_state_and_empty_commit` | Detached HEAD, no-op commit |
 | `config_files_use_ast_frontend` | TOML/YAML/JSON AST path |
 | `merge_conflict_diagnostics_without_side_effects` | Atomic rollback on conflict |
+| `rename_vs_parent_delete_reports_overlap` | Rename vs parent delete overlap report |
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync |
 | `cli_reset_hard_soft_and_force` | Reset modes, force clobber warnings |
-| `cli_materialize_refuses_dirty_tree_and_force` | Merge, checkout, revert refuse dirty tree; `--force` clobber warnings |
-| `merge_force_on_dirty_overlapping_path_applies_committed_plan` | Merge `--force` on dirty path in merge plan uses committed three-way result (unit) |
-| `revert_noop_with_dirty_working_tree_skips_materialize_guard` | No-op revert succeeds with dirty tree, no guard (unit) |
+| `cli_materialize_refuses_dirty_tree_and_force_overrides` | Merge, checkout, revert refuse dirty tree; `--force` clobber warnings |
+| `merge_force_on_dirty_overlapping_path_applies_committed_plan` | Merge `--force` on dirty path in merge plan uses committed three-way result (unit, `src/store/repo.rs`) |
+| `merge_refuses_dirty_tree_when_merge_is_clean` | Merge refuses dirty tree before materialize (unit, `src/store/repo.rs`) |
+| `revert_noop_with_dirty_working_tree_skips_materialize_guard` | No-op revert succeeds with dirty tree, no guard (unit, `src/store/repo.rs`) |
+| `cli_status_clean_tree_summary` | Clean-tree status summary line |
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
 | `cli_revert_of_revert_restores_content` | Revert then revert the revert commit (parent state reuse) |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |

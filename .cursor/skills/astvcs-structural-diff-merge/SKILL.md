@@ -36,6 +36,7 @@ metadata:
 ### Merge changes
 
 - Preserve atomic rollback on conflict.
+- Merge planning reads committed states only (`plan_merge` / `load_state_files`); the working tree is not consulted. Forced merges clobber dirty paths during materialization after the plan is fixed.
 - Disjoint sibling payload edits under the same parent should merge when they touch different nodes.
 - Conflicting `SetTrivia` on the same slot should report a structural conflict.
 - Do not write conflict markers into the working tree.

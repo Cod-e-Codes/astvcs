@@ -56,7 +56,7 @@ Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs are unchang
 
 ### `reset`
 
-Default mode is **hard**: move the branch tip or detached HEAD to the target and call `materialize_state` (sync working tree and `index.json`). This differs from git's default (`--mixed`): astvcs has no staging index, so the meaningful modes are **hard** (move pointer and sync disk) and **soft** (move pointer only).
+Default mode is **hard**: move the branch tip or detached HEAD to the target and materialize the state to disk (sync working tree and `index.json`). This differs from git's default (`--mixed`): astvcs has no staging index, so the meaningful modes are **hard** (move pointer and sync disk) and **soft** (move pointer only).
 
 | Flag | Behavior |
 |------|----------|
@@ -68,7 +68,7 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 ### Working tree safety (`merge`, `checkout`, `revert`, `reset`)
 
-`merge`, `checkout --branch`, `checkout --state`, and hard `reset` all call `materialize_state` to sync disk to a target manifest. They share one dirty-tree policy enforced inside `materialize_state` (checked before refs or timeline writes):
+`merge`, `checkout --branch`, `checkout --state`, and hard `reset` all materialize a state manifest to disk and sync `index.json`. They share one dirty-tree policy enforced by a shared **materialize guard** (checked before refs, timeline writes, and disk sync):
 
 | Default | `--force` |
 |---------|-----------|

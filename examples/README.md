@@ -14,7 +14,7 @@ Then use `.\target\release\astvcs.exe` (no `cargo run` per command).
 .\examples\reset.ps1
 ```
 
-Integration tests in `tests/integration.rs` cover the same scenarios in CI. Reset and revert are tested there only (no separate fixture directory).
+Integration tests in `tests/integration.rs` cover the same scenarios in CI. Reset, revert, and materialize-safety behavior are tested there only (no separate fixture directory). The full catalog is in [`.cursor/skills/astvcs-integration-tests/references/test-catalog.md`](../.cursor/skills/astvcs-integration-tests/references/test-catalog.md).
 
 | Fixture | Integration test | What it shows |
 |---------|------------------|---------------|
@@ -25,6 +25,10 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 | (CLI-only) | `trailing_comment_and_literal_edit_merge` | Trailing comment text merges with sibling literal edit |
 | (CLI-only) | `cli_trivia_only_commit` | Whitespace-only formatting commit |
 | (CLI-only) | `cli_branch_remove_guardrails` | `branch remove` guardrails and recreate |
+| (CLI-only) | `cli_reset_hard_soft_and_force` | Hard/soft reset and `--force` clobber warnings |
+| (CLI-only) | `cli_revert_and_dry_run`, `cli_revert_of_revert_restores_content` | Revert success, dry-run conflict, revert-of-revert |
+| (CLI-only) | `cli_merge_resolve_conflict` | `merge --resolve path:ours\|theirs` |
+| (CLI-only) | `cli_materialize_refuses_dirty_tree_and_force_overrides` | Merge, checkout, revert dirty-tree refusal and `--force` |
 
 ## Workflow demo
 
