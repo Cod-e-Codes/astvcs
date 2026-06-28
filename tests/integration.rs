@@ -1105,6 +1105,51 @@ fn cli_revert_and_dry_run() {
 }
 
 #[test]
+fn cli_revert_of_revert_restores_content() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    let v1 = repo.record("v1").unwrap().state_id;
+    fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
+    let v2 = repo.record("v2 add extra").unwrap().state_id;
+    fs::write(dir.path().join("note.txt"), "v3\n").unwrap();
+    let v3 = repo.record("v3").unwrap().state_id;
+
+    let out = run_astvcs(Some(dir.path()), &["revert", &v2, "-m", "revert extra add"]);
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let revert_id = repo.head_state().unwrap();
+    assert_ne!(revert_id, v1);
+    assert_ne!(revert_id, v2);
+    assert_ne!(revert_id, v3);
+    assert!(!dir.path().join("extra.txt").exists());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "v3\n"
+    );
+
+    let out = run_astvcs(
+        Some(dir.path()),
+        &["revert", &revert_id, "-m", "revert the revert"],
+    );
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(repo.head_state().unwrap(), v3);
+    assert!(dir.path().join("extra.txt").exists());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "v3\n"
+    );
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
 fn resolve_remote_ref_for_diff_merge_base_and_checkout() {
     let upstream = TempDir::new().unwrap();
     let upstream_repo = Repo::init(upstream.path()).unwrap();

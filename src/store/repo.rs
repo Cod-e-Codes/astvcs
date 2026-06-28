@@ -2141,12 +2141,13 @@ mod tests {
         fs::write(dir.path().join("extra.txt"), "extra\n").unwrap();
         let v2 = repo.record("v2 add extra").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "v3\n").unwrap();
-        repo.record("v3").unwrap();
+        let v3 = repo.record("v3").unwrap().state_id;
         let v4 = repo.revert_state(&v2, "revert extra add").unwrap().state_id;
-        repo.revert_state(&v4, "revert the revert").unwrap();
+        let outcome = repo.revert_state(&v4, "revert the revert").unwrap();
 
-        let head = repo.head_state().unwrap();
-        let files = repo.load_state_files(&head).unwrap();
+        assert_eq!(outcome.state_id, v3);
+        assert_eq!(repo.head_state().unwrap(), v3);
+        let files = repo.load_state_files(&v3).unwrap();
         assert!(files.contains_key("extra.txt"));
         assert_eq!(
             match &files["note.txt"] {
