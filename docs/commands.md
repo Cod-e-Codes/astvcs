@@ -12,7 +12,7 @@ Global flags:
 | Command | Description |
 |---------|-------------|
 | `init [path]` | Create a new repository (default path: `.`) |
-| `status` | Show changed files vs the checked-out state |
+| `status` | Show changed files vs the checked-out state (clean tree: one summary line) |
 | `diff [path]` | Diff working tree, or a single file |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |

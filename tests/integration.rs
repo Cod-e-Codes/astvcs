@@ -1187,3 +1187,23 @@ fn go_sum_and_ps1_status_are_quiet() {
         "text-only paths should not warn on status: {log:?}"
     );
 }
+
+#[test]
+fn cli_status_clean_tree_summary() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    repo.record("v1").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["status"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("nothing to record, working tree clean"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains(" M "),
+        "clean tree should not list unchanged paths"
+    );
+}

@@ -188,15 +188,20 @@ fn run(cli: Cli) -> Result<(), String> {
             println!("State: {head}");
             let mut paths: Vec<_> = status.entries.keys().cloned().collect();
             paths.sort();
+            let mut any = false;
             for path in paths {
                 let label = match status.entries.get(&path).unwrap() {
-                    FileStatus::Unchanged => "  ",
+                    FileStatus::Unchanged => continue,
                     FileStatus::Modified => " M",
                     FileStatus::Added => " A",
                     FileStatus::Removed => " D",
                     FileStatus::Untracked => "??",
                 };
+                any = true;
                 println!("{label} {path}");
+            }
+            if !any {
+                println!("nothing to record, working tree clean");
             }
         }
         Commands::Diff(args) => {
