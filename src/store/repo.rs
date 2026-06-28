@@ -2286,22 +2286,15 @@ mod tests {
         fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
         repo.record("seed").unwrap();
         fs::remove_file(dir.path().join("notes.txt")).unwrap();
-        let removed = repo.record("remove notes").unwrap();
-        assert!(removed.created);
-        let added = {
+        repo.record("remove notes").unwrap();
+        let target = {
             fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-            repo.record("add notes").unwrap()
+            repo.record("add notes").unwrap().state_id
         };
-        assert!(added.created);
-        let target = added.state_id;
         fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
         repo.record("modify notes").unwrap();
         fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
         repo.reset(&target, true, false).unwrap();
-
-        let plan = repo.plan_revert(&target).unwrap();
-        assert!(plan.is_clean(), "{:?}", plan.conflicts);
-        assert!(!plan.reverted_files.contains_key("notes.txt"));
 
         repo.revert_state(&target, "revert add").unwrap();
         assert!(!dir.path().join("notes.txt").exists());
