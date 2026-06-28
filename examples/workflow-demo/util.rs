@@ -1,4 +1,4 @@
 pub fn label() -> &'static str {
-    "base"
+    "feature-branch"
 }
 

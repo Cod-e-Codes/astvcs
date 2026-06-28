@@ -2368,4 +2368,52 @@ mod tests {
         solo_repo.commit("solo").unwrap();
         assert!(solo_repo.remove_branch("main").is_err());
     }
+
+    #[test]
+    fn remove_branch_not_found() {
+        let (dir, repo) = sample_repo();
+        let err = repo.remove_branch("missing").unwrap_err();
+        assert!(err.contains("branch not found"), "{err}");
+        assert!(!dir.path().join(".astvcs/refs/heads/missing").exists());
+    }
+
+    #[test]
+    fn remove_branch_then_recreate_same_name() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("baseline").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        repo.checkout_branch("main").unwrap();
+        repo.remove_branch("feature").unwrap();
+        repo.create_branch("feature", Some("main")).unwrap();
+        assert_eq!(
+            repo.branch_state("feature").unwrap(),
+            repo.branch_state("main").unwrap()
+        );
+    }
+
+    #[test]
+    fn revert_trailing_comment_commit() {
+        let (dir, repo) = sample_repo();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    println!(\"a\");\n}\n",
+        )
+        .unwrap();
+        repo.commit("baseline").unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    println!(\"a\"); // note\n}\n",
+        )
+        .unwrap();
+        let with_comment = repo.commit("add comment").unwrap().state_id;
+        repo.revert_state(&with_comment, "drop comment").unwrap();
+        let text = fs::read_to_string(dir.path().join("src/main.rs")).unwrap();
+        assert!(
+            !text.contains("// note"),
+            "revert should remove trailing comment: {text}"
+        );
+        assert!(text.contains("println!(\"a\")"), "{text}");
+    }
 }

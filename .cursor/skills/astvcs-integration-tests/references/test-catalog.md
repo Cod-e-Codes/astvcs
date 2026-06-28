@@ -5,6 +5,7 @@
 | `workflow_demo_prepend_and_disjoint_merge` | Prepend comment, no move cascade, disjoint merge |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | EditPayload, sibling merge, rename conflict |
 | `trailing_comment_and_literal_edit_merge` | Trailing comment trivia survives merge with sibling literal edit |
+| `cli_trivia_only_commit` | Whitespace-only commit via CLI |
 | `cli_merge_resolve_conflict` | `--resolve path:ours\|theirs` |
 | `commit_respects_gitignore` | Ignore rules during scan |
 | `multi_language_repo_roundtrip` | Mixed AST and text files in one repo |
@@ -16,7 +17,7 @@
 | `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural stability and text matches edited source (Rust, Python, JS, JSON, TS, Go) |
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
-| `cli_branch_remove_guardrails` | Branch remove refuses checked-out and last branch |
+| `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |
 | `merge_demo_add_add_and_deletion` | Add/add and deletion cases |
 | `merge_demo_deletion_when_other_branch_unchanged` | Modify vs delete |
 | `checkout_state_and_empty_commit` | Detached HEAD, no-op commit |

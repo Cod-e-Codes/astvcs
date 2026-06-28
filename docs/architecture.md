@@ -6,7 +6,7 @@
 
 **HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `commit` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
 
-**Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store (no GC yet).
+**Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store (no GC yet). `config.json` `default_branch` is not updated when a branch is removed.
 
 **On-disk layout.**
 
@@ -61,7 +61,7 @@ Checkout and merge call `materialize_state` to write the state manifest to disk 
 
 1. Parse old and new sources into graphs.
 2. Align children between old and new: LCS on matching `NodeId` (unchanged subtrees), then LCS on `(NodeKind, child_count)` (role pass; payload ignored), then further pairing for structural nodes and payload-editable leaves.
-3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `ReorderChildren`, `SetTrivia`, `SetRootTrailingTrivia`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings. When matched siblings keep the same `NodeId` but leading trivia changes (for example trailing comment text stored before the next sibling token), `SetTrivia` captures the gap.
+3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `ReorderChildren`, `SetTrivia`, `SetRootTrailingTrivia`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings. When matched siblings keep the same `NodeId` but leading trivia changes (for example trailing comment text stored before the next sibling token), `SetTrivia` captures the gap. Same-id internal nodes still recurse into children so trivia-only edits and reorder-with-trivia changes are not skipped.
 
 Alignment is heuristic. Wrong sibling pairing can produce delete+insert instead of `EditPayload`, or mis-anchored mutations. The `identity-demo` fixture exercises literal `EditPayload` and cases where alignment fails (rename conflict).
 
@@ -152,7 +152,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Sibling literal merge and rename conflicts |
 | `trailing_comment_and_literal_edit_merge` | Trailing comment text survives merge when a sibling literal is edited on the other branch |
-| `cli_branch_remove_guardrails` | Branch remove refuses checked-out and last branch |
+| `cli_trivia_only_commit` | Whitespace-only formatting commit round-trips through the CLI |
+| `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |
 | `cli_reset_hard_soft_and_force` | Hard/soft reset, drift repair, force clobber warnings |
 | `cli_revert_and_dry_run` | Revert conflicts, dry-run, and successful undo |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | `origin/main`-style ref resolution |

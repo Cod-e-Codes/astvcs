@@ -24,7 +24,9 @@ metadata:
 
 - Keep mutations anchored to the **old** graph.
 - Prefer sibling anchors over index-based inserts so prepends do not cascade `MoveNode`.
-- After alignment changes, run `workflow_demo_prepend_and_disjoint_merge` and `identity_demo_payload_edit_disjoint_merge_and_conflict`.
+- Trivia-only edits use `SetTrivia` / `SetRootTrailingTrivia`. Same-id nodes still recurse into children; the reorder path diffs child trivia after `ReorderChildren`.
+- Trailing comment text often lives in leading trivia before the next sibling token, not in the comment node payload.
+- After alignment changes, run `workflow_demo_prepend_and_disjoint_merge`, `identity_demo_payload_edit_disjoint_merge_and_conflict`, and `trailing_comment_and_literal_edit_merge`.
 
 ### Intent changes
 
@@ -35,6 +37,7 @@ metadata:
 
 - Preserve atomic rollback on conflict.
 - Disjoint sibling payload edits under the same parent should merge when they touch different nodes.
+- Conflicting `SetTrivia` on the same slot should report a structural conflict.
 - Do not write conflict markers into the working tree.
 
 ### Debugging

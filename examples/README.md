@@ -23,7 +23,8 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 | `merge-demo/` | `merge_demo_add_add_and_deletion`, `merge_demo_deletion_when_other_branch_unchanged` | Add/add on a new file; modify vs delete |
 | `identity-demo/` | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Literal edits as `EditPayload`; sibling literal merge; rename conflict |
 | (CLI-only) | `trailing_comment_and_literal_edit_merge` | Trailing comment text merges with sibling literal edit |
-| (CLI-only) | `cli_branch_remove_guardrails` | `branch remove` guardrails |
+| (CLI-only) | `cli_trivia_only_commit` | Whitespace-only formatting commit |
+| (CLI-only) | `cli_branch_remove_guardrails` | `branch remove` guardrails and recreate |
 
 ## Workflow demo
 

@@ -114,6 +114,9 @@ fn diff_subtree(
     let new_node = new.get(&new_id).unwrap();
 
     if old_id == new_id {
+        if old_node.kind == new_node.kind && !(old_node.is_leaf() && new_node.is_leaf()) {
+            diff_children(old, new, old_id, new_id, out);
+        }
         return;
     }
 
@@ -219,6 +222,9 @@ fn diff_children(
         });
         for id in &old_children {
             diff_subtree(old, new, *id, *id, out);
+            if new_children.contains(id) {
+                diff_child_trivia(old, new, old_node_id, new_node_id, *id, *id, out);
+            }
         }
         return;
     }
@@ -548,6 +554,34 @@ mod tests {
         );
         let mut working = old.clone();
         working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
+    }
+
+    #[test]
+    fn trivia_only_blank_line_applies() {
+        let old = parse_rust("fn main() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
+        let new = parse_rust("fn main() {\n    let x = 1;\n\n    let y = 2;\n}\n").unwrap();
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            diff.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::SetTrivia { .. })),
+            "expected SetTrivia for blank line, got {:?}",
+            diff.mutations
+        );
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
+    }
+
+    #[test]
+    fn reorder_with_trivia_roundtrips() {
+        let old = parse_rust("fn foo() {\n    let a = 1;\n    let b = 2;\n}\n").unwrap();
+        let new = parse_rust("fn foo() {\n    let b = 2;\n\n    let a = 1;\n}\n").unwrap();
+        let diff = diff_graphs(&old, &new);
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        working.validate().unwrap();
         assert_eq!(unparse(&working), unparse(&new));
     }
 

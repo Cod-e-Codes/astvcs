@@ -600,6 +600,64 @@ mod tests {
     }
 
     #[test]
+    fn conflicting_trailing_comments_on_same_slot_conflict() {
+        let base = parse_rust("fn main() {\n    println!(\"a\");\n}\n").unwrap();
+        let left = parse_rust("fn main() {\n    println!(\"a\"); // left\n}\n").unwrap();
+        let right = parse_rust("fn main() {\n    println!(\"a\"); // right\n}\n").unwrap();
+        assert!(
+            matches!(
+                merge_files(
+                    &FileContent::Ast(base),
+                    &FileContent::Ast(left),
+                    &FileContent::Ast(right),
+                ),
+                MergeOutcome::Conflict(_)
+            ),
+            "expected conflict when both branches set different trailing comment trivia"
+        );
+    }
+
+    #[test]
+    fn block_comment_survives_sibling_literal_edit_merge() {
+        use crate::unparser::unparse;
+
+        let base = parse_rust("fn main() {\n    println!(\"Hello, World!\");\n}\n").unwrap();
+        let left = parse_rust("fn main() {\n    println!(\"sup?\");\n}\n").unwrap();
+        let right =
+            parse_rust("fn main() {\n    println!(\"Hello, World!\"); /* waddup fool */\n}\n")
+                .unwrap();
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        ) else {
+            panic!("expected block comment merge");
+        };
+        let text = unparse(&merged);
+        assert!(text.contains("waddup fool"), "merged: {text:?}");
+        assert!(text.contains("\"sup?\""), "merged: {text:?}");
+    }
+
+    #[test]
+    fn trailing_comment_before_next_statement_survives_literal_edit() {
+        use crate::unparser::unparse;
+
+        let base = parse_rust("fn main() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
+        let left = parse_rust("fn main() {\n    let x = 9;\n    let y = 2;\n}\n").unwrap();
+        let right = parse_rust("fn main() {\n    let x = 1; // note\n    let y = 2;\n}\n").unwrap();
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        ) else {
+            panic!("expected merge with comment before next statement");
+        };
+        let text = unparse(&merged);
+        assert!(text.contains("// note"), "merged: {text:?}");
+        assert!(text.contains("let x = 9;"), "merged: {text:?}");
+    }
+
+    #[test]
     fn sibling_literal_edits_merge() {
         let base = parse_rust(
             "fn labels() -> (&'static str, &'static str) {\n    (\"left\", \"right\")\n}\n",

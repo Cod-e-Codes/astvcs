@@ -1320,6 +1320,26 @@ fn trailing_comment_and_literal_edit_merge() {
 }
 
 #[test]
+fn cli_trivia_only_commit() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    Repo::init(root).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main(){\n    let x=1;\n}\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["commit", "-m", "baseline"]),
+        "baseline",
+    );
+    fs::write(root.join("src/main.rs"), "fn main() {\n    let x = 1;\n}\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["commit", "-m", "format whitespace"]),
+        "trivia commit",
+    );
+    let text = fs::read_to_string(root.join("src/main.rs")).unwrap();
+    assert_eq!(text, "fn main() {\n    let x = 1;\n}\n");
+}
+
+#[test]
 fn cli_branch_remove_guardrails() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
@@ -1372,4 +1392,15 @@ fn cli_branch_remove_guardrails() {
     let last = run_astvcs(Some(root2), &["branch", "remove", "main"]);
     assert!(!last.status.success());
     assert!(String::from_utf8_lossy(&last.stderr).contains("last branch"));
+
+    let missing = run_astvcs(Some(root), &["branch", "remove", "no-such-branch"]);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("branch not found"));
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["branch", "create", "feature"]),
+        "recreate feature",
+    );
+    let list2 = run_astvcs(Some(root), &["branch", "list"]);
+    assert!(String::from_utf8_lossy(&list2.stdout).contains("feature"));
 }
