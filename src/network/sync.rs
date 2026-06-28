@@ -104,6 +104,7 @@ pub struct FetchOutcome {
 }
 
 pub fn fetch(repo: &Repo, remote_name: &str, branch: Option<&str>) -> Result<FetchOutcome, String> {
+    let _lock = repo.repo_lock()?;
     let url = remote_url(repo, remote_name)?;
     let transport = Transport::open(&url)?;
     ensure_remote_dir(repo, remote_name)?;
@@ -143,6 +144,7 @@ pub fn push(
     branch: Option<&str>,
     force: bool,
 ) -> Result<PushOutcome, String> {
+    let _lock = repo.repo_lock()?;
     let url = remote_url(repo, remote_name)?;
     let transport = Transport::open(&url)?;
 

@@ -1,8 +1,12 @@
+pub(crate) mod atomic;
 mod blobs;
 mod history;
+mod lock;
 mod merge_resolve;
 mod repo;
 mod walk;
+
+pub use lock::RepoLockGuard;
 
 pub use blobs::{BlobId, BlobStore, hash_manifest};
 pub use history::{ancestors, merge_base, walk_history};

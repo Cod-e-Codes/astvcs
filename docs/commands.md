@@ -121,6 +121,14 @@ With `--dry-run`, resolutions are applied in memory only: a fully resolved plan 
 
 By default, stderr shows only `warning:` lines (unexpected parse fallback, skipped paths, merge conflicts, materialize `--force` clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. With `-v`, `notice:` lines are included: scan results, parse mode per file, text-blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
 
+When another process holds `.astvcs/repo.lock`, any command that needs the repository fails immediately on stderr with:
+
+```text
+error: repository is locked by another process; cannot acquire <absolute-or-relative-path>/.astvcs/repo.lock
+```
+
+There is no wait/retry; run the command again after the other process finishes.
+
 ## Ignore rules
 
 Put patterns in `.gitignore` (standard git syntax) or `.astvcsignore` for astvcs-only rules. Build output, dependencies, and binaries are the project's responsibility to list there.

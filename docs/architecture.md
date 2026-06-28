@@ -8,6 +8,10 @@
 
 **Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` materialize a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in a shared materialize guard (checked before refs, timeline writes, and disk sync) so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization.
 
+**Repository locking and atomic writes.** Every command that reads or writes refs, `HEAD`, the timeline, the blob store, `index.json`, or the working tree acquires a single exclusive advisory lock on `.astvcs/repo.lock` for the duration of that logical operation. astvcs uses one coarse exclusive lock rather than separate read/write locks: there is no staging area, most commands either read the full repository snapshot or write it end-to-end, and concurrent readers against a writer materializing the tree would still be unsafe. The lock is OS advisory (`flock` on Unix, `LockFileEx` on Windows) via `std::fs::File::try_lock`, not a marker file; when a process exits or is killed the kernel releases the lock, so a stale lock cannot permanently deadlock the repository. If another process holds the lock, astvcs fails fast with `repository is locked by another process; cannot acquire <path>` rather than waiting, because local CLI contention is rare and a clear immediate error is better UX than a silent hang. Reentrant acquisition on the same thread allows nested repo calls without double-locking. Network sync entry points (`fetch`, `push`, remote config) acquire the same lock once per operation.
+
+Single-file metadata writes (`HEAD`, branch and remote refs, `index.json`, state/timeline JSON, blob payloads, `config.json`, `remotes.json`, and working-tree files during materialization) use same-directory temp files with the `.astvcs-tmp` suffix followed by `rename` into place, so a crash mid-write leaves either the previous complete file or the new complete file, never a partial target. Multi-file materialization is not atomic as a unit: each path and `index.json` are independently atomic, but the operation as a whole can stop between files; the exclusive lock prevents another process from observing that window, and `index.json` is written last so a crash mid-materialize leaves the old index until the command completes or is retried. At the start of each outermost locked command, stray `.astvcs-tmp` files are removed when the canonical file already exists; orphan temps without a canonical target are left alone. Mutating commands update refs and `HEAD` after disk materialization and `index.json` so a failed materialize does not advance branch tips.
+
 **Merge planning is commit-only.** Three-way merge plans are built from blob manifests at the merge base, HEAD, and the other branch tip (`load_state_files` only). The working tree is not consulted, so a forced merge cannot incorporate uncommitted edits into conflict detection or the merged file set; `--force` only clobbers dirty paths when writing the already-computed plan to disk.
 
 **Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store (no GC yet). `config.json` `default_branch` is not updated when a branch is removed.
@@ -19,6 +23,7 @@
 .astvcs/states/      state manifests
 .astvcs/timeline/    parent links and metadata
 .astvcs/refs/heads/  branch tips
+.astvcs/repo.lock    exclusive advisory lock (empty; OS lock on open)
 HEAD                 branch name or state id
 index.json           last committed manifest (working-tree baseline)
 ```
@@ -124,8 +129,10 @@ src/
     mod.rs       edit intent classification and overlap reasoning
   merge/
   store/
+    atomic.rs    same-directory rename writes, stray temp cleanup
     blobs.rs     content-addressed blob store
     history.rs   timeline walk and merge-base (LCA)
+    lock.rs      exclusive advisory repo lock (repo.lock)
     walk.rs      gitignore-style working tree scan
     repo.rs      repository and CLI backend
   network/
@@ -161,5 +168,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `cli_reset_hard_soft_and_force` | Hard/soft reset, drift repair, force clobber warnings |
 | `cli_revert_and_dry_run` | Revert conflicts, dry-run, and successful undo |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | `origin/main`-style ref resolution |
+| `cli_reports_repository_lock_contention` | Lock held externally: CLI fails fast with lock path |
+| `concurrent_repo_lock_fails_fast_with_actionable_error` | Second writer gets lock error; succeeds after release (unit, `src/store/repo.rs`) |
+| `stray_temp_file_cleaned_on_next_locked_command` | Leftover `.astvcs-tmp` removed when canonical file exists (unit) |
+| `merge_conflict_still_leaves_refs_and_disk_unchanged_under_lock` | Merge rollback with locking enabled (unit) |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

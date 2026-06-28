@@ -1,4 +1,5 @@
 use crate::frontend::FileContent;
+use crate::store::atomic;
 use crate::trace;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -42,7 +43,7 @@ impl BlobStore {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let bytes = serde_json::to_vec(content).map_err(|e| e.to_string())?;
-        fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        atomic::write_atomic(&path, &bytes).map_err(|e| e.to_string())?;
         trace::notice(format!("blob {id}: wrote {} bytes", bytes.len()));
         Ok(id)
     }
@@ -81,7 +82,7 @@ impl BlobStore {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        atomic::write_atomic(&path, bytes).map_err(|e| e.to_string())?;
         trace::notice(format!("blob {id}: imported {} bytes", bytes.len()));
         Ok(())
     }

@@ -36,4 +36,8 @@
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
 | `cli_revert_of_revert_restores_content` | Revert then revert the revert commit (parent state reuse) |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |
+| `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
+| `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |
+| `stray_temp_file_cleaned_on_next_locked_command` | Crash leftover `.astvcs-tmp` cleaned on next command (unit) |
+| `merge_conflict_still_leaves_refs_and_disk_unchanged_under_lock` | Merge conflict rollback with locking (unit) |
 | `go_sum_and_ps1_status_are_quiet` | Known text-only paths on scan |

@@ -1,4 +1,5 @@
 use crate::store::Repo;
+use crate::store::atomic::write_atomic_json;
 use std::collections::HashMap;
 use std::fs;
 
@@ -25,11 +26,11 @@ pub fn load_remotes(repo: &Repo) -> Result<RemoteConfig, String> {
 
 fn save_remotes(repo: &Repo, config: &RemoteConfig) -> Result<(), String> {
     let path = repo.astvcs_dir().join(REMOTES_FILE);
-    let text = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    fs::write(path, text).map_err(|e| e.to_string())
+    write_atomic_json(&path, config)
 }
 
 pub fn add_remote(repo: &Repo, name: &str, url: &str) -> Result<(), String> {
+    let _lock = repo.repo_lock()?;
     if name.is_empty() {
         return Err("remote name cannot be empty".into());
     }
@@ -48,6 +49,7 @@ pub fn add_remote(repo: &Repo, name: &str, url: &str) -> Result<(), String> {
 }
 
 pub fn remove_remote(repo: &Repo, name: &str) -> Result<(), String> {
+    let _lock = repo.repo_lock()?;
     let mut config = load_remotes(repo)?;
     if config.remotes.remove(name).is_none() {
         return Err(format!("remote not found: {name}"));

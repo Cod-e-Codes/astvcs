@@ -1514,3 +1514,22 @@ fn cli_materialize_refuses_dirty_tree_and_force_overrides() {
         "v1\n"
     );
 }
+
+#[test]
+fn cli_reports_repository_lock_contention() {
+    use astvcs::store::RepoLockGuard;
+
+    let dir = TempDir::new().unwrap();
+    Repo::init(dir.path()).unwrap();
+    let astvcs = dir.path().join(".astvcs");
+    let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["status"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("repository is locked by another process"),
+        "{err}"
+    );
+    assert!(err.contains("repo.lock"), "{err}");
+}

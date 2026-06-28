@@ -48,8 +48,10 @@ assert!(out.status.success());
 
 - `repo.working_tree_is_clean()` after successful merge.
 - No `MoveNode` mutations on prepend-only edits (see `workflow_demo_prepend_and_disjoint_merge`).
-- Merge conflicts leave repo unchanged (see `merge_conflict_diagnostics_without_side_effects`).
+- Merge conflicts leave repo unchanged (see `merge_conflict_diagnostics_without_side_effects`, `merge_conflict_still_leaves_refs_and_disk_unchanged_under_lock`).
 - Revert conflicts and failed materialize commands on dirty trees leave refs and disk unchanged (see `cli_materialize_refuses_dirty_tree_and_force_overrides`, `cli_revert_and_dry_run`, `reset_hard_refuses_dirty_tree_without_force` in `src/store/repo.rs`).
+- Repository lock contention fails fast with `repository is locked by another process; cannot acquire …/repo.lock` (see `cli_reports_repository_lock_contention`, `concurrent_repo_lock_fails_fast_with_actionable_error`).
+- Stray `.astvcs-tmp` files from a prior crash are removed when the canonical file exists (see `stray_temp_file_cleaned_on_next_locked_command`).
 - `merge`, `checkout`, and `revert` refuse by default when the working tree is dirty; `--force` emits `warning: <command> --force: discarded uncommitted changes in <path>` per clobbered path (same contract as hard `reset`).
 - Merge planning reads committed states only; `merge_force_on_dirty_overlapping_path_applies_committed_plan` guards against uncommitted edits affecting the merge result.
 - No-op reverts skip the dirty-tree guard even when the working tree is dirty (`revert_noop_with_dirty_working_tree_skips_materialize_guard`).
