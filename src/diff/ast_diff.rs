@@ -558,6 +558,29 @@ mod tests {
     }
 
     #[test]
+    fn comment_removal_clears_trivia() {
+        let with_comment = parse_rust(
+            "fn main() {\n    println!(\"a\"); // note\n}\n",
+        )
+        .unwrap();
+        let without = parse_rust("fn main() {\n    println!(\"a\");\n}\n").unwrap();
+        let diff = diff_graphs(&with_comment, &without);
+        assert!(
+            diff.mutations.iter().any(|m| match m {
+                Mutation::SetTrivia { leading, .. } => leading.is_empty(),
+                Mutation::DeleteSubtree { .. } => true,
+                _ => false,
+            }),
+            "expected trivia clear or comment delete, got {:?}",
+            diff.mutations
+        );
+        let mut working = with_comment.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&without));
+        assert!(!unparse(&working).contains("// note"));
+    }
+
+    #[test]
     fn trivia_only_blank_line_applies() {
         let old = parse_rust("fn main() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
         let new = parse_rust("fn main() {\n    let x = 1;\n\n    let y = 2;\n}\n").unwrap();

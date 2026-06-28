@@ -2416,4 +2416,42 @@ mod tests {
         );
         assert!(text.contains("println!(\"a\")"), "{text}");
     }
+
+    #[test]
+    fn revert_comment_after_disjoint_literal_merge() {
+        let (dir, repo) = sample_repo();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    println!(\"Hello, World!\");\n}\n",
+        )
+        .unwrap();
+        repo.commit("baseline").unwrap();
+
+        repo.create_branch("feature", None).unwrap();
+        repo.checkout_branch("feature").unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    println!(\"Hello, World!\"); // waddup fool\n}\n",
+        )
+        .unwrap();
+        let feature_tip = repo.commit("add comment").unwrap().state_id;
+
+        repo.checkout_branch("main").unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() {\n    println!(\"sup?\");\n}\n",
+        )
+        .unwrap();
+        repo.commit("change literal").unwrap();
+        repo.merge_branch("feature", "merge comment and literal").unwrap();
+
+        repo.revert_state(&feature_tip, "drop merged comment").unwrap();
+        let text = fs::read_to_string(dir.path().join("src/main.rs")).unwrap();
+        assert!(
+            text.contains("sup?") && !text.contains("waddup fool") && !text.contains("//"),
+            "revert after merge should keep literal and drop comment: {text}"
+        );
+        assert!(repo.working_tree_is_clean().unwrap());
+    }
 }
