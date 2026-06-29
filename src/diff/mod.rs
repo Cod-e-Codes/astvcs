@@ -1,3 +1,4 @@
+mod align;
 mod ast_diff;
 mod lcs;
 mod path_rename;

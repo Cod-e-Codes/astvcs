@@ -1,3 +1,4 @@
+use crate::diff::align::{fingerprint_bucket_pairs, pair_equal_node_ids, pair_in_order_by_key};
 use crate::diff::lcs::lcs_pairs;
 use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
 use crate::trace;
@@ -114,7 +115,7 @@ fn structure_fingerprint(graph: &AstGraph, id: &NodeId) -> Vec<StructureSig> {
     out
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StructureSig {
     kind: NodeKind,
     child_count: usize,
@@ -187,6 +188,93 @@ fn same_id_multiset(a: &[NodeId], b: &[NodeId]) -> bool {
     left == right
 }
 
+fn unmatched_indices(matched: &[bool]) -> Vec<usize> {
+    matched
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| (!m).then_some(i))
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_role_match(
+    old: &AstGraph,
+    new: &AstGraph,
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    old_node_id: NodeId,
+    new_node_id: NodeId,
+    oi: usize,
+    ni: usize,
+    matched_old: &mut [bool],
+    matched_new: &mut [bool],
+    out: &mut Vec<Mutation>,
+) {
+    let oc = old.get(&old_children[oi]).unwrap();
+    let nc = new.get(&new_children[ni]).unwrap();
+    if oc.kind != nc.kind || oc.children.len() != nc.children.len() {
+        return;
+    }
+    matched_old[oi] = true;
+    matched_new[ni] = true;
+    if old_children[oi] != new_children[ni] && oi != ni {
+        out.push(Mutation::MoveNode {
+            node_id: old_children[oi],
+            new_parent: old_node_id,
+            before: insert_anchor(new_children, ni),
+        });
+    }
+    diff_subtree(old, new, old_children[oi], new_children[ni], out);
+    diff_child_trivia(
+        old,
+        new,
+        old_node_id,
+        new_node_id,
+        old_children[oi],
+        new_children[ni],
+        out,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_key_match(
+    old: &AstGraph,
+    new: &AstGraph,
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    old_node_id: NodeId,
+    new_node_id: NodeId,
+    oi: usize,
+    ni: usize,
+    matched_old: &mut [bool],
+    matched_new: &mut [bool],
+    out: &mut Vec<Mutation>,
+) {
+    let oc = old.get(&old_children[oi]).unwrap();
+    let nc = new.get(&new_children[ni]).unwrap();
+    if oc.kind == nc.kind && !oc.is_leaf() {
+        matched_old[oi] = true;
+        matched_new[ni] = true;
+        if old_children[oi] != new_children[ni] && oi != ni {
+            out.push(Mutation::MoveNode {
+                node_id: old_children[oi],
+                new_parent: old_node_id,
+                before: insert_anchor(new_children, ni),
+            });
+        }
+        diff_subtree(old, new, old_children[oi], new_children[ni], out);
+        diff_child_trivia(
+            old,
+            new,
+            old_node_id,
+            new_node_id,
+            old_children[oi],
+            new_children[ni],
+            out,
+        );
+    }
+}
+
 fn unique_fingerprint_pairs(
     old: &AstGraph,
     new: &AstGraph,
@@ -195,47 +283,24 @@ fn unique_fingerprint_pairs(
     matched_old: &[bool],
     matched_new: &[bool],
 ) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for (oi, old_child) in old_children.iter().enumerate() {
-        if matched_old[oi] {
-            continue;
-        }
-        let oc = old.get(old_child).unwrap();
-        if oc.is_leaf() {
-            continue;
-        }
-        let fp = structure_fingerprint(old, old_child);
-        let new_candidates: Vec<usize> = new_children
-            .iter()
-            .enumerate()
-            .filter(|(ni, new_child)| {
-                !matched_new[*ni]
-                    && old.get(old_child).unwrap().kind == new.get(new_child).unwrap().kind
-                    && !new.get(new_child).unwrap().is_leaf()
-                    && structure_fingerprint(new, new_child) == fp
-            })
-            .map(|(ni, _)| ni)
-            .collect();
-        if new_candidates.len() != 1 {
-            continue;
-        }
-        let ni = new_candidates[0];
-        let old_candidates: Vec<usize> = old_children
-            .iter()
-            .enumerate()
-            .filter(|(oi2, old_child2)| {
-                !matched_old[*oi2]
-                    && old.get(old_child2).unwrap().kind == new.get(&new_children[ni]).unwrap().kind
-                    && !old.get(old_child2).unwrap().is_leaf()
-                    && structure_fingerprint(old, old_child2) == fp
-            })
-            .map(|(oi2, _)| oi2)
-            .collect();
-        if old_candidates.len() == 1 {
-            pairs.push((oi, ni));
-        }
-    }
-    pairs
+    let old_fps: Vec<(usize, Vec<StructureSig>)> = old_children
+        .iter()
+        .enumerate()
+        .filter(|(oi, id)| !matched_old[*oi] && !old.get(id).unwrap().is_leaf())
+        .map(|(oi, id)| (oi, structure_fingerprint(old, id)))
+        .collect();
+    let new_fps: Vec<(usize, Vec<StructureSig>)> = new_children
+        .iter()
+        .enumerate()
+        .filter(|(ni, id)| !matched_new[*ni] && !new.get(id).unwrap().is_leaf())
+        .map(|(ni, id)| (ni, structure_fingerprint(new, id)))
+        .collect();
+    fingerprint_bucket_pairs(&old_fps, &new_fps)
+        .into_iter()
+        .filter(|(oi, ni)| {
+            old.get(&old_children[*oi]).unwrap().kind == new.get(&new_children[*ni]).unwrap().kind
+        })
+        .collect()
 }
 
 fn diff_subtree(
@@ -377,74 +442,15 @@ fn diff_children(
         .map(|id| child_role_key(new, id))
         .collect();
 
-    let id_pairs = lcs_pairs(&old_children, &new_children);
-    let role_pairs = lcs_pairs(&old_roles, &new_roles);
-    let key_pairs = lcs_pairs(&old_keys, &new_keys);
-
     let mut matched_old = vec![false; old_children.len()];
     let mut matched_new = vec![false; new_children.len()];
 
-    for (oi, ni) in id_pairs {
-        matched_old[oi] = true;
-        matched_new[ni] = true;
-        diff_subtree(old, new, old_children[oi], new_children[ni], out);
-        diff_child_trivia(
-            old,
-            new,
-            old_node_id,
-            new_node_id,
-            old_children[oi],
-            new_children[ni],
-            out,
-        );
-    }
+    let wide_list = old_children.len() * new_children.len() > crate::diff::align::LCS_THRESHOLD;
 
-    for (oi, ni) in role_pairs {
-        if matched_old[oi] || matched_new[ni] {
-            continue;
-        }
-        let oc = old.get(&old_children[oi]).unwrap();
-        let nc = new.get(&new_children[ni]).unwrap();
-        if oc.kind != nc.kind || oc.children.len() != nc.children.len() {
-            continue;
-        }
-        matched_old[oi] = true;
-        matched_new[ni] = true;
-        if old_children[oi] != new_children[ni] && oi != ni {
-            out.push(Mutation::MoveNode {
-                node_id: old_children[oi],
-                new_parent: old_node_id,
-                before: insert_anchor(&new_children, ni),
-            });
-        }
-        diff_subtree(old, new, old_children[oi], new_children[ni], out);
-        diff_child_trivia(
-            old,
-            new,
-            old_node_id,
-            new_node_id,
-            old_children[oi],
-            new_children[ni],
-            out,
-        );
-    }
-
-    for (oi, ni) in key_pairs {
-        if matched_old[oi] || matched_new[ni] {
-            continue;
-        }
-        let oc = old.get(&old_children[oi]).unwrap();
-        let nc = new.get(&new_children[ni]).unwrap();
-        if oc.kind == nc.kind && !oc.is_leaf() {
+    if wide_list {
+        for (oi, ni) in pair_equal_node_ids(&old_children, &new_children) {
             matched_old[oi] = true;
             matched_new[ni] = true;
-            if old_children[oi] != new_children[ni] && oi != ni {
-                out.push(Mutation::MoveNode {
-                    node_id: old_children[oi],
-                    new_parent: old_node_id,
-                    before: insert_anchor(&new_children, ni),
-                });
-            }
             diff_subtree(old, new, old_children[oi], new_children[ni], out);
             diff_child_trivia(
                 old,
@@ -453,6 +459,139 @@ fn diff_children(
                 new_node_id,
                 old_children[oi],
                 new_children[ni],
+                out,
+            );
+        }
+
+        for (oi, ni) in pair_in_order_by_key(&old_keys, &new_keys) {
+            if matched_old[oi] || matched_new[ni] {
+                continue;
+            }
+            apply_key_match(
+                old,
+                new,
+                &old_children,
+                &new_children,
+                old_node_id,
+                new_node_id,
+                oi,
+                ni,
+                &mut matched_old,
+                &mut matched_new,
+                out,
+            );
+        }
+
+        for (oi, ni) in pair_in_order_by_key(&old_roles, &new_roles) {
+            if matched_old[oi] || matched_new[ni] {
+                continue;
+            }
+            apply_role_match(
+                old,
+                new,
+                &old_children,
+                &new_children,
+                old_node_id,
+                new_node_id,
+                oi,
+                ni,
+                &mut matched_old,
+                &mut matched_new,
+                out,
+            );
+        }
+
+        let unmatched_old = unmatched_indices(&matched_old);
+        let unmatched_new = unmatched_indices(&matched_new);
+        if unmatched_old.len() * unmatched_new.len() <= crate::diff::align::LCS_THRESHOLD {
+            for (oi, ni) in lcs_pairs(&old_roles, &new_roles) {
+                if matched_old[oi] || matched_new[ni] {
+                    continue;
+                }
+                apply_role_match(
+                    old,
+                    new,
+                    &old_children,
+                    &new_children,
+                    old_node_id,
+                    new_node_id,
+                    oi,
+                    ni,
+                    &mut matched_old,
+                    &mut matched_new,
+                    out,
+                );
+            }
+
+            for (oi, ni) in lcs_pairs(&old_keys, &new_keys) {
+                if matched_old[oi] || matched_new[ni] {
+                    continue;
+                }
+                apply_key_match(
+                    old,
+                    new,
+                    &old_children,
+                    &new_children,
+                    old_node_id,
+                    new_node_id,
+                    oi,
+                    ni,
+                    &mut matched_old,
+                    &mut matched_new,
+                    out,
+                );
+            }
+        }
+    } else {
+        for (oi, ni) in lcs_pairs(&old_children, &new_children) {
+            matched_old[oi] = true;
+            matched_new[ni] = true;
+            diff_subtree(old, new, old_children[oi], new_children[ni], out);
+            diff_child_trivia(
+                old,
+                new,
+                old_node_id,
+                new_node_id,
+                old_children[oi],
+                new_children[ni],
+                out,
+            );
+        }
+
+        for (oi, ni) in lcs_pairs(&old_roles, &new_roles) {
+            if matched_old[oi] || matched_new[ni] {
+                continue;
+            }
+            apply_role_match(
+                old,
+                new,
+                &old_children,
+                &new_children,
+                old_node_id,
+                new_node_id,
+                oi,
+                ni,
+                &mut matched_old,
+                &mut matched_new,
+                out,
+            );
+        }
+
+        for (oi, ni) in lcs_pairs(&old_keys, &new_keys) {
+            if matched_old[oi] || matched_new[ni] {
+                continue;
+            }
+            apply_key_match(
+                old,
+                new,
+                &old_children,
+                &new_children,
+                old_node_id,
+                new_node_id,
+                oi,
+                ni,
+                &mut matched_old,
+                &mut matched_new,
                 out,
             );
         }
@@ -913,5 +1052,53 @@ mod tests {
         let mut working = old.clone();
         working.apply_batch(&diff.mutations).unwrap();
         assert_eq!(unparse(&working), unparse(&new));
+    }
+
+    fn wide_function_module(count: usize) -> String {
+        let mut src = String::new();
+        for i in 0..count {
+            src.push_str(&format!("fn f{i}() {{ let _ = {i}; }}\n"));
+        }
+        src
+    }
+
+    #[test]
+    fn wide_sibling_list_diff_is_fast() {
+        let count = 600;
+        let old_src = wide_function_module(count);
+        let mut new_src = old_src.clone();
+        new_src = new_src.replacen(
+            "fn f300() { let _ = 300; }",
+            "fn f300() { let _ = 300; // edited\n}",
+            1,
+        );
+        let old = parse_rust(&old_src).unwrap();
+        let new = parse_rust(&new_src).unwrap();
+        let start = std::time::Instant::now();
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "diff took {:?}",
+            start.elapsed()
+        );
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        working.validate().unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
+    }
+
+    #[test]
+    fn wide_sibling_list_unchanged_is_no_mutations() {
+        let src = wide_function_module(600);
+        let old = parse_rust(&src).unwrap();
+        let new = parse_rust(&src).unwrap();
+        let start = std::time::Instant::now();
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "diff took {:?}",
+            start.elapsed()
+        );
+        assert!(diff.mutations.is_empty());
     }
 }
