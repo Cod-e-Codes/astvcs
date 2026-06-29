@@ -382,6 +382,7 @@ impl Repo {
             return Err(RepoError::already_exists("repository already exists"));
         }
         fs::create_dir_all(astvcs.join("refs/heads")).map_err(|e| RepoError::from_io("init", e))?;
+        fs::create_dir_all(astvcs.join("refs/tags")).map_err(|e| RepoError::from_io("init", e))?;
         fs::create_dir_all(astvcs.join("states")).map_err(|e| RepoError::from_io("init", e))?;
         fs::create_dir_all(astvcs.join("timeline")).map_err(|e| RepoError::from_io("init", e))?;
         BlobStore::new(&astvcs).ensure_dirs()?;
@@ -1282,13 +1283,13 @@ impl Repo {
         Ok(out)
     }
 
-    /// Resolve a branch name, remote-tracking ref, or 64-character state id.
+    /// Resolve a branch name, tag, remote-tracking ref, or 64-character state id.
     pub fn resolve_state_ref(&self, reference: &str) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         self.resolve_state_ref_unlocked(reference)
     }
 
-    fn resolve_state_ref_unlocked(&self, reference: &str) -> RepoResult<StateId> {
+    pub(crate) fn resolve_state_ref_unlocked(&self, reference: &str) -> RepoResult<StateId> {
         if is_state_id(reference) {
             self.load_timeline_entry_unlocked(&reference.to_string())?;
             trace::notice(format!("resolved state {reference}"));
@@ -1298,6 +1299,12 @@ impl Repo {
         if ref_path.is_file() {
             let id = self.read_branch_ref(reference)?;
             trace::notice(format!("resolved branch {reference} -> state {id}"));
+            return Ok(id);
+        }
+        let tag_path = self.astvcs_dir().join("refs/tags").join(reference);
+        if tag_path.is_file() {
+            let id = self.read_tag_unlocked(reference)?;
+            trace::notice(format!("resolved tag {reference} -> state {id}"));
             return Ok(id);
         }
         if let Some((remote, branch)) = reference.split_once('/')

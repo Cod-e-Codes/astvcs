@@ -197,6 +197,9 @@ impl Repo {
         for branch in self.list_branches_unlocked()? {
             tips.push(branch.state_id);
         }
+        for tag in self.list_tags_unlocked()? {
+            tips.push(tag.state_id);
+        }
         tips.extend(self.list_remote_ref_tips_unlocked()?);
         if self.is_detached_unlocked()? {
             tips.push(self.head_state_unlocked()?);
@@ -464,6 +467,23 @@ fn prune_dangling_refs(repo: &Repo) -> RepoResult<Vec<FsckRepair>> {
         }
     }
 
+    for tag in repo.list_tags_unlocked()? {
+        if repo.has_timeline_unlocked(&tag.state_id) {
+            continue;
+        }
+        let path = repo.astvcs_dir().join("refs/tags").join(&tag.name);
+        if path.is_file() {
+            fs::remove_file(&path).map_err(|e| RepoError::from_io("remove dangling tag", e))?;
+            repairs.push(FsckRepair {
+                kind: FsckRepairKind::DanglingRefPruned,
+                detail: format!(
+                    "removed refs/tags/{} (pointed to {} with no timeline entry)",
+                    tag.name, tag.state_id
+                ),
+            });
+        }
+    }
+
     let remotes_dir = repo.astvcs_dir().join("refs/remotes");
     if remotes_dir.is_dir() {
         for remote_entry in
@@ -565,6 +585,17 @@ fn check_refs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
                 detail: format!(
                     "refs/heads/{} points to {} with no timeline entry",
                     branch.name, branch.state_id
+                ),
+            });
+        }
+    }
+    for tag in repo.list_tags_unlocked()? {
+        if !repo.has_timeline_unlocked(&tag.state_id) {
+            findings.push(FsckFinding {
+                kind: FsckKind::DanglingRef,
+                detail: format!(
+                    "refs/tags/{} points to {} with no timeline entry",
+                    tag.name, tag.state_id
                 ),
             });
         }

@@ -14,6 +14,7 @@ mod repo;
 mod scan_cache;
 mod staging;
 mod stash;
+mod tags;
 mod tracked;
 mod walk;
 mod working;
@@ -43,5 +44,6 @@ pub use repo::{
 pub use scan_cache::ScanCache;
 pub use staging::{StagedEntry, StagingIndex};
 pub use stash::{StashId, StashInfo};
+pub use tags::TagInfo;
 pub use tracked::{TrackedFile, tracked_eq};
 pub use walk::{ASTVCS_DIR, ScanMetrics, ScanMode, ScanReport, SkippedPath, last_scan_metrics};

@@ -26,7 +26,9 @@ Single-file metadata writes (`HEAD`, branch and remote refs, `index.json`, state
 
 **Branches.** Local branch tips live under `.astvcs/refs/heads/`. `branch remove` deletes a ref file only; it refuses the checked-out branch and the last remaining branch. Unmerged commits do not block removal because states are content-addressed and remain in the timeline and blob store until `gc --prune` removes unreachable blobs and optionally `gc --prune-history` removes unreachable state metadata. When the removed branch is `config.json` `default_branch`, config is updated atomically: prefer `main` if it still exists among remaining branches, otherwise the lexicographically first remaining branch name. `branch create` sets `default_branch` to the new branch when the configured default ref is missing (dangling config). `clone` checks out the remote `default_branch` from upstream `config.json`.
 
-**Reachability and garbage collection.** A state is reachable if it is the root empty state (`0` repeated 64 times), or if it is reachable by walking parent links starting from every local branch tip, every remote-tracking branch tip, and the current HEAD state when HEAD is detached. A blob is reachable if it appears in the manifest of any reachable state. The shared reachability walk in `store/reachability.rs` is read-only and runs under the repository lock; `gc` and `fsck` both call it.
+**Tags.** Lightweight tags live under `.astvcs/refs/tags/<name>` as a single state id per file (same atomic write pattern as branch refs). v1 has no annotated tag objects. Tag names cannot contain `/` or `..`. Tags are resolved after local branches and before remote-tracking refs. Tag tips are included in reachability walks so tagged states stay reachable until the tag is removed. `tag remove` deletes the ref only; timeline and blobs remain until `gc`.
+
+**Reachability and garbage collection.** A state is reachable if it is the root empty state (`0` repeated 64 times), or if it is reachable by walking parent links starting from every local branch tip, every tag tip, every remote-tracking branch tip, and the current HEAD state when HEAD is detached. A blob is reachable if it appears in the manifest of any reachable state. The shared reachability walk in `store/reachability.rs` is read-only and runs under the repository lock; `gc` and `fsck` both call it.
 
 `gc` uses a two-tier retention model. **Tier 1 (default safe):** `--prune` deletes unreachable blobs from loose storage and the pack index. **Tier 2 (destructive, opt-in):** `--prune-history` deletes unreachable state metadata: both `.astvcs/timeline/{id}.json` and `.astvcs/states/{id}.json`. The root empty state (`ROOT_STATE_ID`) is never deleted. Unreachable states are those not in the `reachable_from_tips` result; the same ref tips apply as for blob GC (branch tips, remote-tracking tips, detached HEAD).
 
@@ -36,7 +38,7 @@ By default `gc` is a dry-run for both tiers and reports unreachable blob count, 
 
 **Repository integrity (`fsck`).** Default `fsck` is report-only. It checks: state manifests referencing missing blobs; refs pointing to state ids with no timeline entry; timeline entries with no state manifest (`missing state manifest`); state manifests with no timeline entry (`orphaned state manifest`); HEAD naming a branch with no ref file; `index.json` entries inconsistent with HEAD (wrong `state_id`, paths absent from HEAD manifest, or index present while HEAD is invalid); pack index entries that fail decompression or hash verification; orphan `.astvcs-tmp` files whose canonical target does not exist (the cases `cleanup_stray_temp_files` leaves alone); and `config.json` `format_version` greater than the binary supports (`unknown format version`). Unreachable states that were intentionally retained are not reported as errors; after `gc --prune-history` removed them, they are simply absent.
 
-**`fsck --repair`** applies conservative fixes under the repo lock: rewrite `index.json` from HEAD when HEAD is valid and the index is inconsistent; remove stray `.astvcs-tmp` files when the canonical file exists. It refuses when HEAD names a missing branch while other local branches exist. It never repairs missing blobs, pack corruption, or missing state manifests. **`fsck --prune-refs`** deletes dangling local and remote-tracking ref files (never the `HEAD` file). Repairs run before a full re-check; applied fixes are listed in the output. Missing blobs and unreachable history still require `gc --prune` and optionally `gc --prune-history` after refs reflect the history you want to keep.
+**`fsck --repair`** applies conservative fixes under the repo lock: rewrite `index.json` from HEAD when HEAD is valid and the index is inconsistent; remove stray `.astvcs-tmp` files when the canonical file exists. It refuses when HEAD names a missing branch while other local branches exist. It never repairs missing blobs, pack corruption, or missing state manifests. **`fsck --prune-refs`** deletes dangling local branch refs, tag refs, and remote-tracking ref files (never the `HEAD` file). Repairs run before a full re-check; applied fixes are listed in the output. Missing blobs and unreachable history still require `gc --prune` and optionally `gc --prune-history` after refs reflect the history you want to keep.
 
 **On-disk layout.**
 
@@ -153,7 +155,9 @@ Supported remote URLs:
 | Local path | `C:/repos/project` or `file:///C:/repos/project` |
 | HTTP | `http://127.0.0.1:9421` (from `astvcs serve`) |
 
-Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, and branch refs. `fetch` downloads missing history and updates remote-tracking refs; it does not change local branches or the working tree. `pull` is fetch followed by merge of the remote-tracking branch into the current branch. Use `reset` or `checkout --state` with a remote-tracking ref (for example `origin/main`) to inspect fetched commits without merging. `push` uploads missing objects and fast-forwards the remote branch (use `--force` to override). `clone` initializes a repository, fetches from the remote, and checks out the default branch.
+Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, branch refs, and tags. `fetch` downloads missing history, updates remote-tracking refs, and syncs all remote tags (even when `--branch` limits which branch refs are updated). It does not change local branches or the working tree. `pull` is fetch followed by merge of the remote-tracking branch into the current branch. Use `reset` or `checkout --state` with a remote-tracking ref (for example `origin/main`) or a tag name to inspect fetched commits without merging. `push` uploads missing objects, fast-forwards the remote branch (use `--force` to override), and uploads local tags missing on the remote (tag updates are not fast-forward checked). `clone` initializes a repository, fetches branches and tags from the remote, and checks out the default branch.
+
+HTTP API: `GET /v1/refs/tags` returns a JSON map of tag name to state id; `GET`/`PUT`/`HEAD /v1/refs/tags/{name}` read or overwrite a tag tip as plain text.
 
 The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, and repository config.
 
@@ -234,6 +238,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `pull_detached_head_requires_branch` | `pull` on detached HEAD requires `--branch` |
 | `pull_merge_conflict_after_fetch` | Fetch succeeds; merge conflict leaves local branch unchanged |
 | `stash_before_checkout` | `stash push` cleans tree so checkout succeeds without `--force` |
+| `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
+| `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
+| `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |

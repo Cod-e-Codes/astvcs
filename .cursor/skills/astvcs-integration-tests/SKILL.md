@@ -79,6 +79,7 @@ assert!(out.status.success());
 - Staging index: `partial_commit_only_stages_paths`, `status_shows_staged_and_unstaged_columns`, `merge_refuses_with_staged_changes`, `checkout_force_with_staged_changes`, `reset_mixed_unstages_and_keeps_disk`, `cli_commit_empty_staging_errors`; legacy whole-tree `commit` when `staging.json` is empty and `active` is false.
 - `pull`: `pull_merges_upstream_changes`, `pull_detached_head_requires_branch`, `pull_merge_conflict_after_fetch`; `merge_remote_tracking_ref` (unit, `src/store/repo.rs`) for `merge origin/main` after fetch.
 - `stash`: `stash_before_checkout`, `stash_pop_restores_files`, `stash_pop_conflict_keeps_entry`; unit coverage in `store/stash.rs` (`stash_stack_save_load`, `stash_entry_roundtrip`).
+- Lightweight tags: `tag_create_and_list`, `checkout_tag_detached`, `tag_fetch_push_between_repos`; unit coverage in `store/tags.rs` (`tag_create_list_remove`, `resolve_tag_ref`, `tag_name_validation`).
 
 ### What to avoid
 

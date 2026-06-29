@@ -25,7 +25,10 @@ Global flags:
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |
-| `merge-base <left> <right>` | Print lowest common ancestor (branch, remote-tracking ref, or state id) |
+| `tag create <name> <ref>` | Create a lightweight tag pointing at a resolved ref |
+| `tag list` | List tags with state ids (sorted by name) |
+| `tag remove <name>` | Delete a tag ref |
+| `merge-base <left> <right>` | Print lowest common ancestor (branch, tag, remote-tracking ref, or state id) |
 | `merge <branch> -m <msg>` | Merge a branch; updates working tree on success |
 | `merge <branch> -m <msg> --force` | Merge when the working tree has uncommitted changes (warns per clobbered path) |
 | `merge <branch> -m <msg> --resolve <path>:ours` | Merge with per-path conflict resolution (repeatable) |
@@ -41,20 +44,24 @@ Global flags:
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
-| `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs |
+| `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs and all remote tags |
 | `pull <remote> [--branch <name>] [-m <msg>] [--force] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
 | `stash push [-m <msg>] [-u]` | Save working-tree changes to `.astvcs/stash/` and reset disk to HEAD |
 | `stash list` | List stashes (`stash@{n}`; 0 is newest) |
 | `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
 | `stash apply [index]` | Apply stash without removing the entry |
-| `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch |
+| `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, and `merge` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+
+### Lightweight tags
+
+Tags are named refs under `.astvcs/refs/tags/<name>` containing a single state id (same format as branch refs). v1 supports lightweight tags only: no annotated tag message, author, or separate tag object. Tag names cannot be empty, contain `/`, or contain `..`. `tag create` resolves `<ref>` like other commands. Tags participate in reachability for `gc` and are synced on every `fetch`, `push`, and `clone` (all remote tags are fetched even when `fetch --branch` limits branch refs). Remote tag updates are not fast-forward checked; `set_tag` overwrites like git tags.
 
 ### `branch remove`
 
@@ -132,7 +139,7 @@ Remote URLs may be a local repository path, a `file://` URL, or an `http://` bas
 
 ### `gc`
 
-Walks reachability from every local branch tip, remote-tracking ref tip, and detached HEAD. **Tier 1:** reports and optionally deletes blob store objects not referenced by any reachable state manifest (`--prune`). **Tier 2:** reports and optionally deletes unreachable timeline entries and state manifests (`--prune-history`). The root empty state is never deleted.
+Walks reachability from every local branch tip, every tag tip, every remote-tracking branch tip, and the current HEAD state when HEAD is detached. **Tier 1:** reports and optionally deletes blob store objects not referenced by any reachable state manifest (`--prune`). **Tier 2:** reports and optionally deletes unreachable timeline entries and state manifests (`--prune-history`). The root empty state is never deleted.
 
 | Flag | Behavior |
 |------|----------|
@@ -178,7 +185,7 @@ Integrity check. By default report-only: never modifies refs, HEAD, timeline, bl
 | Check | Report label |
 |-------|----------------|
 | State manifest references a missing blob | `missing blob` |
-| Branch or remote-tracking ref points to a state with no timeline entry | `dangling ref` |
+| Branch, tag, or remote-tracking ref points to a state with no timeline entry | `dangling ref` |
 | Timeline entry exists but `.astvcs/states/{id}.json` is missing | `missing state manifest` |
 | `.astvcs/states/{id}.json` exists but timeline entry is missing | `orphaned state manifest` |
 | `HEAD` names a branch with no `refs/heads/` file | `HEAD branch missing` |
@@ -189,7 +196,7 @@ Integrity check. By default report-only: never modifies refs, HEAD, timeline, bl
 
 **`--repair`** (conservative, under repo lock): when HEAD resolves to a state with timeline and manifest, rewrite `index.json` from the HEAD manifest if the index is inconsistent (wrong `state_id`, stale paths, or paths absent from HEAD). Remove stray `.astvcs-tmp` files when the canonical target already exists. Refuses when HEAD names a missing branch while other local branches exist (update HEAD manually). Never repairs missing blobs, pack corruption, or missing state manifests.
 
-**`--prune-refs`**: delete `refs/heads/*` and `refs/remotes/*/*` files that point at state ids with no timeline entry. Never modifies the `HEAD` file. Can be combined with `--repair`.
+**`--prune-refs`**: delete `refs/heads/*`, `refs/tags/*`, and `refs/remotes/*/*` files that point at state ids with no timeline entry. Never modifies the `HEAD` file. Can be combined with `--repair`.
 
 Unreachable blob cleanup belongs to `gc --prune`; unreachable history cleanup to `gc --prune-history`.
 

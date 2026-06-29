@@ -277,4 +277,68 @@ impl Transport {
             }
         }
     }
+
+    pub fn list_tags(&self) -> Result<HashMap<String, StateId>, String> {
+        match self {
+            Self::File(repo) => {
+                let mut out = HashMap::new();
+                for tag in map_repo(repo.list_tags())? {
+                    out.insert(tag.name, tag.state_id);
+                }
+                Ok(out)
+            }
+            Self::Http { client, .. } => {
+                let url = self.http_url("/refs/tags")?;
+                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                if !resp.status().is_success() {
+                    return Err(format!("list tags: HTTP {}", resp.status()));
+                }
+                resp.json().map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    pub fn get_tag(&self, name: &str) -> Result<Option<StateId>, String> {
+        match self {
+            Self::File(repo) => {
+                let path = repo.astvcs_dir().join("refs/tags").join(name);
+                if !path.is_file() {
+                    return Ok(None);
+                }
+                Ok(Some(map_repo(repo.read_tag(name))?))
+            }
+            Self::Http { client, .. } => {
+                let url = self.http_url(&format!("/refs/tags/{name}"))?;
+                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                if resp.status().as_u16() == 404 {
+                    return Ok(None);
+                }
+                if !resp.status().is_success() {
+                    return Err(format!("get tag {name}: HTTP {}", resp.status()));
+                }
+                let text = resp.text().map_err(|e| e.to_string())?;
+                Ok(Some(text.trim().to_string()))
+            }
+        }
+    }
+
+    pub fn set_tag(&self, name: &str, state_id: &StateId) -> Result<(), String> {
+        match self {
+            Self::File(repo) => map_repo(repo.write_tag(name, state_id)),
+            Self::Http { client, .. } => {
+                let url = self.http_url(&format!("/refs/tags/{name}"))?;
+                let resp = client
+                    .put(&url)
+                    .body(state_id.clone())
+                    .send()
+                    .map_err(|e| e.to_string())?;
+                if resp.status().is_success() {
+                    return Ok(());
+                }
+                let status = resp.status();
+                let body = resp.text().unwrap_or_default();
+                Err(format!("set tag {name}: HTTP {status} {body}"))
+            }
+        }
+    }
 }

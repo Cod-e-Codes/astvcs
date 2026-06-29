@@ -105,6 +105,43 @@ fn upload_state(local: &Repo, transport: &Transport, state_id: &StateId) -> Resu
     Ok(())
 }
 
+fn import_tag_tip(
+    repo: &Repo,
+    transport: &Transport,
+    name: &str,
+    tip: &StateId,
+) -> Result<(), String> {
+    let missing = collect_missing_states(repo, transport, tip)?;
+    for state_id in missing {
+        import_state(repo, transport, &state_id)?;
+    }
+    map_repo(repo.write_tag(name, tip))?;
+    trace::notice(format!("fetch: tag {name} -> {tip}"));
+    Ok(())
+}
+
+fn fetch_tags(repo: &Repo, transport: &Transport) -> Result<(), String> {
+    for (name, tip) in transport.list_tags()? {
+        import_tag_tip(repo, transport, &name, &tip)?;
+    }
+    Ok(())
+}
+
+fn push_tags(repo: &Repo, transport: &Transport) -> Result<(), String> {
+    for tag in map_repo(repo.list_tags())? {
+        if transport.get_tag(&tag.name)?.as_ref() == Some(&tag.state_id) {
+            continue;
+        }
+        let upload = collect_upload_states(repo, transport, &tag.state_id)?;
+        for state_id in upload {
+            upload_state(repo, transport, &state_id)?;
+        }
+        transport.set_tag(&tag.name, &tag.state_id)?;
+        trace::notice(format!("push: tag {} -> {}", tag.name, tag.state_id));
+    }
+    Ok(())
+}
+
 pub struct FetchOutcome {
     pub branches: Vec<(String, StateId)>,
 }
@@ -135,6 +172,8 @@ pub fn fetch(repo: &Repo, remote_name: &str, branch: Option<&str>) -> Result<Fet
         map_repo(repo.write_remote_ref(remote_name, name, tip))?;
         trace::notice(format!("fetch: {remote_name}/{name} -> {tip}"));
     }
+
+    fetch_tags(repo, &transport)?;
 
     Ok(FetchOutcome { branches: targets })
 }
@@ -185,6 +224,8 @@ pub fn push(
     transport.set_ref(&branch_name, &local_tip, force)?;
     trace::notice(format!("push: {branch_name} -> {local_tip}"));
 
+    push_tags(repo, &transport)?;
+
     Ok(PushOutcome {
         branch: branch_name,
         state_id: local_tip,
@@ -224,6 +265,8 @@ pub fn clone_repo(url: &str, path: &Path) -> Result<(Repo, String), String> {
 
     map_repo(repo.write_branch_ref(&default_branch, &tip))?;
     map_repo(repo.checkout_branch(&default_branch))?;
+
+    fetch_tags(&repo, &transport)?;
 
     Ok((repo, default_branch))
 }

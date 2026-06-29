@@ -63,6 +63,10 @@ enum Commands {
         #[command(subcommand)]
         action: BranchAction,
     },
+    Tag {
+        #[command(subcommand)]
+        action: TagAction,
+    },
     Merge(MergeArgs),
     MergeBase {
         left: String,
@@ -264,6 +268,13 @@ enum StashAction {
 }
 
 #[derive(Subcommand)]
+enum TagAction {
+    Create { name: String, reference: String },
+    List,
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
 enum BranchAction {
     List,
     Create {
@@ -457,6 +468,24 @@ fn run(cli: Cli) -> RepoResult<()> {
                 let repo = Repo::open(&root)?;
                 repo.remove_branch(&name)?;
                 println!("Removed branch {name}");
+            }
+        },
+        Commands::Tag { action } => match action {
+            TagAction::Create { name, reference } => {
+                let repo = Repo::open(&root)?;
+                repo.create_tag(&name, &reference)?;
+                println!("Created tag {name}");
+            }
+            TagAction::List => {
+                let repo = Repo::open(&root)?;
+                for tag in repo.list_tags()? {
+                    println!("{} ({})", tag.name, tag.state_id);
+                }
+            }
+            TagAction::Remove { name } => {
+                let repo = Repo::open(&root)?;
+                repo.remove_tag(&name)?;
+                println!("Removed tag {name}");
             }
         },
         Commands::Merge(args) => {

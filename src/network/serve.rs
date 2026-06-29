@@ -59,8 +59,22 @@ fn dispatch(
             &serde_json::to_vec(&refs).map_err(|e| e.to_string())?,
         ));
     }
+    if path == format!("{API_PREFIX}/refs/tags") && method == tiny_http::Method::Get {
+        let repo = repo.lock().map_err(|e| e.to_string())?;
+        let mut refs = HashMap::new();
+        for tag in map_repo(repo.list_tags())? {
+            refs.insert(tag.name, tag.state_id);
+        }
+        return Ok(json_response(
+            200,
+            &serde_json::to_vec(&refs).map_err(|e| e.to_string())?,
+        ));
+    }
     if let Some(branch) = path.strip_prefix(&format!("{API_PREFIX}/refs/heads/")) {
         return handle_ref(repo, &method, branch, &body, force);
+    }
+    if let Some(name) = path.strip_prefix(&format!("{API_PREFIX}/refs/tags/")) {
+        return handle_tag(repo, &method, name, &body);
     }
     if let Some(id) = path.strip_prefix(&format!("{API_PREFIX}/blobs/")) {
         return handle_blob(repo, &method, id, &body);
@@ -120,6 +134,39 @@ fn handle_ref(
         }
         tiny_http::Method::Head => {
             let path = repo.astvcs_dir().join("refs/heads").join(branch);
+            let status = if path.is_file() { 200 } else { 404 };
+            Ok(text_response(status, ""))
+        }
+        _ => Ok(text_response(405, "method not allowed")),
+    }
+}
+
+fn handle_tag(
+    repo: &Arc<Mutex<Repo>>,
+    method: &tiny_http::Method,
+    name: &str,
+    body: &[u8],
+) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, String> {
+    let repo = repo.lock().map_err(|e| e.to_string())?;
+    match *method {
+        tiny_http::Method::Get => {
+            let path = repo.astvcs_dir().join("refs/tags").join(name);
+            if !path.is_file() {
+                return Ok(text_response(404, "tag not found"));
+            }
+            let state_id = map_repo(repo.read_tag(name))?;
+            Ok(text_response(200, &format!("{state_id}\n")))
+        }
+        tiny_http::Method::Put => {
+            let state_id = std::str::from_utf8(body)
+                .map_err(|e| e.to_string())?
+                .trim()
+                .to_string();
+            map_repo(repo.write_tag(name, &state_id))?;
+            Ok(text_response(200, "ok"))
+        }
+        tiny_http::Method::Head => {
+            let path = repo.astvcs_dir().join("refs/tags").join(name);
             let status = if path.is_file() { 200 } else { 404 };
             Ok(text_response(status, ""))
         }

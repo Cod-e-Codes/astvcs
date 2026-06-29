@@ -44,6 +44,9 @@
 | `stash_before_checkout` | `stash push` cleans tree so checkout succeeds without `--force` |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
+| `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
+| `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
+| `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |

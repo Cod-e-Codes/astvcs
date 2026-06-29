@@ -2919,3 +2919,106 @@ fn stash_pop_conflict_keeps_entry() {
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(stdout.contains("stash@{0}:"), "{stdout}");
 }
+
+#[test]
+fn tag_create_and_list() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    repo.commit("v1").unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["tag", "create", "v1.0", "main"]),
+        "tag create",
+    );
+    let list = run_astvcs(Some(dir.path()), &["tag", "list"]);
+    assert_astvcs_ok(&list, "tag list");
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(stdout.contains("v1.0 ("), "{stdout}");
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["tag", "remove", "v1.0"]),
+        "tag remove",
+    );
+    let list = run_astvcs(Some(dir.path()), &["tag", "list"]);
+    assert_astvcs_ok(&list, "tag list");
+    assert!(String::from_utf8_lossy(&list.stdout).trim().is_empty());
+}
+
+#[test]
+fn checkout_tag_detached() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    repo.commit("v1").unwrap();
+    fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+    let tagged = repo.commit("v2").unwrap().state_id;
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["tag", "create", "release", "main"]),
+        "tag create",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["checkout", "--state", "release"]),
+        "checkout tag",
+    );
+
+    let repo = Repo::open(dir.path()).unwrap();
+    assert!(repo.is_detached().unwrap());
+    assert_eq!(repo.head_state().unwrap(), tagged);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "v2\n"
+    );
+}
+
+#[test]
+fn tag_fetch_push_between_repos() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
+    upstream_repo.commit("v1").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(upstream.path()), &["tag", "create", "v1.0", "main"]),
+        "upstream tag",
+    );
+
+    let clone_dir = TempDir::new().unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(
+            None,
+            &[
+                "clone",
+                upstream.path().to_str().unwrap(),
+                clone_dir.path().to_str().unwrap(),
+            ],
+        ),
+        "clone",
+    );
+    let clone_repo = Repo::open(clone_dir.path()).unwrap();
+    let tags = clone_repo.list_tags().unwrap();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].name, "v1.0");
+    assert_eq!(tags[0].state_id, upstream_repo.head_state().unwrap());
+
+    set_identity(&clone_repo, "Test User", "test@example.com", false).unwrap();
+    fs::write(clone_dir.path().join("note.txt"), "v2\n").unwrap();
+    clone_repo.commit("v2").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(clone_dir.path()), &["tag", "create", "v2.0", "main"]),
+        "clone tag",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &["push", "origin", "--branch", "main"],
+        ),
+        "push",
+    );
+
+    let upstream_tags = upstream_repo.list_tags().unwrap();
+    assert!(
+        upstream_tags.iter().any(|t| t.name == "v2.0"),
+        "expected v2.0 tag on upstream: {upstream_tags:?}"
+    );
+}
