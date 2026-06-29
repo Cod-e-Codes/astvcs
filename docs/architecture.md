@@ -181,6 +181,7 @@ Supported remote URLs:
 | Local path | `C:/repos/project` or `file:///C:/repos/project` |
 | HTTP | `http://127.0.0.1:9421` (from `astvcs serve`) |
 | HTTPS | `https://127.0.0.1:9421` (from `astvcs serve --tls-cert ... --tls-key ...`) |
+| SSH | `ssh://user@host/path/to/repo` or `user@host:/path/to/repo` (remote must have `astvcs` on `PATH`) |
 
 Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, branch refs, and tags. `fetch` downloads missing history, updates remote-tracking refs, and syncs all remote tags (even when `--branch` limits which branch refs are updated). It does not change local branches or the working tree. `pull` is fetch followed by merge of the remote-tracking branch into the current branch. Use `reset` or `checkout --state` with a remote-tracking ref (for example `origin/main`) or a tag name to inspect fetched commits without merging. `push` uploads missing objects, fast-forwards the remote branch (use `--force` to override), and uploads local tags missing on the remote (tag updates are not fast-forward checked). `clone` initializes a repository, fetches branches and tags from the remote, and checks out the default branch.
 
@@ -192,7 +193,11 @@ The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs,
 
 **TLS on serve.** Optional `--tls-cert` and `--tls-key` PEM paths enable HTTPS via tiny_http's rustls backend (`ssl-rustls` feature). Both flags must be supplied together. Without them, serve listens on plain HTTP.
 
-**HTTPS client validation.** HTTP remotes use reqwest with rustls. Certificate validation is enabled by default (fail closed on bad or self-signed certs). Pass `--insecure` on `fetch`, `push`, `pull`, or `clone` to call `danger_accept_invalid_certs(true)` for local dev with self-signed serve certs. Bearer tokens work over HTTPS the same as HTTP.
+**HTTPS client validation.** HTTP remotes use reqwest with rustls. Certificate validation is enabled by default (fail closed on bad or self-signed certs). Pass `--insecure` on `fetch`, `push`, `pull`, or `clone` to call `danger_accept_invalid_certs(true)` for local dev with self-signed serve certs. Bearer tokens work over HTTPS the same as HTTP. `--insecure` does not apply to SSH remotes.
+
+**SSH remotes.** SSH URLs use OpenSSH as the transport. The client runs `ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new user@host astvcs remote-serve --repo <path>` and speaks a newline-delimited JSON protocol over the SSH session stdin/stdout. Host key verification and authentication (keys, ssh-agent) are delegated to the system `ssh` binary. The remote host must have `astvcs` installed on `PATH`. Scp-style URLs (`user@host:/absolute/path`) require `user@` to avoid mistaking Windows drive letters for remotes; the path must be absolute on the remote. Bearer tokens from `remotes.json` or `clone --token` are sent as `Authorization: Bearer ...` in protocol requests. When `ASTVCS_SERVE_TOKEN` is set on the remote (or `--token` on `remote-serve`), the same auth rules as HTTP serve apply.
+
+**remote-serve protocol.** Internal subcommand `astvcs remote-serve --repo <path>` reads one JSON request per line on stdin and writes one JSON response per line on stdout. Request: `{"method":"GET|HEAD|PUT","path":"/v1/...","body":"<base64 optional>","headers":{...}}`. Response: `{"status":200,"body":"<base64 optional>","error":"<text on failure>"}`. Paths and semantics match the HTTP `/v1/` API (config, refs, blobs, states, timeline). Shared dispatch lives in `network/api.rs` for HTTP serve and remote-serve.
 
 ## Source layout
 
@@ -240,7 +245,10 @@ src/
     scan_cache.rs scan-cache.json load/save and path stat helpers
     repo.rs      repository and CLI backend
   network/
-    transport.rs file and HTTP remotes
+    api.rs       shared /v1/ request dispatch (HTTP and remote-serve)
+    transport.rs file, HTTP, and SSH remotes
+    ssh.rs       SSH URL parsing and subprocess transport
+    remote_serve.rs  newline JSON protocol for SSH
     sync.rs      fetch, push, clone
     remote.rs    remote configuration
     serve.rs     HTTP repository server

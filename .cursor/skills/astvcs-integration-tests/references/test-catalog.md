@@ -103,5 +103,9 @@
 | `reset_mixed_unstages_and_keeps_disk` | `reset --mixed` clears staging, keeps disk |
 | `cli_commit_empty_staging_errors` | Active staging with no staged paths errors on commit |
 | `parse_remote_url_accepts_https` | `https://` remotes accepted by URL parser (unit, `network/transport.rs`) |
+| `parse_remote_url_accepts_ssh` | scp-style SSH remotes accepted by URL parser (unit, `network/transport.rs`) |
+| `parse_ssh_scheme_url`, `parse_scp_style_url`, `reject_scp_style_without_user` | SSH URL parsing (unit, `network/ssh.rs`) |
+| `remote_serve_io_get_config_put_blob_head_404`, `remote_request_requires_token_when_configured` | remote-serve JSON protocol (unit, `network/remote_serve.rs`) |
+| `ssh_session_sends_bearer_token` | SSH transport sends bearer token in protocol headers (unit, `network/ssh.rs`) |
 | `insecure_client_accepts_self_signed_cert` | HTTPS transport with `--insecure` accepts self-signed serve cert (unit, `network/transport.rs`) |
 | `validate_tls_config_requires_both_or_neither` | `--tls-cert` and `--tls-key` must be paired (unit, `network/serve.rs`) |

@@ -186,6 +186,17 @@ enum Commands {
         #[arg(long)]
         tls_key: Option<PathBuf>,
     },
+    /// Internal: serve repository over newline-delimited JSON on stdin/stdout (used by SSH remotes).
+    RemoteServe {
+        #[arg(long)]
+        repo: PathBuf,
+        /// Bearer token required for mutating requests (and reads unless --public-read).
+        #[arg(long)]
+        token: Option<String>,
+        /// Allow anonymous GET/HEAD on /v1/* when a token is configured.
+        #[arg(long)]
+        public_read: bool,
+    },
     Gc {
         /// Delete unreachable blobs (default is dry-run).
         #[arg(long)]
@@ -990,6 +1001,17 @@ fn run(cli: Cli) -> RepoResult<()> {
                 tls_key,
             };
             serve_repo(&repo, &bind, port, options).map_err(RepoError::from_message)?;
+        }
+        Commands::RemoteServe {
+            repo,
+            token,
+            public_read,
+        } => {
+            let token = token.or_else(|| std::env::var("ASTVCS_SERVE_TOKEN").ok());
+            let options = astvcs::network::ServeAuthOptions { token, public_read };
+            let repo = Repo::open(&repo)?;
+            astvcs::network::remote_serve_repo(repo.root_path(), options)
+                .map_err(RepoError::from_message)?;
         }
         Commands::Gc {
             prune,

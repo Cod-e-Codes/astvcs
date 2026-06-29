@@ -86,6 +86,7 @@ assert!(out.status.success());
 - Blame: `blame_linear_two_commits`; unit coverage in `store/blame.rs` (`child_to_parent_map_tracks_equal_lines`, `lines_changed_in_child_detects_insert_and_modify`).
 - Bisect: `bisect_linear_four_commits`, `bisect_run_releases_lock_for_nested_astvcs`; unit coverage in `store/bisect.rs` (`collect_bisect_candidates_orders_oldest_first`, `collect_bisect_candidates_rejects_non_ancestor`, `collect_bisect_candidates_rejects_merge_commit`). `bisect run` suspends the repository lock like hooks so nested `astvcs` calls succeed.
 - HTTP serve auth and TLS: unit coverage in `network/serve.rs` (`serve_requires_token_for_mutations`, `serve_read_requires_token_by_default`, `serve_public_read_allows_anonymous_get`, `validate_tls_config_requires_both_or_neither`), `network/transport.rs` (`parse_remote_url_accepts_https`, `http_transport_sends_bearer_token`, `insecure_client_accepts_self_signed_cert`), `network/remote.rs` (`remote_token_roundtrip`); `network_file_remote_fetch_push_and_clone` confirms file remotes stay unrestricted.
+- SSH remotes: unit coverage in `network/ssh.rs` (URL parsing, `ssh_session_sends_bearer_token`), `network/remote_serve.rs` (newline JSON protocol roundtrip and token auth), `network/transport.rs` (`parse_remote_url_accepts_ssh`); optional `#[cfg(unix)]` localhost SSH test in `network/ssh.rs` skips when `ssh` is unavailable.
 
 ### What to avoid
 

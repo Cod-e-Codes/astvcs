@@ -53,7 +53,7 @@ Global flags:
 | `bisect good [ref]` | Mark a revision as good during bisect (default: HEAD) |
 | `bisect run <script> [args...]` | Checkout midpoint revisions and run a test script (exit 0=good, 1=bad, 125=skip) |
 | `bisect reset` | End bisect and restore the original checkout |
-| `remote add <name> <url> [--token <token>]` | Register a remote (local path, `file://`, `http://`, or `https://`); optional bearer token for HTTP remotes |
+| `remote add <name> <url> [--token <token>]` | Register a remote (local path, `file://`, `http://`, `https://`, or SSH); optional bearer token for HTTP/SSH remotes |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
 | `fetch <remote> [--branch <name>] [--insecure]` | Download missing objects; update remote-tracking refs and all remote tags |
@@ -201,11 +201,15 @@ Paths added in the target state and modified again on HEAD before revert produce
 
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 
-Remote URLs may be a local repository path, a `file://` URL, an `http://` base URL, or an `https://` base URL from `astvcs serve`. Register an HTTP bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes.
+Remote URLs may be a local repository path, a `file://` URL, an `http://` or `https://` base URL from `astvcs serve`, or an SSH URL. SSH examples: `ssh://alice@example.com/var/repos/project`, `bob@host.example:/srv/astvcs.git`. The remote machine must have `astvcs` on `PATH`; authentication and host keys are handled by OpenSSH. Register an HTTP or SSH bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes.
 
 **HTTPS serve.** Pass `--tls-cert` and `--tls-key` together with PEM files to listen on HTTPS instead of HTTP. Both flags are required when either is set. Startup logs `https://` or `http://` accordingly.
 
-**HTTPS remotes.** The client validates TLS certificates via rustls (default). Self-signed or otherwise untrusted certificates fail closed unless you pass `--insecure` on `fetch`, `push`, `pull`, or `clone`. `--insecure` skips certificate verification and is intended for local development only.
+**HTTPS remotes.** The client validates TLS certificates via rustls (default). Self-signed or otherwise untrusted certificates fail closed unless you pass `--insecure` on `fetch`, `push`, `pull`, or `clone`. `--insecure` skips certificate verification and is intended for local development only. It does not apply to SSH remotes.
+
+**SSH remotes.** Use `ssh://user@host/absolute/path` or scp-style `user@host:/absolute/path`. `--insecure` is ignored for SSH. Tokens from `clone --token` or `remotes.json` are sent over the remote-serve protocol.
+
+**remote-serve (operator/internal).** `astvcs remote-serve --repo <path> [--token <token>] [--public-read]` serves the repository on stdin/stdout using newline-delimited JSON (same `/v1/` paths as HTTP serve). Normally invoked by SSH on the remote host, not run directly. Honors `ASTVCS_SERVE_TOKEN` when `--token` is omitted.
 
 **Self-signed cert workflow (local testing).** Generate a cert and key, serve with TLS, then clone with `--insecure`:
 

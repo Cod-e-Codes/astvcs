@@ -1,3 +1,4 @@
+use crate::network::ssh::{SshSession, parse_ssh_remote};
 use crate::store::{ManifestMap, Repo, RepoError, StateId, TimelineEntry};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -10,6 +11,9 @@ const API_PREFIX: &str = "/v1";
 
 pub fn parse_remote_url(url: &str) -> Result<PathBuf, String> {
     if url.starts_with("http://") || url.starts_with("https://") {
+        return Ok(PathBuf::from(url));
+    }
+    if crate::network::ssh::is_ssh_remote(url) {
         return Ok(PathBuf::from(url));
     }
     if let Some(rest) = url.strip_prefix("file://") {
@@ -38,6 +42,7 @@ pub enum Transport {
         client: reqwest::blocking::Client,
         token: Option<String>,
     },
+    Ssh(SshSession),
 }
 
 fn build_http_client(insecure: bool) -> Result<reqwest::blocking::Client, String> {
@@ -72,6 +77,11 @@ impl Transport {
                 token: token.map(str::to_string),
             });
         }
+        if let Ok(target) = parse_ssh_remote(url) {
+            let _ = insecure;
+            let session = SshSession::connect(&target, token)?;
+            return Ok(Self::Ssh(session));
+        }
         let path = parse_remote_url(url)?;
         let repo = map_repo(Repo::open(&path))?;
         Ok(Self::File(repo))
@@ -80,7 +90,7 @@ impl Transport {
     fn http_url(&self, path: &str) -> Result<String, String> {
         match self {
             Self::Http { base, .. } => Ok(format!("{base}{API_PREFIX}{path}")),
-            Self::File(_) => Err("http url requested on file transport".into()),
+            Self::File(_) | Self::Ssh(_) => Err("http url requested on non-http transport".into()),
         }
     }
 
@@ -99,6 +109,7 @@ impl Transport {
     pub fn has_blob(&self, id: &str) -> Result<bool, String> {
         match self {
             Self::File(repo) => Ok(repo.has_blob(id)),
+            Self::Ssh(session) => session.has_blob(id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
                 let resp = self
@@ -113,6 +124,7 @@ impl Transport {
     pub fn get_blob(&self, id: &str) -> Result<Vec<u8>, String> {
         match self {
             Self::File(repo) => map_repo(repo.read_blob_bytes(id)),
+            Self::Ssh(session) => session.get_blob(id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
                 let resp = self
@@ -130,6 +142,7 @@ impl Transport {
     pub fn put_blob(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
         match self {
             Self::File(repo) => map_repo(repo.import_blob_bytes(id, bytes)),
+            Self::Ssh(session) => session.put_blob(id, bytes),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
                 let resp = self
@@ -148,6 +161,7 @@ impl Transport {
     pub fn has_state(&self, id: &StateId) -> Result<bool, String> {
         match self {
             Self::File(repo) => Ok(repo.has_state(id)),
+            Self::Ssh(session) => session.has_state(id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
                 let resp = self
@@ -162,6 +176,7 @@ impl Transport {
     pub fn get_state(&self, id: &StateId) -> Result<ManifestMap, String> {
         match self {
             Self::File(repo) => map_repo(repo.load_manifest(id)),
+            Self::Ssh(session) => session.get_state(id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
                 let resp = self
@@ -179,6 +194,7 @@ impl Transport {
     pub fn put_state(&self, id: &StateId, manifest: &ManifestMap) -> Result<(), String> {
         match self {
             Self::File(repo) => map_repo(repo.import_state_manifest(id, manifest)),
+            Self::Ssh(session) => session.put_state(id, manifest),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
                 let resp = self
@@ -197,6 +213,7 @@ impl Transport {
     pub fn has_timeline(&self, id: &StateId) -> Result<bool, String> {
         match self {
             Self::File(repo) => Ok(repo.has_timeline(id)),
+            Self::Ssh(session) => session.has_timeline(id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{id}"))?;
                 let resp = self
@@ -211,6 +228,7 @@ impl Transport {
     pub fn get_timeline(&self, id: &StateId) -> Result<TimelineEntry, String> {
         match self {
             Self::File(repo) => map_repo(repo.load_timeline_entry(id)),
+            Self::Ssh(session) => session.get_timeline(id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{id}"))?;
                 let resp = self
@@ -228,6 +246,7 @@ impl Transport {
     pub fn put_timeline(&self, entry: &TimelineEntry) -> Result<(), String> {
         match self {
             Self::File(repo) => map_repo(repo.import_timeline_entry(entry)),
+            Self::Ssh(session) => session.put_timeline(entry),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{}", entry.id))?;
                 let resp = self
@@ -252,6 +271,7 @@ impl Transport {
                 }
                 Ok(out)
             }
+            Self::Ssh(session) => session.list_refs(),
             Self::Http { client, .. } => {
                 let url = self.http_url("/refs/heads")?;
                 let resp = self
@@ -275,6 +295,7 @@ impl Transport {
                 }
                 Ok(Some(map_repo(repo.branch_state(branch))?))
             }
+            Self::Ssh(session) => session.get_ref(branch),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/heads/{branch}"))?;
                 let resp = self
@@ -305,6 +326,7 @@ impl Transport {
                 }
                 map_repo(repo.write_branch_ref(branch, state_id))
             }
+            Self::Ssh(session) => session.set_ref(branch, state_id, force),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/heads/{branch}"))?;
                 let mut req = self
@@ -327,6 +349,7 @@ impl Transport {
     pub fn default_branch(&self) -> Result<String, String> {
         match self {
             Self::File(repo) => Ok(map_repo(repo.load_config())?.default_branch),
+            Self::Ssh(session) => session.default_branch(),
             Self::Http { client, .. } => {
                 let url = self.http_url("/config")?;
                 let resp = self
@@ -351,6 +374,7 @@ impl Transport {
                 }
                 Ok(out)
             }
+            Self::Ssh(session) => session.list_tags(),
             Self::Http { client, .. } => {
                 let url = self.http_url("/refs/tags")?;
                 let resp = self
@@ -374,6 +398,7 @@ impl Transport {
                 }
                 Ok(Some(map_repo(repo.read_tag(name))?))
             }
+            Self::Ssh(session) => session.get_tag(name),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/tags/{name}"))?;
                 let resp = self
@@ -395,6 +420,7 @@ impl Transport {
     pub fn set_tag(&self, name: &str, state_id: &StateId) -> Result<(), String> {
         match self {
             Self::File(repo) => map_repo(repo.write_tag(name, state_id)),
+            Self::Ssh(session) => session.set_tag(name, state_id),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/tags/{name}"))?;
                 let resp = self
@@ -419,6 +445,13 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
+
+    #[test]
+    fn parse_remote_url_accepts_ssh() {
+        let url = "user@host.example:/srv/repo";
+        let parsed = parse_remote_url(url).unwrap();
+        assert_eq!(parsed, PathBuf::from(url));
+    }
 
     #[test]
     fn parse_remote_url_accepts_https() {
