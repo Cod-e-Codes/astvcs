@@ -2,7 +2,7 @@
 
 Version control for a working tree of source files. Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges structural edits. Everything else is stored as UTF-8 text with a line-oriented diff.
 
-The CLI follows familiar names (`init`, `identity`, `status`, `add`, `diff`, `commit`, `branch`, `tag`, `merge`, `merge-base`, `checkout`, `reset`, `revert`, `rebase`, `cherry-pick`, `log`, `blame`, `bisect`, `remote`, `fetch`, `pull`, `push`, `clone`, `serve`, `stash`, `gc`, `fsck`, `repack`). astvcs is a local-first tool with optional network sync over local paths, HTTP, HTTPS, or SSH (optional bearer tokens, TLS on serve, shallow fetch/clone via `--depth`). **astvcs is not Git-compatible** and does not write conflict markers into files.
+The CLI follows familiar names (`init`, `identity`, `status`, `add`, `diff`, `commit`, `branch`, `tag`, `merge`, `merge-base`, `checkout`, `reset`, `revert`, `rebase`, `cherry-pick`, `log`, `blame`, `bisect`, `remote`, `fetch`, `pull`, `push`, `clone`, `serve`, `stash`, `gc`, `fsck`, `repack`, `import-git`). astvcs is a local-first tool with optional network sync over local paths, HTTP, HTTPS, or SSH (optional bearer tokens, TLS on serve, shallow fetch/clone via `--depth`). **astvcs is not Git-compatible** (no `.git` object database or bidirectional git sync); `import-git` is a one-way migration aid that snapshots git HEAD into a single astvcs commit. astvcs does not write conflict markers into files.
 
 Full CLI reference: [`docs/commands.md`](docs/commands.md). Design and repository model: [`docs/architecture.md`](docs/architecture.md).
 
@@ -73,7 +73,8 @@ Binary: `target\release\astvcs.exe`
 
 | In scope | Out of scope (today) |
 |----------|----------------------|
-| Content-addressed states, branches, lightweight tags, and staging index (`add`, `diff --staged`) | Git interoperability |
+| Content-addressed states, branches, lightweight tags, and staging index (`add`, `diff --staged`) | Git object compatibility or bidirectional git sync |
+| `import-git` one-way HEAD snapshot migration from a local git repo | Full git history import |
 | AST diff and three-way merge for supported languages | Conflict markers written into files |
 | Network sync (`fetch`, `pull`, `push`, `clone`, `serve`) over file, HTTP, HTTPS, or SSH; optional bearer auth; TLS on serve; shallow `--depth` | Managed hosting service (you run `serve` yourself) |
 | Per-path merge resolution (`--resolve path:ours\|theirs`) | Interactive in-editor conflict resolution |

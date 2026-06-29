@@ -3900,3 +3900,96 @@ fn merge_base_fails_on_shallow_clone_with_incomplete_history() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("shallow history"));
 }
+
+fn git_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(cwd)
+        .env("GIT_AUTHOR_NAME", "Git Test")
+        .env("GIT_AUTHOR_EMAIL", "git@test.example")
+        .env("GIT_COMMITTER_NAME", "Git Test")
+        .env("GIT_COMMITTER_EMAIL", "git@test.example")
+        .args(args)
+        .output()
+        .expect("spawn git")
+}
+
+#[test]
+fn import_git_snapshot_from_subprocess() {
+    if !git_available() {
+        eprintln!("skip import_git_snapshot_from_subprocess: git not on PATH");
+        return;
+    }
+
+    let parent = TempDir::new().unwrap();
+    let git_dir = parent.path().join("git-repo");
+    fs::create_dir_all(&git_dir).unwrap();
+
+    assert_astvcs_ok(&run_git(&git_dir, &["init"]), "git init");
+    fs::write(git_dir.join("hello.txt"), "hello from git\n").unwrap();
+    assert_astvcs_ok(&run_git(&git_dir, &["add", "hello.txt"]), "git add");
+    assert_astvcs_ok(
+        &run_git(&git_dir, &["commit", "-m", "git baseline"]),
+        "git commit",
+    );
+
+    let astvcs_dir = parent.path().join("astvcs-repo");
+    fs::create_dir_all(&astvcs_dir).unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(None, &["init", astvcs_dir.to_str().unwrap()]),
+        "astvcs init",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(&astvcs_dir),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Import Test",
+                "--email",
+                "import@test.example",
+            ],
+        ),
+        "identity set",
+    );
+
+    let import = run_astvcs(
+        Some(&astvcs_dir),
+        &[
+            "import-git",
+            git_dir.to_str().unwrap(),
+            "-m",
+            "Imported git snapshot",
+        ],
+    );
+    assert_astvcs_ok(&import, "import-git");
+    let stdout = String::from_utf8_lossy(&import.stdout);
+    assert!(
+        stdout.contains("Imported git snapshot"),
+        "expected import message in stdout: {stdout}"
+    );
+
+    let content = fs::read_to_string(astvcs_dir.join("hello.txt")).unwrap();
+    assert_eq!(content, "hello from git\n");
+
+    let repo = Repo::open(&astvcs_dir).unwrap();
+    let history = repo.history(5).unwrap();
+    assert_eq!(history.len(), 2, "empty root + import commit");
+    assert_eq!(history[0].message, "Imported git snapshot");
+    let files = repo.load_state_files(&history[0].id).unwrap();
+    assert_eq!(
+        fs::read_to_string(astvcs_dir.join("hello.txt")).unwrap(),
+        match &files["hello.txt"].content {
+            astvcs::FileContent::Text(blob) => blob.content.clone(),
+            other => panic!("expected text blob, got {other:?}"),
+        }
+    );
+}

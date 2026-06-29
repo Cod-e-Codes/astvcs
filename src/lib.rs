@@ -31,8 +31,8 @@ pub use store::{
     ManifestMap, MergePlan, MergeResolution, MergeResolveSide, RepackReport, Repo, RepoConfig,
     RepoError, RepoErrorKind, RepoResult, RevertOutcome, RevertPlan, ScanOptions, StateEntry,
     StateId, TimelineEntry, TrackedFile, WorkingStatus, ancestors, configured_identity,
-    hash_manifest, merge_base, parse_merge_resolution, parse_merge_resolutions,
-    resolve_author_identity, set_identity, walk_history,
+    hash_manifest, import_git_snapshot, merge_base, parse_merge_resolution,
+    parse_merge_resolutions, resolve_author_identity, set_identity, walk_history,
 };
 pub use trace::{is_verbose, notice, set_verbose, warn};
 pub use unparser::unparse;

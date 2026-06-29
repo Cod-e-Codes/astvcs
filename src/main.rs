@@ -3,7 +3,7 @@ use astvcs::network::{
 };
 use astvcs::store::{
     ChangeColumn, CommitOptions, FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions,
-    configured_identity, parse_merge_resolutions, set_identity,
+    configured_identity, import_git_snapshot, parse_merge_resolutions, set_identity,
 };
 use astvcs::trace;
 use clap::{Args, Parser, Subcommand};
@@ -224,6 +224,12 @@ enum Commands {
     Identity {
         #[command(subcommand)]
         action: IdentityAction,
+    },
+    /// Import git HEAD tree snapshot into this repository (one commit).
+    ImportGit {
+        git_path: PathBuf,
+        #[arg(short, long)]
+        message: Option<String>,
     },
 }
 
@@ -1053,6 +1059,26 @@ fn run(cli: Cli) -> RepoResult<()> {
             let repo = Repo::open(&root)?;
             let report = repo.repack()?;
             print!("{}", report.format_output());
+        }
+        Commands::ImportGit { git_path, message } => {
+            if !root.join(".astvcs").is_dir() {
+                Repo::init(&root)?;
+                trace::notice(format!(
+                    "import-git: initialized astvcs repository in {}",
+                    root.display()
+                ));
+            }
+            let repo = Repo::open(&root)?;
+            let message = message.unwrap_or_else(|| "Import from git HEAD".into());
+            let outcome = import_git_snapshot(&repo, &git_path, &message)?;
+            if outcome.created {
+                println!("import-git: committed {} ({})", outcome.state_id, message);
+            } else {
+                println!(
+                    "import-git: no changes (state {} unchanged)",
+                    outcome.state_id
+                );
+            }
         }
     }
     Ok(())

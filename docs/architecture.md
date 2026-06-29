@@ -2,7 +2,7 @@
 
 ## Feature scope
 
-astvcs is a local-first version control tool with optional network sync. It is **not Git-compatible**. Where tree-sitter parses a file, commits store AST structure and diff/merge operate on structural edits; other UTF-8 paths use line-oriented text blobs, and NUL or non-UTF-8 content is stored as binary. The CLI covers familiar workflow commands (init through repack), including staging, tags, rebase, cherry-pick, blame, bisect, client hooks, author identity, structured `--json` errors, repository locking, `gc`/`fsck`/`repack`, and remotes over file, HTTP, HTTPS, or SSH with optional bearer tokens, TLS on serve, and shallow fetch/clone. Out of scope today: Git interoperability, conflict markers in files, managed hosting, interactive rebase, annotated tags, and DAG bisect. See [commands.md](commands.md) for flags and [README.md](../README.md) for a concise scope table.
+astvcs is a local-first version control tool with optional network sync. It is **not Git-compatible**. Where tree-sitter parses a file, commits store AST structure and diff/merge operate on structural edits; other UTF-8 paths use line-oriented text blobs, and NUL or non-UTF-8 content is stored as binary. The CLI covers familiar workflow commands (init through repack), including staging, tags, rebase, cherry-pick, blame, bisect, client hooks, author identity, structured `--json` errors, repository locking, `gc`/`fsck`/`repack`, `import-git` (one-way HEAD snapshot migration from a local git repo), and remotes over file, HTTP, HTTPS, or SSH with optional bearer tokens, TLS on serve, and shallow fetch/clone. Out of scope today: git object compatibility, bidirectional git sync, conflict markers in files, managed hosting, interactive rebase, annotated tags, and DAG bisect. See [commands.md](commands.md) for flags and [README.md](../README.md) for a concise scope table.
 
 ## Repository model
 
@@ -249,6 +249,7 @@ src/
     cherry_pick.rs  single-commit replay onto HEAD
     blame.rs        line-based blame along linear history
     bisect.rs       linear bisect state and binary search
+    git_import.rs   import-git snapshot migration via git subprocess
     walk.rs      gitignore-style working tree scan (full and incremental)
     scan_cache.rs scan-cache.json load/save and path stat helpers
     repo.rs      repository and CLI backend
@@ -269,6 +270,17 @@ examples/
 tests/
   integration.rs
 ```
+
+## Interoperability
+
+`import-git` is a one-way migration aid: it reads a local git repository via the `git` CLI and imports the **HEAD tree snapshot** into an astvcs repository as a single commit. It uses `git rev-parse`, `git ls-tree -r HEAD`, and `git cat-file` subprocess calls only (no libgit2). UTF-8 text paths are written to the working tree and committed with normal `commit` semantics (author identity required). NUL-containing or invalid UTF-8 blobs are skipped with `warning:` on stderr. Symlinks (git mode `120000`) are imported when the target is valid UTF-8. Submodule entries (mode `160000`) are skipped with a warning. The astvcs tree is synced to the git snapshot: paths tracked at astvcs HEAD but absent from git HEAD are removed from disk before commit. If the target repository has no `.astvcs` directory, `import-git` runs `init` first.
+
+**Non-goals (v1 and beyond for full git parity):**
+
+- No git object hash compatibility (astvcs state ids remain manifest hashes).
+- No native `.git` directory mode for astvcs.
+- No bidirectional sync with git remotes or working trees.
+- No full commit history import (snapshot only in v1).
 
 ## Testing
 
@@ -358,5 +370,7 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit, `store/walk.rs`) |
 | `incremental_scan_finds_new_file_in_changed_dir` | Incremental walk discovers new files when directory metadata changes (unit, `store/walk.rs`) |
 | `verified_detects_content_change_with_unchanged_stat` | Byte digest catches content edits when metadata is stale (unit, `store/scan_cache.rs`) |
+| `import_git_snapshot_from_subprocess` | `import-git` reads local git HEAD via subprocess; one commit with import message |
+| `parse_ls_tree_line_*` | `git ls-tree` line parsing (unit, `store/git_import.rs`) |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

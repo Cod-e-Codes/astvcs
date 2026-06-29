@@ -5,6 +5,7 @@ mod blobs;
 mod cherry_pick;
 pub mod error;
 mod format;
+pub mod git_import;
 mod history;
 pub(crate) mod hooks;
 mod identity;
@@ -35,6 +36,7 @@ pub use reachability::{ROOT_STATE_ID, Reachability};
 pub use blame::BlameLine;
 pub use blobs::{BlobId, BlobStore};
 pub use error::{RepoError, RepoErrorKind, RepoResult};
+pub use git_import::import_git_snapshot;
 pub use history::{AncestryResult, ancestors, merge_base, timeline_ancestry, walk_history};
 pub use identity::{
     AuthorIdentity, IdentityConfig, configured_identity, resolve_author_identity, set_identity,
