@@ -188,6 +188,7 @@ pub fn push(
     remote_name: &str,
     branch: Option<&str>,
     force: bool,
+    no_verify: bool,
 ) -> Result<PushOutcome, String> {
     let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
@@ -216,6 +217,13 @@ pub fn push(
             ));
         }
     }
+
+    map_repo(crate::store::hooks::run_pre_push_hook(
+        repo,
+        &local_tip,
+        remote_name,
+        no_verify,
+    ))?;
 
     let upload = collect_upload_states(repo, &transport, &local_tip)?;
     for state_id in upload {
@@ -311,7 +319,7 @@ mod tests {
 
         fs::write(downstream.path().join("hello.txt"), "world\n").unwrap();
         downstream_repo.commit("downstream change").unwrap();
-        push(&downstream_repo, "origin", Some("main"), false).unwrap();
+        push(&downstream_repo, "origin", Some("main"), false, false).unwrap();
 
         assert_eq!(
             upstream_repo.head_state().unwrap(),

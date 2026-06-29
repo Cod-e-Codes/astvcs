@@ -47,6 +47,11 @@
 | `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
 | `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
 | `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
+| `hook_pre_commit_aborts_commit` | `pre-commit` exit 1 aborts commit |
+| `hook_commit_msg_edits_message` | `commit-msg` edits message file |
+| `hook_nested_astvcs_status_in_pre_commit` | Nested `astvcs status` in `pre-commit` |
+| `hook_no_verify_skips_pre_commit` | `--no-verify` skips failing hook |
+| `hook_pre_merge_aborts` | `pre-merge` exit 1 aborts merge |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |

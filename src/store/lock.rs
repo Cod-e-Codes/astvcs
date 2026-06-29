@@ -15,6 +15,35 @@ pub(crate) fn lock_held() -> bool {
     LOCK_DEPTH.with(|depth| depth.get() > 0)
 }
 
+/// Release the OS advisory lock while keeping the lock file descriptor open.
+///
+/// Sets thread-local lock depth to zero without closing the cached handle.
+/// Used before running client hooks that may invoke `astvcs` as a subprocess.
+pub(crate) fn suspend_repo_lock() -> RepoResult<()> {
+    if !lock_held() {
+        return Err(RepoError::other(
+            "cannot suspend repository lock: lock not held on this thread",
+        ));
+    }
+    LOCK_DEPTH.with(|depth| depth.set(0));
+    LOCK_STATE.with(|state| {
+        if let Some((_, file)) = state.borrow().as_ref() {
+            file.unlock()
+                .map_err(|e| RepoError::other(format!("unlock repo lock: {e}")))?;
+        }
+        Ok(())
+    })
+}
+
+/// Re-acquire the repository lock after [`suspend_repo_lock`].
+pub(crate) fn resume_repo_lock(astvcs_dir: &Path) -> RepoResult<RepoLockGuard> {
+    let path = astvcs_dir.join(LOCK_FILE);
+    open_lock_file(&path)?;
+    try_lock_cached(&path)?;
+    LOCK_DEPTH.with(|depth| depth.set(1));
+    Ok(RepoLockGuard { path })
+}
+
 /// Exclusive repository lock held for the duration of one logical command.
 ///
 /// Uses OS advisory whole-file locking (`flock` / `LockFileEx`). The lock is
@@ -222,5 +251,18 @@ mod tests {
             let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
         }
         let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
+    }
+
+    #[test]
+    fn suspend_and_resume_releases_for_subprocess() {
+        let dir = TempDir::new().unwrap();
+        let astvcs = dir.path().join(".astvcs");
+        std::fs::create_dir_all(&astvcs).unwrap();
+
+        let _outer = RepoLockGuard::acquire(&astvcs).unwrap();
+        suspend_repo_lock().unwrap();
+        let _sub = RepoLockGuard::acquire(&astvcs).unwrap();
+        drop(_sub);
+        let _again = resume_repo_lock(&astvcs).unwrap();
     }
 }

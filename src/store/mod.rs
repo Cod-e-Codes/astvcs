@@ -3,6 +3,7 @@ mod blobs;
 pub mod error;
 mod format;
 mod history;
+pub(crate) mod hooks;
 mod identity;
 mod integrity;
 mod lock;
@@ -38,8 +39,9 @@ pub use merge_resolve::{
     parse_merge_resolutions,
 };
 pub use repo::{
-    BranchInfo, ChangeColumn, CommitOutcome, FileStatus, MergePlan, Repo, RepoConfig,
-    RevertOutcome, RevertPlan, ScanOptions, StateEntry, StateId, TimelineEntry, WorkingStatus,
+    BranchInfo, ChangeColumn, CommitOptions, CommitOutcome, FileStatus, MergePlan, Repo,
+    RepoConfig, RevertOutcome, RevertPlan, ScanOptions, StateEntry, StateId, TimelineEntry,
+    WorkingStatus,
 };
 pub use scan_cache::ScanCache;
 pub use staging::{StagedEntry, StagingIndex};

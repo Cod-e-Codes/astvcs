@@ -3022,3 +3022,151 @@ fn tag_fetch_push_between_repos() {
         "expected v2.0 tag on upstream: {upstream_tags:?}"
     );
 }
+
+fn hooks_dir(repo: &Path) -> PathBuf {
+    repo.join(".astvcs").join("hooks")
+}
+
+fn write_hook(repo: &Path, name: &str, body: &str) {
+    let dir = hooks_dir(repo);
+    fs::create_dir_all(&dir).expect("create hooks dir");
+    #[cfg(unix)]
+    {
+        let path = dir.join(name);
+        fs::write(&path, body).expect("write hook");
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod hook");
+    }
+    #[cfg(windows)]
+    {
+        let path = dir.join(format!("{name}.cmd"));
+        fs::write(&path, body).expect("write hook");
+    }
+}
+
+#[test]
+fn hook_pre_commit_aborts_commit() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+    repo.commit("base").unwrap();
+    let head_before = repo.head_state().unwrap();
+
+    fs::write(dir.path().join("file.txt"), "two\n").unwrap();
+    #[cfg(unix)]
+    write_hook(dir.path(), "pre-commit", "#!/bin/sh\nexit 1\n");
+    #[cfg(windows)]
+    write_hook(dir.path(), "pre-commit", "@echo off\r\nexit /b 1\r\n");
+
+    let err = repo.commit("should fail").unwrap_err();
+    assert_eq!(err.kind, RepoErrorKind::HookFailed);
+    assert_eq!(repo.head_state().unwrap(), head_before);
+}
+
+#[test]
+fn hook_commit_msg_edits_message() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+    repo.commit("base").unwrap();
+
+    fs::write(dir.path().join("file.txt"), "two\n").unwrap();
+    #[cfg(unix)]
+    write_hook(
+        dir.path(),
+        "commit-msg",
+        "#!/bin/sh\nprintf 'edited: ' > \"$ASTVCS_COMMIT_MSG_FILE.tmp\"\ncat \"$ASTVCS_COMMIT_MSG_FILE\" >> \"$ASTVCS_COMMIT_MSG_FILE.tmp\"\nmv \"$ASTVCS_COMMIT_MSG_FILE.tmp\" \"$ASTVCS_COMMIT_MSG_FILE\"\n",
+    );
+    #[cfg(windows)]
+    write_hook(
+        dir.path(),
+        "commit-msg",
+        "@echo off\r\nset /p msg=<\"%ASTVCS_COMMIT_MSG_FILE%\"\r\necho edited: %msg%> \"%ASTVCS_COMMIT_MSG_FILE%\"\r\n",
+    );
+
+    let id = repo.commit("original").unwrap().state_id;
+    let entry = repo.load_timeline_entry(&id).unwrap();
+    assert_eq!(entry.message, "edited: original");
+}
+
+#[test]
+fn hook_nested_astvcs_status_in_pre_commit() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+    repo.commit("base").unwrap();
+
+    fs::write(dir.path().join("file.txt"), "two\n").unwrap();
+    let bin = astvcs_bin();
+    #[cfg(unix)]
+    write_hook(
+        dir.path(),
+        "pre-commit",
+        &format!(
+            "#!/bin/sh\n\"{}\" --repo \"{}\" status\n",
+            bin.display(),
+            dir.path().display()
+        ),
+    );
+    #[cfg(windows)]
+    write_hook(
+        dir.path(),
+        "pre-commit",
+        &format!(
+            "@echo off\r\n\"{}\" --repo \"{}\" status\r\n",
+            bin.display(),
+            dir.path().display()
+        ),
+    );
+
+    assert!(repo.commit("with nested status").unwrap().created);
+}
+
+#[test]
+fn hook_no_verify_skips_pre_commit() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+    repo.commit("base").unwrap();
+
+    fs::write(dir.path().join("file.txt"), "two\n").unwrap();
+    #[cfg(unix)]
+    write_hook(dir.path(), "pre-commit", "#!/bin/sh\nexit 1\n");
+    #[cfg(windows)]
+    write_hook(dir.path(), "pre-commit", "@echo off\r\nexit /b 1\r\n");
+
+    let out = run_astvcs(
+        Some(dir.path()),
+        &["commit", "-m", "skip hooks", "--no-verify"],
+    );
+    assert_astvcs_ok(&out, "commit with --no-verify");
+}
+
+#[test]
+fn hook_pre_merge_aborts() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("base.txt"), "base\n").unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feature.txt"), "feature\n").unwrap();
+    repo.commit("feature work").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("main.txt"), "main\n").unwrap();
+    repo.commit("main work").unwrap();
+    let main_before = repo.head_state().unwrap();
+
+    #[cfg(unix)]
+    write_hook(dir.path(), "pre-merge", "#!/bin/sh\nexit 1\n");
+    #[cfg(windows)]
+    write_hook(dir.path(), "pre-merge", "@echo off\r\nexit /b 1\r\n");
+
+    let err = repo.merge_branch("feature", "merge").unwrap_err();
+    assert_eq!(err.kind, RepoErrorKind::HookFailed);
+    assert_eq!(repo.head_state().unwrap(), main_before);
+}

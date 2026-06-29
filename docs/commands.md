@@ -21,7 +21,7 @@ Global flags:
 | `diff --staged` / `--cached [path]` | Staged diff vs HEAD |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
-| `commit -m <msg> [--full-scan]` | Commit staged changes when staging is active (after first `add`); otherwise legacy whole-tree commit. Errors when staging is active but empty while the working tree has changes. Requires configured author identity. Pass `--full-scan` to bypass the scan cache. |
+| `commit -m <msg> [--full-scan] [--no-verify]` | Commit staged changes when staging is active (after first `add`); otherwise legacy whole-tree commit. Errors when staging is active but empty while the working tree has changes. Requires configured author identity. Pass `--full-scan` to bypass the scan cache. Runs `pre-commit` and `commit-msg` hooks unless `--no-verify`. |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |
@@ -29,8 +29,9 @@ Global flags:
 | `tag list` | List tags with state ids (sorted by name) |
 | `tag remove <name>` | Delete a tag ref |
 | `merge-base <left> <right>` | Print lowest common ancestor (branch, tag, remote-tracking ref, or state id) |
-| `merge <branch> -m <msg>` | Merge a branch; updates working tree on success |
+| `merge <branch> -m <msg> [--no-verify]` | Merge a branch; updates working tree on success |
 | `merge <branch> -m <msg> --force` | Merge when the working tree has uncommitted changes (warns per clobbered path) |
+| `merge <branch> -m <msg> --no-verify` | Merge without running `pre-merge` |
 | `merge <branch> -m <msg> --resolve <path>:ours` | Merge with per-path conflict resolution (repeatable) |
 | `merge <branch> --dry-run` | Simulate merge; print conflicts without changing the repository |
 | `checkout --branch <name>` | Switch branch and materialize its HEAD to disk |
@@ -45,12 +46,12 @@ Global flags:
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
 | `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs and all remote tags |
-| `pull <remote> [--branch <name>] [-m <msg>] [--force] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
+| `pull <remote> [--branch <name>] [-m <msg>] [--force] [--no-verify] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
 | `stash push [-m <msg>] [-u]` | Save working-tree changes to `.astvcs/stash/` and reset disk to HEAD |
 | `stash list` | List stashes (`stash@{n}`; 0 is newest) |
 | `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
 | `stash apply [index]` | Apply stash without removing the entry |
-| `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
+| `push <remote> [--branch <name>] [--force] [--no-verify]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
@@ -110,6 +111,19 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 `stash apply` and `stash pop` three-way merge each path (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write the result to the working tree only (`index.json` stays at HEAD). Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict` and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
 
 Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD state id).
+
+### Client hooks
+
+Optional scripts in `.astvcs/hooks/` run as child processes. `init` creates an empty `hooks/` directory. Missing hooks are skipped; non-zero exit aborts the operation with `hook <name> failed with exit code N`.
+
+| Hook | When | Env vars |
+|------|------|----------|
+| `pre-commit` | Before commit persist (when changes exist) | `ASTVCS_ROOT`, `ASTVCS_BRANCH`, `ASTVCS_HEAD_STATE_ID` |
+| `commit-msg` | After `pre-commit`, before persist | above + `ASTVCS_COMMIT_MSG_FILE` (`.astvcs/hooks/commit-msg-input`) |
+| `pre-merge` | After clean merge plan, before writes | above + `ASTVCS_MERGE_BRANCH` |
+| `pre-push` | Before upload (when push would send objects) | above + `ASTVCS_REMOTE` |
+
+Pass `--no-verify` on `commit`, `merge`, `pull`, or `push` to skip hooks. Hooks release the repository lock while running so nested `astvcs` subprocess calls succeed. On Windows use `.cmd`/`.bat` (via `cmd /C`) or `.ps1` (via `powershell -NoProfile -File`); on Unix use an executable script or rely on `sh hookpath`.
 
 ### `revert`
 

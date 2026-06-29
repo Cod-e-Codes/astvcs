@@ -19,6 +19,7 @@ pub enum RepoErrorKind {
     InvalidInput,
     IntegrityCheck,
     StateMismatch,
+    HookFailed,
     Other,
 }
 
@@ -110,6 +111,10 @@ impl RepoError {
         Self::new(RepoErrorKind::IntegrityCheck, message)
     }
 
+    pub fn hook_failed(message: impl Into<String>) -> Self {
+        Self::new(RepoErrorKind::HookFailed, message)
+    }
+
     pub fn other(message: impl Into<String>) -> Self {
         Self::new(RepoErrorKind::Other, message)
     }
@@ -146,6 +151,8 @@ impl RepoError {
             RepoErrorKind::AlreadyExists
         } else if message.contains("integrity check failed") {
             RepoErrorKind::IntegrityCheck
+        } else if message.starts_with("hook ") && message.contains(" failed with exit code ") {
+            RepoErrorKind::HookFailed
         } else {
             RepoErrorKind::Other
         };

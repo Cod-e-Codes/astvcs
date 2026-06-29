@@ -42,6 +42,14 @@ pub struct ScanOptions {
     pub full_scan: bool,
 }
 
+/// Options for `commit_with_options`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitOptions {
+    pub scan: ScanOptions,
+    /// Skip client hooks (`pre-commit`, `commit-msg`).
+    pub no_verify: bool,
+}
+
 impl ScanOptions {
     fn effective_full_scan(self) -> bool {
         self.full_scan || trace::is_verbose()
@@ -383,6 +391,7 @@ impl Repo {
         }
         fs::create_dir_all(astvcs.join("refs/heads")).map_err(|e| RepoError::from_io("init", e))?;
         fs::create_dir_all(astvcs.join("refs/tags")).map_err(|e| RepoError::from_io("init", e))?;
+        fs::create_dir_all(astvcs.join("hooks")).map_err(|e| RepoError::from_io("init", e))?;
         fs::create_dir_all(astvcs.join("states")).map_err(|e| RepoError::from_io("init", e))?;
         fs::create_dir_all(astvcs.join("timeline")).map_err(|e| RepoError::from_io("init", e))?;
         BlobStore::new(&astvcs).ensure_dirs()?;
@@ -1952,22 +1961,23 @@ impl Repo {
     }
 
     pub fn commit(&self, message: &str) -> RepoResult<CommitOutcome> {
-        self.commit_with_options(message, ScanOptions::default())
+        self.commit_with_options(message, CommitOptions::default())
     }
 
     pub fn commit_with_options(
         &self,
         message: &str,
-        opts: ScanOptions,
+        opts: CommitOptions,
     ) -> RepoResult<CommitOutcome> {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
         let mut staging = self.load_staging_unlocked()?;
+        let scan_opts = opts.scan;
 
         let new_files = if staging.active {
             if staging.entries.is_empty() {
-                let status = self.status_unlocked(opts)?;
+                let status = self.status_unlocked(scan_opts)?;
                 if !status.entries.is_empty() {
                     return Err(RepoError::invalid_input(
                         "nothing staged; use `astvcs add` to stage changes before commit",
@@ -1999,7 +2009,7 @@ impl Repo {
             }
             new_files
         } else {
-            let (working_files, mut scan_cache, _) = self.scan_working(&head, opts)?;
+            let (working_files, mut scan_cache, _) = self.scan_working(&head, scan_opts)?;
 
             let mut new_files = head_files.clone();
             for path in &working_files {
@@ -2042,9 +2052,16 @@ impl Repo {
             });
         }
 
+        let message = super::hooks::run_commit_hooks(self, &head, message, opts.no_verify)?;
+
         let author = resolve_author_identity(self)?;
-        let state_id =
-            self.persist_state(&new_files, message, &author, Some(head.clone()), vec![head])?;
+        let state_id = self.persist_state(
+            &new_files,
+            &message,
+            &author,
+            Some(head.clone()),
+            vec![head],
+        )?;
         self.sync_index_to_state(&new_files, &state_id)?;
         clear_staging_entries(&mut staging);
         self.save_staging_unlocked(&staging)?;
@@ -2082,7 +2099,7 @@ impl Repo {
         message: &str,
         resolutions: &[MergeResolution],
     ) -> RepoResult<StateId> {
-        self.merge_branch_with_resolutions_force(branch, message, resolutions, false)
+        self.merge_branch_with_resolutions_force(branch, message, resolutions, false, false)
     }
 
     pub fn merge_branch_with_resolutions_force(
@@ -2091,6 +2108,7 @@ impl Repo {
         message: &str,
         resolutions: &[MergeResolution],
         force: bool,
+        no_verify: bool,
     ) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         let plan = self.prepare_merge_unlocked(branch, resolutions)?;
@@ -2098,6 +2116,7 @@ impl Repo {
             trace::warn("merge: aborted due to conflicts");
             return Err(RepoError::merge_conflict(plan.format_conflicts()));
         }
+        super::hooks::run_pre_merge_hook(self, &plan.head_id, branch, no_verify)?;
         self.finish_merge(&plan, message, force)
     }
 
@@ -4116,7 +4135,7 @@ mod tests {
         repo.checkout_branch("main").unwrap();
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
 
-        repo.merge_branch_with_resolutions_force("feature", "merge", &[], true)
+        repo.merge_branch_with_resolutions_force("feature", "merge", &[], true, false)
             .unwrap();
         assert_eq!(
             fs::read_to_string(dir.path().join("lib.rs")).unwrap(),
@@ -4164,7 +4183,7 @@ mod tests {
         )
         .unwrap();
 
-        repo.merge_branch_with_resolutions_force("feature", "merge", &[], true)
+        repo.merge_branch_with_resolutions_force("feature", "merge", &[], true, false)
             .unwrap();
         let main_rs = fs::read_to_string(dir.path().join("main.rs")).unwrap();
         assert!(

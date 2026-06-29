@@ -2,7 +2,7 @@ use astvcs::network::{
     add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 use astvcs::store::{
-    ChangeColumn, FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions,
+    ChangeColumn, CommitOptions, FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions,
     configured_identity, parse_merge_resolutions, set_identity,
 };
 use astvcs::trace;
@@ -58,6 +58,9 @@ enum Commands {
         /// Walk every tracked directory instead of using the scan cache.
         #[arg(long)]
         full_scan: bool,
+        /// Skip client hooks (pre-commit, commit-msg).
+        #[arg(long)]
+        no_verify: bool,
     },
     Branch {
         #[command(subcommand)]
@@ -123,6 +126,9 @@ enum Commands {
         branch: Option<String>,
         #[arg(long)]
         force: bool,
+        /// Skip client hooks (pre-push).
+        #[arg(long)]
+        no_verify: bool,
     },
     Pull(PullArgs),
     Stash {
@@ -224,6 +230,9 @@ struct PullArgs {
     message: Option<String>,
     #[arg(long)]
     force: bool,
+    /// Skip client hooks during the merge step.
+    #[arg(long)]
+    no_verify: bool,
     #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
     resolve: Vec<String>,
 }
@@ -242,6 +251,10 @@ struct MergeArgs {
     /// Allow merge when the working tree has uncommitted changes.
     #[arg(long)]
     force: bool,
+
+    /// Skip client hooks (pre-merge).
+    #[arg(long)]
+    no_verify: bool,
 
     /// Pick ours (HEAD) or theirs (merged branch) for a conflicted path.
     #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
@@ -437,9 +450,19 @@ fn run(cli: Cli) -> RepoResult<()> {
             };
             print!("{output}");
         }
-        Commands::Commit { message, full_scan } => {
+        Commands::Commit {
+            message,
+            full_scan,
+            no_verify,
+        } => {
             let repo = Repo::open(&root)?;
-            let outcome = repo.commit_with_options(&message, ScanOptions { full_scan })?;
+            let outcome = repo.commit_with_options(
+                &message,
+                CommitOptions {
+                    scan: ScanOptions { full_scan },
+                    no_verify,
+                },
+            )?;
             if outcome.created {
                 println!("Committed state {}", outcome.state_id);
             } else {
@@ -508,6 +531,7 @@ fn run(cli: Cli) -> RepoResult<()> {
                     &message,
                     &resolutions,
                     args.force,
+                    args.no_verify,
                 )?;
                 println!(
                     "Merged branch {} into current branch (state {id})",
@@ -669,10 +693,11 @@ fn run(cli: Cli) -> RepoResult<()> {
             remote,
             branch,
             force,
+            no_verify,
         } => {
             let repo = Repo::open(&root)?;
-            let outcome =
-                push(&repo, &remote, branch.as_deref(), force).map_err(RepoError::from_message)?;
+            let outcome = push(&repo, &remote, branch.as_deref(), force, no_verify)
+                .map_err(RepoError::from_message)?;
             println!(
                 "Pushed {} to {}/{} ({})",
                 outcome.branch, remote, outcome.branch, outcome.state_id
@@ -702,6 +727,7 @@ fn run(cli: Cli) -> RepoResult<()> {
                 &message,
                 &resolutions,
                 args.force,
+                args.no_verify,
             ) {
                 Ok(id) => {
                     println!("Merged {remote_ref} into current branch (state {id})");
