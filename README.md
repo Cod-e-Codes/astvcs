@@ -1,14 +1,26 @@
 # astvcs
 
-Version control for a working tree of source files. Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges structural edits. Everything else is stored as UTF-8 text with a line-oriented diff.
+Structural version control for a working tree of source files.
 
-The CLI follows familiar names (`init`, `identity`, `status`, `add`, `diff`, `commit`, `branch`, `tag`, `merge`, `merge-base`, `checkout`, `reset`, `revert`, `rebase`, `cherry-pick`, `log`, `blame`, `bisect`, `remote`, `fetch`, `pull`, `push`, `clone`, `serve`, `stash`, `gc`, `fsck`, `repack`, `import-git`). astvcs is a local-first tool with optional network sync over local paths, HTTP, HTTPS, or SSH (optional bearer tokens, TLS on serve, shallow fetch/clone via `--depth`). **astvcs is not Git-compatible** (no `.git` object database or bidirectional git sync); `import-git` is a one-way migration aid that snapshots git HEAD into a single astvcs commit. astvcs does not write conflict markers into files.
+Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges **structural** edits. Other paths are stored as UTF-8 text with a line-oriented diff, or as binary bytes when the content is not valid UTF-8.
 
-Full CLI reference: [`docs/commands.md`](docs/commands.md). Design and repository model: [`docs/architecture.md`](docs/architecture.md).
+## What this is
 
-## Why structure matters
+astvcs is a **local-first** CLI: you work in a normal directory, and the tool tracks changes under `.astvcs/` using content-addressed states, a timeline, branches, and remotes. Command names follow the usual vocabulary (`init`, `status`, `commit`, `branch`, `merge`, `fetch`, and so on).
 
-A line diff often rewrites every line below an insertion. Where tree-sitter parses a file, astvcs diffs structure: it aligns nodes between versions with heuristics and classifies the resulting edits. Prepending a doc comment to `lib.rs` can produce one intent instead of a line cascade:
+The goal is version control that understands code structure where parsing succeeds, so innocuous edits (a new doc comment, a moved function) do not always show up as a line cascade.
+
+## What this is not
+
+- **Not Git-compatible.** No `.git` object database, no git wire protocol, no bidirectional sync with git repositories.
+- **No conflict markers in files.** Overlapping edits are reported; you resolve with `merge --resolve path:ours|theirs` or fix the tree before continuing.
+- **Not a hosted service.** Network sync is something you run yourself (`serve`, file paths, HTTP, HTTPS, or SSH).
+
+`import-git` is a one-way aid: it snapshots git HEAD into a single astvcs commit when migrating a tree. See the `import-git` row in [commands.md](docs/commands.md).
+
+## How structure changes the diff
+
+A line diff often rewrites every line below an insertion. Where tree-sitter parses a file, astvcs aligns nodes between versions and classifies edits. Prepending a doc comment to `lib.rs` can produce one intent instead of a cascade:
 
 ```
 --- lib.rs
@@ -17,30 +29,42 @@ intents:
   [0] prepend comment
 ```
 
-Three-way merge applies both sides when alignment finds disjoint structural edits. Overlapping edits on the same node (for example, two renames of one identifier) are reported as structural conflicts; the repository stays unchanged until you pass `merge --resolve path:ours|theirs` to pick a whole-file side for each conflicted path.
+Three-way merge applies both sides when alignment finds disjoint structural edits. Overlapping edits on the same node (for example, two renames of one identifier) are structural conflicts; the repository stays unchanged until you pass `merge --resolve path:ours|theirs` for each conflicted path.
+
+## Documentation
+
+| Document | Use it for |
+|----------|------------|
+| [docs/commands.md](docs/commands.md) | Full CLI reference (every subcommand and flag) |
+| [docs/architecture.md](docs/architecture.md) | Repository model, diff/merge internals, locking, network, gc/fsck |
+| [examples/README.md](examples/README.md) | Nine runnable fixture walkthroughs |
+| [docs/RELEASE.md](docs/RELEASE.md) | Tagged release packaging |
+
+Contributor Agent Skills live under [`.cursor/skills/`](.cursor/skills/) (`astvcs-develop`, `astvcs-structural-diff-merge`, `astvcs-add-tree-sitter-language`, `astvcs-integration-tests`).
 
 ## Quick start
+
+Requires a built binary or a [release download](#install). Set author identity once (or use `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL`):
 
 ```powershell
 cargo build --release
 
 .\target\release\astvcs.exe identity set --name "You" --email you@example.com
 .\target\release\astvcs.exe init
-# edit tracked files (AST extensions: see docs/architecture.md) or other UTF-8 text
+# edit files in the repo root
 .\target\release\astvcs.exe status
 .\target\release\astvcs.exe add .
 .\target\release\astvcs.exe commit -m "describe the change"
-.\target\release\astvcs.exe diff
 .\target\release\astvcs.exe log
 ```
 
-Use `--repo <path>` to target a repository outside the current directory. Pass `-v` / `--verbose` for operational detail (`notice:`) on stderr. Pass `--json` on any command for structured JSON errors on failure.
+Use `--repo <path>` to target another directory. Pass `-v` / `--verbose` for operational `notice:` lines on stderr. Pass `--json` on any command for structured JSON errors on failure.
 
-Fixture walkthroughs live under [`examples/`](examples/README.md). Cursor [Agent Skills](https://cursor.com/docs/skills) for contributors live in [`.cursor/skills/`](.cursor/skills/) (`/astvcs-develop`, `/astvcs-structural-diff-merge`, `/astvcs-add-tree-sitter-language`, `/astvcs-integration-tests`).
+Run all example fixtures non-interactively: `.\examples\run-demos.ps1`.
 
 ## Install
 
-Prebuilt binaries for Linux and Windows are published on [GitHub Releases](https://github.com/Cod-e-Codes/astvcs/releases).
+Prebuilt binaries for Linux and Windows are on [GitHub Releases](https://github.com/Cod-e-Codes/astvcs/releases).
 
 | Platform | Download |
 |----------|----------|
@@ -53,11 +77,9 @@ Extract the archive, put the binary on your `PATH`, then verify:
 astvcs --version
 ```
 
-Release notes template: [`docs/RELEASE.md`](docs/RELEASE.md).
+## Build from source
 
-## Build
-
-Requires Rust 1.96+ (edition 2024).
+Requires Rust 1.96+ (edition 2024) and a C toolchain for tree-sitter native dependencies.
 
 ```powershell
 cargo build --release
@@ -65,30 +87,27 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request.
+CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request. Binary: `target\release\astvcs.exe` on Windows.
 
-Binary: `target\release\astvcs.exe`
+## Scope at a glance
 
-## Scope
+**In scope today**
 
-| In scope | Out of scope (today) |
-|----------|----------------------|
-| Content-addressed states, branches, lightweight tags, and staging index (`add`, `diff --staged`) | Git object compatibility or bidirectional git sync |
-| `import-git` one-way HEAD snapshot migration from a local git repo | Full git history import |
-| AST diff and three-way merge for supported languages | Conflict markers written into files |
-| Network sync (`fetch`, `pull`, `push`, `clone`, `serve`) over file, HTTP, HTTPS, or SSH; optional bearer auth; TLS on serve; shallow `--depth` | Managed hosting service (you run `serve` yourself) |
-| Per-path merge resolution (`--resolve path:ours\|theirs`) | Interactive in-editor conflict resolution |
-| `reset` (soft, mixed, hard), `revert`, detached checkout; `--force` on merge, checkout, revert, rebase, cherry-pick, and hard reset when dirty | Interactive rebase editor or commit reordering |
-| `rebase`, `cherry-pick`, `blame`, `bisect` (linear first-parent history) | DAG bisect or merge-heavy bisect |
-| Author identity (`identity`), structured CLI errors (`--json`) | Annotated tags |
-| Client hooks (`.astvcs/hooks/`; skip with `--no-verify`) | |
-| `gc`, `fsck`, `repack`; blob pack storage | |
-| Binary file tracking, symlink and executable file modes | |
-| Path rename detection in status/diff/merge | |
-| Repository advisory locking; serve concurrent reads during writes | |
-| Incremental working-tree scan cache (`--full-scan` to bypass) | |
+- AST diff and three-way merge for supported languages; text and binary fallback for everything else
+- Staging index (`add`, `diff --staged`), branches, lightweight tags, author identity
+- `reset` (soft, mixed, hard), `revert`, `rebase`, `cherry-pick`, `stash`, `blame`, `bisect` on linear first-parent history
+- Remotes over local path, HTTP, HTTPS, or SSH; optional bearer auth; TLS on `serve`; shallow `clone` / `fetch` with `--depth`
+- Per-path merge resolution; client hooks (`.astvcs/hooks/`; `--no-verify` on selected commands)
+- `gc`, `fsck`, `repack`; symlink and executable file modes; path rename detection in status/diff/merge
+- Repository advisory locking; concurrent HTTP serve reads while writes serialize
 
-Unsupported extensions and parse failures fall back to text blobs; astvcs prints `warning:` to stderr when that happens. NUL-containing or non-UTF-8 file content is stored as binary blobs.
+**Out of scope today**
+
+- Git object compatibility, full git history import, or bidirectional git sync
+- Conflict markers written into files; interactive rebase editor; annotated tags
+- Managed hosting; DAG bisect; merge-heavy bisect paths
+
+Unsupported extensions and parse failures fall back to text blobs; astvcs prints `warning:` to stderr when that happens.
 
 ## License
 

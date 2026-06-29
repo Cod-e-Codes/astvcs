@@ -1,8 +1,10 @@
 # Architecture
 
+Design reference for astvcs: on-disk layout, structural diff and merge, locking, network sync, and maintenance commands. For a project overview and quick start, see [README.md](../README.md). For every CLI flag and subcommand, see [commands.md](commands.md).
+
 ## Feature scope
 
-astvcs is a local-first version control tool with optional network sync. It is **not Git-compatible**. Where tree-sitter parses a file, commits store AST structure and diff/merge operate on structural edits; other UTF-8 paths use line-oriented text blobs, and NUL or non-UTF-8 content is stored as binary. The CLI covers familiar workflow commands (init through repack), including staging, tags, rebase, cherry-pick, blame, bisect, client hooks, author identity, structured `--json` errors, repository locking, `gc`/`fsck`/`repack`, `import-git` (one-way HEAD snapshot migration from a local git repo), and remotes over file, HTTP, HTTPS, or SSH with optional bearer tokens, TLS on serve, and shallow fetch/clone. Out of scope today: git object compatibility, bidirectional git sync, conflict markers in files, managed hosting, interactive rebase, annotated tags, and DAG bisect. See [commands.md](commands.md) for flags and [README.md](../README.md) for a concise scope table.
+User-facing boundaries (in scope vs out of scope) are summarized in [README.md#scope-at-a-glance](../README.md#scope-at-a-glance). This document describes **how** those features are implemented.
 
 ## Repository model
 

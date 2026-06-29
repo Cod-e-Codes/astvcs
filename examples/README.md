@@ -1,6 +1,8 @@
 # Examples
 
-Nine fixtures exercise the CLI. Run from the astvcs repo root.
+Runnable walkthroughs for the astvcs CLI. Project overview and quick start: [README.md](../README.md). Full command reference: [docs/commands.md](../docs/commands.md).
+
+Nine fixtures cover structural merge scenarios, network sync, lifecycle commands, shallow clone, git import, and HTTP serve. Run from the astvcs repo root.
 
 ```powershell
 cargo build --release

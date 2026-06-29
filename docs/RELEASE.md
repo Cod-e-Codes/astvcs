@@ -1,6 +1,6 @@
 # Release notes template
 
-Copy this outline when drafting a GitHub Release for a new tag.
+Copy this outline when drafting a GitHub Release for a new tag. Project overview and install summary: [README.md](../README.md).
 
 ## Version
 
