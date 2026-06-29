@@ -59,6 +59,8 @@
 | `cherry_pick_conflict_leaves_head_unchanged` | Conflicting cherry-pick aborts without side effects |
 | `cherry_pick_from_remote_tracking_ref` | Cherry-pick `origin/feature` after fetch |
 | `blame_linear_two_commits` | Line blame attributes edits to correct commits in linear history |
+| `bisect_linear_four_commits` | Bisect finds first bad commit via script in linear history |
+| `bisect_run_releases_lock_for_nested_astvcs` | Bisect script runs nested `astvcs status` without lock error |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |

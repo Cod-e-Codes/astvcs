@@ -84,6 +84,7 @@ assert!(out.status.success());
 - Rebase: `rebase_linear_success`, `rebase_conflict_abort_restores`, `rebase_conflict_continue`; unit coverage in `store/rebase.rs` (`collect_linear_commits_orders_oldest_first`, `collect_linear_commits_rejects_merge_commit`).
 - Cherry-pick: `cherry_pick_clean_commit`, `cherry_pick_conflict_leaves_head_unchanged`, `cherry_pick_from_remote_tracking_ref`; unit coverage in `store/cherry_pick.rs` (`cherry_pick_rejects_merge_commit`, `linear_timeline_parent_rejects_merge_commit`).
 - Blame: `blame_linear_two_commits`; unit coverage in `store/blame.rs` (`child_to_parent_map_tracks_equal_lines`, `lines_changed_in_child_detects_insert_and_modify`).
+- Bisect: `bisect_linear_four_commits`, `bisect_run_releases_lock_for_nested_astvcs`; unit coverage in `store/bisect.rs` (`collect_bisect_candidates_orders_oldest_first`, `collect_bisect_candidates_rejects_non_ancestor`, `collect_bisect_candidates_rejects_merge_commit`). `bisect run` suspends the repository lock like hooks so nested `astvcs` calls succeed.
 
 ### What to avoid
 

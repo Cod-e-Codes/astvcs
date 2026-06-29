@@ -3518,3 +3518,207 @@ fn blame_linear_two_commits() {
     assert_eq!(blame_lines[1].message, "edit and append");
     assert_eq!(blame_lines[2].message, "edit and append");
 }
+
+fn write_bisect_script(path: &Path, body: &str) {
+    fs::write(path, body).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+}
+
+#[test]
+fn bisect_linear_four_commits() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    set_identity(&repo, "Alice", "alice@example.com", false).unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v1\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 1"]),
+        "commit 1",
+    );
+
+    fs::write(dir.path().join("file.txt"), "v2\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 2"]),
+        "commit 2",
+    );
+
+    fs::write(dir.path().join("file.txt"), "v3\n").unwrap();
+    fs::write(dir.path().join("bisect-marker.txt"), "bad\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 3"]),
+        "commit 3",
+    );
+
+    fs::write(dir.path().join("file.txt"), "v4\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 4"]),
+        "commit 4",
+    );
+
+    let good_id = repo
+        .history(10)
+        .unwrap()
+        .last()
+        .expect("oldest commit")
+        .id
+        .clone();
+
+    #[cfg(unix)]
+    {
+        let script = dir.path().parent().unwrap().join("bisect-test.sh");
+        write_bisect_script(
+            &script,
+            "#!/bin/sh\nif [ -f bisect-marker.txt ]; then exit 1; fi\nexit 0\n",
+        );
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "start", "HEAD", good_id.as_str()],
+            ),
+            "bisect start",
+        );
+        let out = run_astvcs(
+            Some(dir.path()),
+            &["bisect", "run", script.to_str().unwrap()],
+        );
+        assert_astvcs_ok(&out, "bisect run");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("first bad state:") && stdout.contains("commit 3"),
+            "expected first bad commit 3: {stdout}"
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        let script = dir.path().parent().unwrap().join("bisect-test.ps1");
+        write_bisect_script(
+            &script,
+            &format!(
+                "Set-Location -LiteralPath \"{}\"\r\nif (Test-Path bisect-marker.txt) {{ exit 1 }} else {{ exit 0 }}\r\n",
+                dir.path().display()
+            ),
+        );
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "start", "HEAD", good_id.as_str()],
+            ),
+            "bisect start",
+        );
+        let out = run_astvcs(
+            Some(dir.path()),
+            &[
+                "bisect",
+                "run",
+                "powershell",
+                "-File",
+                script.to_str().unwrap(),
+            ],
+        );
+        assert_astvcs_ok(&out, "bisect run");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("first bad state:") && stdout.contains("commit 3"),
+            "expected first bad commit 3: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn bisect_run_releases_lock_for_nested_astvcs() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    set_identity(&repo, "Alice", "alice@example.com", false).unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v1\n").unwrap();
+    repo.commit("commit 1").unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v2\n").unwrap();
+    repo.commit("commit 2").unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v3\n").unwrap();
+    fs::write(dir.path().join("bisect-marker.txt"), "bad\n").unwrap();
+    repo.commit("commit 3").unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v4\n").unwrap();
+    repo.commit("commit 4").unwrap();
+
+    let good_id = repo
+        .history(10)
+        .unwrap()
+        .last()
+        .expect("oldest commit")
+        .id
+        .clone();
+    let bin = astvcs_bin();
+
+    #[cfg(unix)]
+    {
+        let script = dir.path().parent().unwrap().join("bisect-nested.sh");
+        write_bisect_script(
+            &script,
+            &format!(
+                "#!/bin/sh\n\"{}\" --repo \"{}\" status\nif [ -f bisect-marker.txt ]; then exit 1; fi\nexit 0\n",
+                bin.display(),
+                dir.path().display()
+            ),
+        );
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "start", "HEAD", good_id.as_str()],
+            ),
+            "bisect start",
+        );
+        let script = dir.path().parent().unwrap().join("bisect-nested.sh");
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "run", script.to_str().unwrap()],
+            ),
+            "bisect run with nested astvcs status",
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        let script = dir.path().parent().unwrap().join("bisect-nested.ps1");
+        write_bisect_script(
+            &script,
+            &format!(
+                "Set-Location -LiteralPath \"{}\"\r\n& \"{}\" --repo \"{}\" status\r\nif (Test-Path bisect-marker.txt) {{ exit 1 }} else {{ exit 0 }}\r\n",
+                dir.path().display(),
+                bin.display(),
+                dir.path().display()
+            ),
+        );
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "start", "HEAD", good_id.as_str()],
+            ),
+            "bisect start",
+        );
+        let script = dir.path().parent().unwrap().join("bisect-nested.ps1");
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &[
+                    "bisect",
+                    "run",
+                    "powershell",
+                    "-File",
+                    script.to_str().unwrap(),
+                ],
+            ),
+            "bisect run with nested astvcs status",
+        );
+    }
+}

@@ -1,4 +1,5 @@
 pub(crate) mod atomic;
+mod bisect;
 mod blame;
 mod blobs;
 mod cherry_pick;

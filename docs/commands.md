@@ -48,6 +48,11 @@ Global flags:
 | `cherry-pick <ref> -m <msg> --force` | Cherry-pick when the working tree is dirty (warns per clobbered path) |
 | `log [-n N]` | Walk timeline history (default 20 entries); shows author when present |
 | `blame <path>` | Annotate each line with the commit that last changed it (linear first-parent history) |
+| `bisect start [bad] good` | Start binary search between a known good and bad revision (default bad: HEAD) |
+| `bisect bad [ref]` | Mark a revision as bad during bisect (default: HEAD) |
+| `bisect good [ref]` | Mark a revision as good during bisect (default: HEAD) |
+| `bisect run <script> [args...]` | Checkout midpoint revisions and run a test script (exit 0=good, 1=bad, 125=skip) |
+| `bisect reset` | End bisect and restore the original checkout |
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
@@ -64,7 +69,7 @@ Global flags:
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, `bisect`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### Lightweight tags
 
@@ -145,6 +150,20 @@ Three-way roles match rebase replay geometry (`base` = parent of the cherry-pick
 
 The short state id is the first 8 characters of the 64-character state id. Blame walks linear first-parent history from HEAD, comparing parent vs child file content at each step with a line-oriented diff. Lines introduced or modified in a commit are attributed to that commit; unchanged lines are traced further back. AST files are unparsed to text for line-based blame. Binary files and symlinks error with `blame does not support binary files` or `blame does not support symlinks`. Merge commits in the ancestry block further walk with an error.
 
+### `bisect`
+
+`bisect` finds the first bad state between a known good and bad revision using binary search on the linear first-parent chain. Progress is stored in `.astvcs/bisect-state.json` (`original_head`, `original_branch`, `good`, `bad`, `skipped`, `candidates`, `low`, `high`).
+
+`bisect start [bad] good` saves the current checkout, resolves refs, and builds the candidate list from the first commit after `good` through `bad` (oldest first). Default `bad` is HEAD; `good` is required (pass a single revision as `good` when `bad` is HEAD). Refuses when bisect is already in progress. Errors when `good` is not a linear first-parent ancestor of `bad` or when a merge commit lies on the path.
+
+`bisect bad [ref]` and `bisect good [ref]` update boundaries and recompute candidates (default `ref` is HEAD).
+
+`bisect run <script> [args...]` checks out midpoint candidates (materializes with `--force` semantics for dirty trees), runs the script with cwd = repository root, and narrows the search from the exit code: **0** = good, **1** = bad, **125** = skip (git convention). Prints `Bisecting: N revisions left...` during the run and `first bad state: <id> (<message>)` when done. Sets `ASTVCS_BISECT_STATE` to the checked-out state id. The repository lock is suspended while the script runs so nested `astvcs` invocations do not deadlock (same mechanism as client hooks).
+
+`bisect reset` deletes bisect state and restores `original_branch` or detached `original_head`.
+
+v1 supports linear first-parent history only; DAG or merge-heavy histories are out of scope.
+
 ### Client hooks
 
 Optional scripts in `.astvcs/hooks/` run as child processes. `init` creates an empty `hooks/` directory. Missing hooks are skipped; non-zero exit aborts the operation with `hook <name> failed with exit code N`.
@@ -156,7 +175,7 @@ Optional scripts in `.astvcs/hooks/` run as child processes. `init` creates an e
 | `pre-merge` | After clean merge plan, before writes | above + `ASTVCS_MERGE_BRANCH` |
 | `pre-push` | Before upload (when push would send objects) | above + `ASTVCS_REMOTE` |
 
-Pass `--no-verify` on `commit`, `merge`, `pull`, or `push` to skip hooks. Hooks release the repository lock while running so nested `astvcs` subprocess calls succeed. On Windows use `.cmd`/`.bat` (via `cmd /C`) or `.ps1` (via `powershell -NoProfile -File`); on Unix use an executable script or rely on `sh hookpath`.
+Pass `--no-verify` on `commit`, `merge`, `pull`, or `push` to skip hooks. Hooks and `bisect run` release the repository lock while running subprocesses so nested `astvcs` calls succeed. On Windows use `.cmd`/`.bat` (via `cmd /C`) or `.ps1` (via `powershell -NoProfile -File`); on Unix use an executable script or rely on `sh hookpath`.
 
 ### `revert`
 

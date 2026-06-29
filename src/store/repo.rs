@@ -1316,6 +1316,11 @@ impl Repo {
     }
 
     pub(crate) fn resolve_state_ref_unlocked(&self, reference: &str) -> RepoResult<StateId> {
+        if reference.eq_ignore_ascii_case("HEAD") {
+            let id = self.head_state_unlocked()?;
+            trace::notice(format!("resolved HEAD -> state {id}"));
+            return Ok(id);
+        }
         if is_state_id(reference) {
             self.load_timeline_entry_unlocked(&reference.to_string())?;
             trace::notice(format!("resolved state {reference}"));

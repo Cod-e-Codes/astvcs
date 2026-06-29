@@ -123,6 +123,10 @@ enum Commands {
     Blame {
         path: String,
     },
+    Bisect {
+        #[command(subcommand)]
+        action: BisectAction,
+    },
     Remote {
         #[command(subcommand)]
         action: RemoteAction,
@@ -290,6 +294,27 @@ struct RebaseArgs {
     /// Pick ours (current replay base) or theirs (replayed commit) for a conflicted path.
     #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
     resolve: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum BisectAction {
+    /// Start bisect; default bad is HEAD, good revision is required.
+    Start {
+        bad: Option<String>,
+        good: Option<String>,
+    },
+    /// Mark a revision as bad (default: current HEAD).
+    Bad { reference: Option<String> },
+    /// Mark a revision as good (default: current HEAD).
+    Good { reference: Option<String> },
+    /// Run a script to classify revisions (exit 0=good, 1=bad, 125=skip).
+    Run {
+        script: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// End bisect and restore the original checkout.
+    Reset,
 }
 
 #[derive(Subcommand)]
@@ -725,6 +750,38 @@ fn run(cli: Cli) -> RepoResult<()> {
                     line.message
                 );
                 println!("{}", line.content);
+            }
+        }
+        Commands::Bisect { action } => {
+            let repo = Repo::open(&root)?;
+            match action {
+                BisectAction::Start { bad, good } => {
+                    let good_ref = match (&bad, &good) {
+                        (None, None) => {
+                            return Err(RepoError::invalid_input(
+                                "good revision required; usage: bisect start [bad] good",
+                            ));
+                        }
+                        (Some(b), None) => b.as_str(),
+                        (_, Some(g)) => g.as_str(),
+                    };
+                    let bad_ref = good.as_ref().and(bad.as_deref());
+                    repo.bisect_start(bad_ref, good_ref)?;
+                }
+                BisectAction::Bad { reference } => {
+                    repo.bisect_mark_bad(reference.as_deref())?;
+                }
+                BisectAction::Good { reference } => {
+                    repo.bisect_mark_good(reference.as_deref())?;
+                }
+                BisectAction::Run { script, args } => {
+                    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    repo.bisect_run(&script, &arg_refs)?;
+                }
+                BisectAction::Reset => {
+                    repo.bisect_reset()?;
+                    println!("Bisect reset");
+                }
             }
         }
         Commands::Identity { action } => {
