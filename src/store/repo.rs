@@ -146,6 +146,23 @@ pub struct TimelineEntry {
     pub files: Option<HashMap<String, FileContent>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LinearParentError {
+    MergeCommit(StateId),
+    NoParent(StateId),
+}
+
+pub(crate) fn linear_timeline_parent(entry: &TimelineEntry) -> Result<StateId, LinearParentError> {
+    if entry.parents.len() > 1 {
+        return Err(LinearParentError::MergeCommit(entry.id.clone()));
+    }
+    entry
+        .parent
+        .clone()
+        .or_else(|| entry.parents.first().cloned())
+        .ok_or(LinearParentError::NoParent(entry.id.clone()))
+}
+
 #[derive(Clone, Debug)]
 pub struct BranchInfo {
     pub name: String,
@@ -2468,7 +2485,7 @@ impl Repo {
         }
     }
 
-    fn write_head_target(&self, target: &HeadTarget) -> RepoResult<()> {
+    pub(crate) fn write_head_target(&self, target: &HeadTarget) -> RepoResult<()> {
         let line = match target {
             HeadTarget::Branch(name) => name.as_str(),
             HeadTarget::Detached(id) => id.as_str(),

@@ -44,6 +44,8 @@ Global flags:
 | `rebase <upstream> [--force]` | Replay linear commits from the current branch onto `<upstream>` |
 | `rebase --abort` | Restore the branch tip and working tree from before the rebase; delete rebase state |
 | `rebase --continue [--force] [--resolve <path>:ours\|theirs]` | After resolving a replay conflict, finish the current commit and continue the queue |
+| `cherry-pick <ref> -m <msg>` | Apply a single state's changes onto HEAD as a new commit |
+| `cherry-pick <ref> -m <msg> --force` | Cherry-pick when the working tree is dirty (warns per clobbered path) |
 | `log [-n N]` | Walk timeline history (default 20 entries); shows author when present |
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
@@ -61,7 +63,7 @@ Global flags:
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### Lightweight tags
 
@@ -91,7 +93,7 @@ Default mode is **hard**: move the branch tip or detached HEAD to the target and
 
 Hard reset to the current tip still materializes (repairs drift between disk and HEAD). Resetting to the root empty state (`0` repeated 64 times) is allowed.
 
-### Working tree safety (`merge`, `checkout`, `revert`, `reset`)
+### Working tree safety (`merge`, `checkout`, `revert`, `reset`, `cherry-pick`)
 
 `merge`, `checkout --branch`, `checkout --state`, and hard `reset` all materialize a state manifest to disk and sync `index.json`. They share one dirty-tree policy enforced by a shared **materialize guard** (checked before refs, timeline writes, and disk sync):
 
@@ -124,6 +126,12 @@ Progress is stored in `.astvcs/rebase-state.json` (`branch`, `upstream`, `onto`,
 On replay conflict, the branch tip stays at `original_tip` until the first successful replay; after partial progress the tip is the last good `current_head`. The conflicted merge result is materialized to the working tree (no conflict markers). Use `rebase --continue` with `--resolve path:ours|theirs` (ours = current replay head, theirs = replayed commit) or edit conflicted paths on disk and continue. `rebase --abort` restores `original_tip` and materializes it.
 
 v1 does not include an interactive rebase editor or commit reordering.
+
+### `cherry-pick`
+
+`cherry-pick <ref> -m <msg>` applies the changes introduced by a single state onto HEAD as a new commit. Resolves `<ref>` like other commands (branch, tag, remote-tracking ref, or state id). Refuses merge commits and the root empty state. Refuses when staging is non-empty or the working tree is dirty unless `--force`. On conflict, aborts with no side effects (HEAD, refs, disk, and timeline unchanged), same contract as `merge`. On success, writes a new state with the user message and current author identity, materializes it, and updates the branch tip or detached HEAD.
+
+Three-way roles match rebase replay geometry (`base` = parent of the cherry-picked commit, `left` = HEAD, `right` = cherry-picked commit). Unlike `revert` (which inverts roles: `base` = target, `left` = parent, `right` = HEAD), cherry-pick applies **right vs base** onto **left**.
 
 ### Client hooks
 

@@ -55,6 +55,9 @@
 | `hook_nested_astvcs_status_in_pre_commit` | Nested `astvcs status` in `pre-commit` |
 | `hook_no_verify_skips_pre_commit` | `--no-verify` skips failing hook |
 | `hook_pre_merge_aborts` | `pre-merge` exit 1 aborts merge |
+| `cherry_pick_clean_commit` | Cherry-pick feature commit onto diverged main |
+| `cherry_pick_conflict_leaves_head_unchanged` | Conflicting cherry-pick aborts without side effects |
+| `cherry_pick_from_remote_tracking_ref` | Cherry-pick `origin/feature` after fetch |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |

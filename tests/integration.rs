@@ -3309,3 +3309,154 @@ fn rebase_conflict_continue() {
     );
     assert!(!disk.contains("y"), "should not keep main side: {disk}");
 }
+
+#[test]
+fn cherry_pick_clean_commit() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("app.txt"), "v1\n").unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feat.txt"), "feature change\n").unwrap();
+    let feature_commit = repo.commit("feature change").unwrap().state_id;
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("app.txt"), "v2-main\n").unwrap();
+    repo.commit("main advance").unwrap();
+    let main_before = repo.head_state().unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(dir.path()),
+            &["cherry-pick", &feature_commit, "-m", "pick feature"],
+        ),
+        "cherry-pick",
+    );
+
+    assert_ne!(repo.head_state().unwrap(), main_before);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("app.txt")).unwrap(),
+        "v2-main\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("feat.txt")).unwrap(),
+        "feature change\n"
+    );
+    assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn cherry_pick_conflict_leaves_head_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let z = 1;\n}\n",
+    )
+    .unwrap();
+    let feature_commit = repo.commit("z on feature").unwrap().state_id;
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("y on main").unwrap();
+    let tip = repo.head_state().unwrap();
+    let disk_before = fs::read_to_string(dir.path().join("main.rs")).unwrap();
+
+    let out = run_astvcs(
+        Some(dir.path()),
+        &["cherry-pick", &feature_commit, "-m", "pick z"],
+    );
+    assert!(!out.status.success(), "cherry-pick should fail on conflict");
+    assert_eq!(repo.head_state().unwrap(), tip);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("main.rs")).unwrap(),
+        disk_before
+    );
+}
+
+#[test]
+fn cherry_pick_from_remote_tracking_ref() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(upstream.path().join("shared.txt"), "base\n").unwrap();
+    upstream_repo.commit("base").unwrap();
+
+    upstream_repo.create_branch("feature", None).unwrap();
+    upstream_repo.checkout_branch("feature").unwrap();
+    fs::write(upstream.path().join("feature.txt"), "from feature\n").unwrap();
+    upstream_repo.commit("feature commit").unwrap();
+
+    upstream_repo.checkout_branch("main").unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(
+            None,
+            &[
+                "clone",
+                upstream.path().to_str().unwrap(),
+                clone_dir.path().to_str().unwrap(),
+            ],
+        ),
+        "clone",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Test User",
+                "--email",
+                "test@example.com",
+            ],
+        ),
+        "identity set",
+    );
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(clone_dir.path()), &["fetch", "origin"]),
+        "fetch origin",
+    );
+
+    fs::write(clone_dir.path().join("shared.txt"), "local main\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(clone_dir.path()), &["commit", "-m", "local advance"]),
+        "local commit",
+    );
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &["cherry-pick", "origin/feature", "-m", "pick feature"],
+        ),
+        "cherry-pick origin/feature",
+    );
+
+    assert_eq!(
+        fs::read_to_string(clone_dir.path().join("feature.txt")).unwrap(),
+        "from feature\n"
+    );
+    assert_eq!(
+        fs::read_to_string(clone_dir.path().join("shared.txt")).unwrap(),
+        "local main\n"
+    );
+    let clone_repo = Repo::open(clone_dir.path()).unwrap();
+    assert!(clone_repo.working_tree_is_clean().unwrap());
+}

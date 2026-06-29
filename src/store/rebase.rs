@@ -4,7 +4,10 @@ use crate::store::error::{RepoError, RepoErrorKind, RepoResult};
 use crate::store::identity::AuthorIdentity;
 use crate::store::manifest::FileMode;
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
-use crate::store::repo::{MaterializeOptions, MergePlan, TimelineEntry, WORKING_TREE_DIRTY_ERR};
+use crate::store::repo::{
+    LinearParentError, MaterializeOptions, MergePlan, TimelineEntry, WORKING_TREE_DIRTY_ERR,
+    linear_timeline_parent,
+};
 use crate::store::scan_cache;
 use crate::store::staging::{StagingIndex, clear_staging_entries};
 use crate::store::tracked::TrackedFile;
@@ -70,16 +73,12 @@ where
         }
         chain.push(current.clone());
         let entry = load(&current)?;
-        if entry.parents.len() > 1 {
-            return Err(format!(
-                "rebase requires linear history; merge commit {current}"
-            ));
-        }
-        let parent = entry
-            .parent
-            .clone()
-            .or_else(|| entry.parents.first().cloned())
-            .ok_or_else(|| format!("rebase: no parent for {current}"))?;
+        let parent = linear_timeline_parent(&entry).map_err(|e| match e {
+            LinearParentError::MergeCommit(id) => {
+                format!("rebase requires linear history; merge commit {id}")
+            }
+            LinearParentError::NoParent(id) => format!("rebase: no parent for {id}"),
+        })?;
         if parent == *base {
             break;
         }
@@ -87,20 +86,6 @@ where
     }
     chain.reverse();
     Ok(chain)
-}
-
-fn timeline_parent(entry: &TimelineEntry) -> Result<StateId, String> {
-    if entry.parents.len() > 1 {
-        return Err(format!(
-            "rebase requires linear history; merge commit {}",
-            entry.id
-        ));
-    }
-    entry
-        .parent
-        .clone()
-        .or_else(|| entry.parents.first().cloned())
-        .ok_or_else(|| format!("rebase: no parent for {}", entry.id))
 }
 
 fn remove_working_path(path: &Path) -> Result<(), String> {
@@ -320,7 +305,14 @@ impl Repo {
             .ok_or_else(|| RepoError::invalid_input("no rebase conflict to continue"))?;
 
         let entry = self.load_timeline_entry_unlocked(&conflicted)?;
-        let parent = timeline_parent(&entry).map_err(RepoError::from_message)?;
+        let parent = linear_timeline_parent(&entry).map_err(|e| match e {
+            LinearParentError::MergeCommit(id) => RepoError::from_message(format!(
+                "rebase requires linear history; merge commit {id}"
+            )),
+            LinearParentError::NoParent(id) => {
+                RepoError::from_message(format!("rebase: no parent for {id}"))
+            }
+        })?;
         let mut plan = self.plan_three_way_unlocked(&parent, &state.current_head, &conflicted)?;
         let left_files = self.load_state_files_unlocked(&state.current_head)?;
         let right_files = self.load_state_files_unlocked(&conflicted)?;
@@ -437,7 +429,14 @@ impl Repo {
         force: bool,
     ) -> RepoResult<()> {
         let entry = self.load_timeline_entry_unlocked(commit_id)?;
-        let parent = timeline_parent(&entry).map_err(RepoError::from_message)?;
+        let parent = linear_timeline_parent(&entry).map_err(|e| match e {
+            LinearParentError::MergeCommit(id) => RepoError::from_message(format!(
+                "rebase requires linear history; merge commit {id}"
+            )),
+            LinearParentError::NoParent(id) => {
+                RepoError::from_message(format!("rebase: no parent for {id}"))
+            }
+        })?;
         let plan = self.plan_three_way_unlocked(&parent, &state.current_head, commit_id)?;
 
         if !plan.is_clean() {

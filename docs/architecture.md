@@ -4,7 +4,7 @@
 
 **States.** Each `commit` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Committing with no file changes is a no-op.
 
-**Author identity.** Timeline entries record `author_name` and `author_email` metadata for every state created by `commit`, `merge`, and `revert`. Identity is resolved at state-creation time from, in precedence order: `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL` environment variables, repository-local `config.json` (`author` object), then global `~/.astvcs/config.json`. If none are set, those commands fail with an actionable error rather than guessing from the OS user account. The initial empty root state and other pre-existing timeline entries without author fields deserialize with empty author strings. Identity is **not** part of the content-addressed state id: state ids remain `hash_manifest(manifest)` only, so adding author metadata does not change ids for unchanged file content.
+**Author identity.** Timeline entries record `author_name` and `author_email` metadata for every state created by `commit`, `merge`, `revert`, and `cherry-pick`. Identity is resolved at state-creation time from, in precedence order: `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL` environment variables, repository-local `config.json` (`author` object), then global `~/.astvcs/config.json`. If none are set, those commands fail with an actionable error rather than guessing from the OS user account. The initial empty root state and other pre-existing timeline entries without author fields deserialize with empty author strings. Identity is **not** part of the content-addressed state id: state ids remain `hash_manifest(manifest)` only, so adding author metadata does not change ids for unchanged file content.
 
 **Structured errors.** Repository operations return `RepoResult<T>` (`Result<T, RepoError>`). `RepoError` carries a `kind` enum (for example `lock_contention`, `dirty_working_tree`, `merge_conflict`, `missing_identity`), a human-readable `message` (matching legacy string output for `.contains(...)` compatibility via `Deref` to `str`), and optional `path` / `reference` fields. The library exposes the full struct; the CLI accepts `--json` on any command to print one JSON object on stderr on failure instead of `error: …`. Plain stderr output is unchanged when `--json` is omitted.
 
@@ -12,11 +12,21 @@
 
 **Working tree materialization.** `merge`, `checkout --branch`, `checkout --state`, and hard `reset` materialize a state manifest to disk and sync `index.json`. Dirty-tree refusal and `--force` clobber warnings are centralized in a shared materialize guard (checked before refs, timeline writes, and disk sync) so every command that overwrites the tree behaves the same: refuse by default, warn per path with `--force`. The working tree is **dirty** when it differs from HEAD **or** when `staging.json` has staged entries (staged changes would be lost on materialize). Unstaged-only edits block materialize the same as before; staged changes also block unless `--force`. Hard reset to the current tip and checkout of the branch or state already at HEAD may materialize without `--force` to repair index/disk drift. `reset --soft` and no-op reverts skip materialization. `reset --mixed` moves the ref and syncs `index.json` without touching disk. Materialization clears `staging.json` entries.
 
-**Staging index.** `.astvcs/staging.json` holds staged path entries (`blob_id`, `content_kind`, `mode`, or `deleted: true`). `index.json` remains the HEAD baseline (last committed manifest). After the first `add`, `commit` snapshots staged paths only; empty staging with pending working-tree changes errors with `nothing staged; use astvcs add`. Repositories that never run `add` keep legacy whole-tree `commit` behavior. `status` uses git-style two-column labels (staged vs HEAD, unstaged vs effective index). `diff` without flags shows unstaged changes; `diff --staged` shows staged vs HEAD. `merge` refuses when staging is non-empty.
+**Staging index.** `.astvcs/staging.json` holds staged path entries (`blob_id`, `content_kind`, `mode`, or `deleted: true`). `index.json` remains the HEAD baseline (last committed manifest). After the first `add`, `commit` snapshots staged paths only; empty staging with pending working-tree changes errors with `nothing staged; use astvcs add`. Repositories that never run `add` keep legacy whole-tree `commit` behavior. `status` uses git-style two-column labels (staged vs HEAD, unstaged vs effective index). `diff` without flags shows unstaged changes; `diff --staged` shows staged vs HEAD. `merge` and `cherry-pick` refuse when staging is non-empty.
 
 **Stash.** `.astvcs/stash/` stores numbered JSON entries (`{ id, message, base_state_id, created_at, manifest }`) and an optional `stack.json` listing stash ids (newest at index 0). `stash push` writes changed paths as content-addressed blobs, saves the entry, then materializes HEAD (clearing staging). `stash apply` / `stash pop` three-way merge stashed paths onto current HEAD and write results to the working tree only; conflicts abort without side effects; `pop` drops the entry on success.
 
 **Rebase.** `.astvcs/rebase-state.json` records an in-progress linear rebase (`branch`, `upstream`, `onto`, `original_tip`, `current_head`, `remaining`, `conflicted`). `rebase <upstream>` collects single-parent commits from the branch tip down to the merge base with upstream (exclusive), oldest first, and replays each onto `current_head` via the same three-way merge planner as `merge` (`plan_three_way_unlocked`). Replay conflicts materialize the partial merge to disk without conflict markers; `rebase --abort` restores `original_tip`. v1 has no interactive rebase editor.
+
+**Cherry-pick.** `cherry-pick <ref>` applies one state's changes onto HEAD as a new commit using the same replay geometry as rebase (not revert). Three-way roles:
+
+| Role | State |
+|------|-------|
+| **base** | Parent of the cherry-picked commit |
+| **left** | Current HEAD |
+| **right** | Cherry-picked commit (target) |
+
+Revert inverts this (`base` = target, `left` = parent, `right` = HEAD). Cherry-pick applies **right vs base** onto **left**. Merge commits and the root state are rejected. Conflicts abort with no side effects (same contract as `merge`); unlike rebase, no in-progress state file is written.
 
 **Repository locking and atomic writes.** Every command that reads or writes refs, `HEAD`, the timeline, the blob store, `index.json`, `staging.json`, or the working tree acquires a single exclusive advisory lock on `.astvcs/repo.lock` for the duration of that logical operation. astvcs uses one coarse exclusive lock: concurrent readers against a writer materializing the tree would be unsafe, and staging writes must stay consistent with commits. The lock is OS advisory (`flock` on Unix, `LockFileEx` on Windows) via `std::fs::File::try_lock`, not a marker file; when a process exits or is killed the kernel releases the lock, so a stale lock cannot permanently deadlock the repository. If another process holds the lock, astvcs fails fast with `repository is locked by another process; cannot acquire <path>` rather than waiting, because local CLI contention is rare and a clear immediate error is better UX than a silent hang. Reentrant acquisition on the same thread allows nested repo calls without double-locking. Network sync entry points (`fetch`, `push`, remote config) acquire the same lock once per operation. The lock file descriptor is cached per thread and explicitly unlocked (not closed) between commands so sequential in-process repo calls on Linux do not fail reopening `repo.lock` with `WouldBlock`. Before running client hooks, mutating commands call `suspend_repo_lock` to release the OS lock while keeping the cached descriptor open, then `resume_repo_lock` to re-acquire after the hook subprocess exits. That lets hooks invoke `astvcs` again without self-deadlock.
 
@@ -205,6 +215,7 @@ src/
     hooks.rs     client hook runner (pre-commit, commit-msg, pre-merge, pre-push)
     reachability.rs ref-tip reachability walk (shared by gc/fsck)
     rebase.rs    rebase state and linear replay
+    cherry_pick.rs  single-commit replay onto HEAD
     walk.rs      gitignore-style working tree scan (full and incremental)
     scan_cache.rs scan-cache.json load/save and path stat helpers
     repo.rs      repository and CLI backend
@@ -253,6 +264,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `rebase_linear_success` | Feature branch commits replayed onto updated main |
 | `rebase_conflict_abort_restores` | Replay conflict then `rebase --abort` restores tip and disk |
 | `rebase_conflict_continue` | `--resolve` on `rebase --continue` finishes replay |
+| `cherry_pick_clean_commit` | Cherry-pick feature commit onto diverged main |
+| `cherry_pick_conflict_leaves_head_unchanged` | Conflicting cherry-pick aborts without side effects |
+| `cherry_pick_from_remote_tracking_ref` | Cherry-pick `origin/feature` after fetch |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | Lock held externally: CLI fails fast with lock path |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Second writer gets lock error; succeeds after release (unit, `src/store/repo.rs`) |

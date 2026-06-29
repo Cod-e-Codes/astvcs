@@ -1,5 +1,6 @@
 pub(crate) mod atomic;
 mod blobs;
+mod cherry_pick;
 pub mod error;
 mod format;
 mod history;

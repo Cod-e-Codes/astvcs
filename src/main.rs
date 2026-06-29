@@ -108,6 +108,14 @@ enum Commands {
         force: bool,
     },
     Rebase(RebaseArgs),
+    CherryPick {
+        reference: String,
+        #[arg(short, long)]
+        message: String,
+        /// Allow cherry-pick when the working tree has uncommitted changes.
+        #[arg(long)]
+        force: bool,
+    },
     Log {
         #[arg(short = 'n', long, default_value = "20")]
         limit: usize,
@@ -672,6 +680,15 @@ fn run(cli: Cli) -> RepoResult<()> {
                 repo.rebase_start(&upstream, args.force)?;
                 println!("Rebased onto {upstream}");
             }
+        }
+        Commands::CherryPick {
+            reference,
+            message,
+            force,
+        } => {
+            let repo = Repo::open(&root)?;
+            let id = repo.cherry_pick(&reference, &message, force)?;
+            println!("Cherry-picked {reference} (new state {id})");
         }
         Commands::Log { limit } => {
             let repo = Repo::open(&root)?;
