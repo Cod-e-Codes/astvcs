@@ -1,5 +1,62 @@
+use super::shallow::SHALLOW_HISTORY_MSG;
 use super::{StateId, TimelineEntry};
 use std::collections::{HashMap, HashSet, VecDeque};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AncestryResult {
+    /// Timeline state ids from tip toward ancestors (tip first).
+    pub states: Vec<StateId>,
+    /// Deepest included state whose parent history was not fetched, if truncated.
+    pub shallow_boundary: Option<StateId>,
+}
+
+/// Walk timeline ancestry from `tip`, optionally limiting to `depth` entries from the tip.
+pub fn timeline_ancestry<F>(
+    tip: &StateId,
+    depth: Option<usize>,
+    mut load: F,
+) -> Result<AncestryResult, String>
+where
+    F: FnMut(&StateId) -> Result<TimelineEntry, String>,
+{
+    let mut states = Vec::new();
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+    queue.push_back(tip.clone());
+
+    while let Some(id) = queue.pop_front() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let entry = load(&id)?;
+        states.push(id.clone());
+
+        if depth.is_some_and(|limit| states.len() >= limit) {
+            let has_parent = entry
+                .parents
+                .iter()
+                .chain(entry.parent.iter())
+                .next()
+                .is_some();
+            let shallow_boundary = if has_parent { Some(id) } else { None };
+            return Ok(AncestryResult {
+                states,
+                shallow_boundary,
+            });
+        }
+
+        for parent in entry.parents.iter().chain(entry.parent.iter()) {
+            if !seen.contains(parent) {
+                queue.push_back(parent.clone());
+            }
+        }
+    }
+
+    Ok(AncestryResult {
+        states,
+        shallow_boundary: None,
+    })
+}
 
 /// Walk timeline entries from `start` toward ancestors, newest first.
 pub fn walk_history<F>(
@@ -60,16 +117,34 @@ where
 }
 
 /// Find the lowest common ancestor of two states.
-pub fn merge_base<F>(a: &StateId, b: &StateId, mut load: F) -> Result<StateId, String>
+pub fn merge_base<F>(a: &StateId, b: &StateId, load: F) -> Result<StateId, String>
 where
     F: FnMut(&StateId) -> Result<TimelineEntry, String>,
+{
+    merge_base_checked(a, b, load, |_| false)
+}
+
+/// Like [`merge_base`], but stops at shallow boundaries and errors when history is incomplete.
+pub fn merge_base_checked<F, S>(
+    a: &StateId,
+    b: &StateId,
+    mut load: F,
+    is_shallow: S,
+) -> Result<StateId, String>
+where
+    F: FnMut(&StateId) -> Result<TimelineEntry, String>,
+    S: Fn(&StateId) -> bool,
 {
     if a == b {
         return Ok(a.clone());
     }
 
-    let anc_a = ancestors_with_depth(a, &mut load)?;
-    let anc_b = ancestors_with_depth(b, &mut load)?;
+    if is_shallow(a) || is_shallow(b) {
+        return Err(SHALLOW_HISTORY_MSG.into());
+    }
+
+    let (anc_a, shallow_a) = ancestors_with_depth_checked(a, &mut load, &is_shallow)?;
+    let (anc_b, shallow_b) = ancestors_with_depth_checked(b, &mut load, &is_shallow)?;
 
     let mut best: Option<(usize, StateId)> = None;
     for (id, depth_a) in &anc_a {
@@ -85,6 +160,10 @@ where
         return Ok(id);
     }
 
+    if shallow_a || shallow_b {
+        return Err(SHALLOW_HISTORY_MSG.into());
+    }
+
     if anc_a.contains_key(a) || a == &"0".repeat(64) {
         return Ok(a.clone());
     }
@@ -95,24 +174,40 @@ where
     Err(format!("no common ancestor for {a} and {b}"))
 }
 
-fn ancestors_with_depth<F>(start: &StateId, load: &mut F) -> Result<HashMap<StateId, usize>, String>
+fn ancestors_with_depth_checked<F, S>(
+    start: &StateId,
+    load: &mut F,
+    is_shallow: &S,
+) -> Result<(HashMap<StateId, usize>, bool), String>
 where
     F: FnMut(&StateId) -> Result<TimelineEntry, String>,
+    S: Fn(&StateId) -> bool,
 {
     let mut depths = HashMap::new();
     let mut queue = VecDeque::new();
+    let mut hit_shallow = false;
     depths.insert(start.clone(), 0);
     queue.push_back((start.clone(), 0usize));
 
     while let Some((id, depth)) = queue.pop_front() {
         let entry = load(&id)?;
+        if is_shallow(&id) {
+            hit_shallow = true;
+            continue;
+        }
         for parent in entry.parents.iter().chain(entry.parent.iter()) {
-            if depths.insert(parent.clone(), depth + 1).is_none() {
-                queue.push_back((parent.clone(), depth + 1));
+            if depths.contains_key(parent) {
+                continue;
             }
+            if load(parent).is_err() {
+                hit_shallow = true;
+                continue;
+            }
+            depths.insert(parent.clone(), depth + 1);
+            queue.push_back((parent.clone(), depth + 1));
         }
     }
-    Ok(depths)
+    Ok((depths, hit_shallow))
 }
 
 #[cfg(test)]

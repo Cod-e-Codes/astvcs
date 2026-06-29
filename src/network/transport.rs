@@ -1,5 +1,7 @@
+use crate::network::api::AncestryResponse;
 use crate::network::ssh::{SshSession, parse_ssh_remote};
-use crate::store::{ManifestMap, Repo, RepoError, StateId, TimelineEntry};
+use crate::store::timeline_ancestry;
+use crate::store::{AncestryResult, ManifestMap, Repo, RepoError, StateId, TimelineEntry};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -239,6 +241,30 @@ impl Transport {
                     return Err(format!("timeline {id}: HTTP {}", resp.status()));
                 }
                 resp.json().map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    pub fn get_ancestry(&self, tip: &StateId, depth: usize) -> Result<AncestryResult, String> {
+        match self {
+            Self::File(repo) => timeline_ancestry(tip, Some(depth), |id| {
+                map_repo(repo.load_timeline_entry(id))
+            }),
+            Self::Ssh(session) => session.get_ancestry(tip, depth),
+            Self::Http { client, .. } => {
+                let url = self.http_url(&format!("/timeline/{tip}/ancestry?depth={depth}"))?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
+                if !resp.status().is_success() {
+                    return Err(format!("ancestry {tip}: HTTP {}", resp.status()));
+                }
+                let parsed: AncestryResponse = resp.json().map_err(|e| e.to_string())?;
+                Ok(AncestryResult {
+                    states: parsed.states,
+                    shallow_boundary: parsed.shallow_boundary,
+                })
             }
         }
     }

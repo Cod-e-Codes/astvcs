@@ -3722,3 +3722,103 @@ fn bisect_run_releases_lock_for_nested_astvcs() {
         );
     }
 }
+
+#[test]
+fn shallow_clone_has_fewer_timeline_entries_than_full_clone() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    for (i, content) in ["v1\n", "v2\n", "v3\n", "v4\n", "v5\n"].iter().enumerate() {
+        fs::write(upstream.path().join("note.txt"), content).unwrap();
+        upstream_repo.commit(&format!("v{}", i + 1)).unwrap();
+    }
+
+    let shallow_dir = TempDir::new().unwrap();
+    let out = run_astvcs(
+        None,
+        &[
+            "clone",
+            "--depth",
+            "2",
+            upstream.path().to_str().unwrap(),
+            shallow_dir.path().to_str().unwrap(),
+        ],
+    );
+    assert_astvcs_ok(&out, "shallow clone");
+
+    let full_dir = TempDir::new().unwrap();
+    let out = run_astvcs(
+        None,
+        &[
+            "clone",
+            upstream.path().to_str().unwrap(),
+            full_dir.path().to_str().unwrap(),
+        ],
+    );
+    assert_astvcs_ok(&out, "full clone");
+
+    let shallow_count = fs::read_dir(shallow_dir.path().join(".astvcs/timeline"))
+        .unwrap()
+        .count();
+    let full_count = fs::read_dir(full_dir.path().join(".astvcs/timeline"))
+        .unwrap()
+        .count();
+    assert!(shallow_count < full_count);
+    assert_eq!(shallow_count, 3);
+    assert!(shallow_dir.path().join(".astvcs/shallow.json").is_file());
+}
+
+#[test]
+fn merge_base_fails_on_shallow_clone_with_incomplete_history() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "root\n").unwrap();
+    upstream_repo.commit("root").unwrap();
+    fs::write(upstream.path().join("note.txt"), "main2\n").unwrap();
+    upstream_repo.commit("main2").unwrap();
+    upstream_repo.create_branch("feature", None).unwrap();
+    fs::write(upstream.path().join("note.txt"), "feature2\n").unwrap();
+    upstream_repo.commit("feature2").unwrap();
+
+    let shallow_dir = TempDir::new().unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(
+            None,
+            &[
+                "clone",
+                "--depth",
+                "1",
+                upstream.path().to_str().unwrap(),
+                shallow_dir.path().to_str().unwrap(),
+            ],
+        ),
+        "shallow clone main",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(shallow_dir.path()),
+            &["fetch", "origin", "--branch", "feature", "--depth", "1"],
+        ),
+        "shallow fetch feature",
+    );
+    let shallow_repo = Repo::open(shallow_dir.path()).unwrap();
+    let feature_tip = shallow_repo
+        .read_remote_ref("origin", "feature")
+        .unwrap()
+        .unwrap();
+    shallow_repo
+        .write_branch_ref("feature", &feature_tip)
+        .unwrap();
+
+    let out = run_astvcs(Some(shallow_dir.path()), &["merge-base", "main", "feature"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("shallow history"));
+
+    let out = run_astvcs(
+        Some(shallow_dir.path()),
+        &["merge", "feature", "-m", "try merge"],
+    );
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("shallow history"));
+}

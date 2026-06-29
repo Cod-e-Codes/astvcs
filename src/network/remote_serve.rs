@@ -1,4 +1,4 @@
-use crate::network::api::{ApiRequest, AuthOptions, dispatch};
+use crate::network::api::{ApiRequest, AuthOptions, dispatch, parse_query_string};
 use crate::network::ssh::api_response_to_remote;
 use crate::store::Repo;
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -79,9 +79,14 @@ pub fn remote_request(
         Some(encoded) => STANDARD.decode(encoded).unwrap_or_default(),
         None => Vec::new(),
     };
+    let (path, query) = match request.path.split_once('?') {
+        Some((path, query)) => (path.to_string(), parse_query_string(query)),
+        None => (request.path.clone(), std::collections::HashMap::new()),
+    };
     let api_request = ApiRequest {
         method: request.method.clone(),
-        path: request.path.clone(),
+        path,
+        query,
         body,
         headers: request.headers.clone(),
     };

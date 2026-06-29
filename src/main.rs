@@ -135,6 +135,9 @@ enum Commands {
         remote: String,
         #[arg(long)]
         branch: Option<String>,
+        /// Limit fetched ancestor history to N timeline entries from each tip.
+        #[arg(long)]
+        depth: Option<usize>,
         /// Skip TLS certificate verification (dangerous; local dev only).
         #[arg(long)]
         insecure: bool,
@@ -164,6 +167,9 @@ enum Commands {
         /// Bearer token for authenticated HTTP remotes (stored in origin remote config).
         #[arg(long)]
         token: Option<String>,
+        /// Limit fetched ancestor history to N timeline entries from the branch tip.
+        #[arg(long)]
+        depth: Option<usize>,
         /// Skip TLS certificate verification (dangerous; local dev only).
         #[arg(long)]
         insecure: bool,
@@ -284,6 +290,9 @@ struct PullArgs {
     remote: String,
     #[arg(long)]
     branch: Option<String>,
+    /// Limit fetched ancestor history to N timeline entries from each tip.
+    #[arg(long)]
+    depth: Option<usize>,
     #[arg(short, long)]
     message: Option<String>,
     #[arg(long)]
@@ -874,10 +883,11 @@ fn run(cli: Cli) -> RepoResult<()> {
         Commands::Fetch {
             remote,
             branch,
+            depth,
             insecure,
         } => {
             let repo = Repo::open(&root)?;
-            let outcome = fetch(&repo, &remote, branch.as_deref(), insecure)
+            let outcome = fetch(&repo, &remote, branch.as_deref(), depth, insecure)
                 .map_err(RepoError::from_message)?;
             for (name, tip) in outcome.branches {
                 println!("Fetched {remote}/{name} -> {tip}");
@@ -914,8 +924,14 @@ fn run(cli: Cli) -> RepoResult<()> {
                 })?,
             };
             let remote_ref = format!("{}/{}", args.remote, branch_name);
-            let outcome = fetch(&repo, &args.remote, Some(&branch_name), args.insecure)
-                .map_err(RepoError::from_message)?;
+            let outcome = fetch(
+                &repo,
+                &args.remote,
+                Some(&branch_name),
+                args.depth,
+                args.insecure,
+            )
+            .map_err(RepoError::from_message)?;
             for (name, tip) in outcome.branches {
                 println!("Fetched {}/{} -> {tip}", args.remote, name);
             }
@@ -975,9 +991,10 @@ fn run(cli: Cli) -> RepoResult<()> {
             url,
             path,
             token,
+            depth,
             insecure,
         } => {
-            let (_, branch) = clone_repo(&url, &path, token.as_deref(), insecure)
+            let (_, branch) = clone_repo(&url, &path, token.as_deref(), depth, insecure)
                 .map_err(RepoError::from_message)?;
             println!(
                 "Cloned into {} (checked out branch {branch})",

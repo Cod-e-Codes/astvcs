@@ -1,4 +1,4 @@
-use crate::network::api::{API_PREFIX, ApiResponse};
+use crate::network::api::{API_PREFIX, AncestryResponse, ApiResponse};
 use crate::network::remote_serve::{RemoteRequest, RemoteResponse};
 use crate::store::{ManifestMap, StateId, TimelineEntry};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -245,6 +245,25 @@ impl SshSession {
         )?;
         let bytes = decode_response_body(&resp, &format!("timeline {id}"))?;
         serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    }
+
+    pub fn get_ancestry(
+        &self,
+        tip: &StateId,
+        depth: usize,
+    ) -> Result<crate::store::AncestryResult, String> {
+        let resp = self.request(
+            "GET",
+            &self.api_path(&format!("/timeline/{tip}/ancestry?depth={depth}")),
+            None,
+            HashMap::new(),
+        )?;
+        let bytes = decode_response_body(&resp, &format!("ancestry {tip}"))?;
+        let parsed: AncestryResponse = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        Ok(crate::store::AncestryResult {
+            states: parsed.states,
+            shallow_boundary: parsed.shallow_boundary,
+        })
     }
 
     pub fn put_timeline(&self, entry: &TimelineEntry) -> Result<(), String> {

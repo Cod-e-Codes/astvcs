@@ -17,6 +17,7 @@ mod reachability;
 mod rebase;
 mod repo;
 mod scan_cache;
+mod shallow;
 mod staging;
 mod stash;
 mod tags;
@@ -34,7 +35,7 @@ pub use reachability::{ROOT_STATE_ID, Reachability};
 pub use blame::BlameLine;
 pub use blobs::{BlobId, BlobStore};
 pub use error::{RepoError, RepoErrorKind, RepoResult};
-pub use history::{ancestors, merge_base, walk_history};
+pub use history::{AncestryResult, ancestors, merge_base, timeline_ancestry, walk_history};
 pub use identity::{
     AuthorIdentity, IdentityConfig, configured_identity, resolve_author_identity, set_identity,
 };
@@ -49,6 +50,7 @@ pub use repo::{
     WorkingStatus,
 };
 pub use scan_cache::ScanCache;
+pub use shallow::{SHALLOW_HISTORY_MSG, shallow_history_error};
 pub use staging::{StagedEntry, StagingIndex};
 pub use stash::{StashId, StashInfo};
 pub use tags::TagInfo;

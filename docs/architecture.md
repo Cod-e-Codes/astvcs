@@ -185,9 +185,11 @@ Supported remote URLs:
 
 Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, branch refs, and tags. `fetch` downloads missing history, updates remote-tracking refs, and syncs all remote tags (even when `--branch` limits which branch refs are updated). It does not change local branches or the working tree. `pull` is fetch followed by merge of the remote-tracking branch into the current branch. Use `reset` or `checkout --state` with a remote-tracking ref (for example `origin/main`) or a tag name to inspect fetched commits without merging. `push` uploads missing objects, fast-forwards the remote branch (use `--force` to override), and uploads local tags missing on the remote (tag updates are not fast-forward checked). `clone` initializes a repository, fetches branches and tags from the remote, and checks out the default branch.
 
+**Shallow fetch and clone.** Pass `--depth N` on `fetch`, `clone`, or `pull` to download at most `N` timeline entries counting from each branch or tag tip (`N=1` is tip only), matching git shallow clone semantics. Omit `--depth` for unlimited history (default). The client uses `GET /v1/timeline/{tip}/ancestry?depth=N` over HTTP, SSH remote-serve (query on the path), or a direct repo walk for file remotes. Shallow boundaries are recorded in `.astvcs/shallow.json` as state ids where parent history was intentionally not fetched; boundaries clear on a full fetch (no depth) or when a deeper fetch imports the missing parents. Tag fetch during shallow sync applies the same depth limit per tag tip. Shallow repositories may fail `merge-base`, `merge`, and `pull` when a tip is a shallow boundary or the lowest common ancestor is not present locally; deepen history with `fetch --depth` (higher `N`) or a full fetch.
+
 HTTP API: `GET /v1/refs/tags` returns a JSON map of tag name to state id; `GET`/`PUT`/`HEAD /v1/refs/tags/{name}` read or overwrite a tag tip as plain text.
 
-The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, and repository config.
+The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, repository config, and shallow ancestry listing (`GET /v1/timeline/{tip}/ancestry?depth=N` returns `{"states":["id",...],"shallow_boundary":null|"state_id"}`).
 
 **HTTP authentication.** `astvcs serve` accepts an optional bearer token via `--token` or the `ASTVCS_SERVE_TOKEN` environment variable (CLI wins when both are set). With no token configured, the server is open for local development. When a token is configured, the server fails closed: `PUT` on `/v1/*` always requires `Authorization: Bearer <token>`; `GET` and `HEAD` require the token unless `--public-read` is set. Wrong or missing credentials return HTTP 401 with a plain text body. Token comparison uses constant-time equality. The HTTP client transport sends the stored remote token on every request when configured. Local file remotes remain unrestricted.
 
@@ -287,6 +289,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
 | `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
 | `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
+| `shallow_clone_has_fewer_timeline_entries_than_full_clone` | `--depth` limits timeline entries vs full clone |
+| `merge_base_fails_on_shallow_clone_with_incomplete_history` | Shallow tips block merge-base and merge |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
 | `rebase_linear_success` | Feature branch commits replayed onto updated main |

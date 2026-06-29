@@ -28,6 +28,10 @@
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync |
+| `shallow_clone_has_fewer_timeline_entries_than_full_clone` | `--depth` on clone limits timeline entries |
+| `merge_base_fails_on_shallow_clone_with_incomplete_history` | Shallow history blocks merge-base and merge |
+| `shallow_clone_fetches_fewer_timeline_entries_than_full_clone` | Unit shallow vs full clone (unit, `network/sync.rs`) |
+| `merge_base_fails_on_shallow_repo_when_lca_missing` | Shallow merge-base error (unit, `network/sync.rs`) |
 | `serve_requires_token_for_mutations`, `serve_read_requires_token_by_default`, `serve_public_read_allows_anonymous_get` | HTTP serve bearer auth (unit, `network/serve.rs`) |
 | `http_transport_sends_bearer_token`, `remote_token_roundtrip` | Client bearer token and remotes.json storage (unit, `network/transport.rs`, `network/remote.rs`) |
 | `clone_uses_remote_default_branch` | Clone checks out upstream `default_branch` (unit, `network/sync.rs`) |

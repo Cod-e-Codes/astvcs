@@ -84,7 +84,14 @@ fn http_dispatch(
 ) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, String> {
     let method = request.method().as_str().to_string();
     let url = request.url().to_string();
-    let path = url.split('?').next().unwrap_or(&url).to_string();
+    let (path_only, query) = match url.split_once('?') {
+        Some((path, query)) => (
+            path.to_string(),
+            crate::network::api::parse_query_string(query),
+        ),
+        None => (url, std::collections::HashMap::new()),
+    };
+    let path = path_only;
     let headers = request
         .headers()
         .iter()
@@ -99,6 +106,7 @@ fn http_dispatch(
     let api_request = ApiRequest {
         method,
         path,
+        query,
         body,
         headers,
     };

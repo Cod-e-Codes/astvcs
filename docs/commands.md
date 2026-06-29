@@ -56,14 +56,14 @@ Global flags:
 | `remote add <name> <url> [--token <token>]` | Register a remote (local path, `file://`, `http://`, `https://`, or SSH); optional bearer token for HTTP/SSH remotes |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
-| `fetch <remote> [--branch <name>] [--insecure]` | Download missing objects; update remote-tracking refs and all remote tags |
-| `pull <remote> [--branch <name>] [-m <msg>] [--force] [--no-verify] [--insecure] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
+| `fetch <remote> [--branch <name>] [--depth <N>] [--insecure]` | Download missing objects; update remote-tracking refs and all remote tags |
+| `pull <remote> [--branch <name>] [--depth <N>] [-m <msg>] [--force] [--no-verify] [--insecure] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
 | `stash push [-m <msg>] [-u]` | Save working-tree changes to `.astvcs/stash/` and reset disk to HEAD |
 | `stash list` | List stashes (`stash@{n}`; 0 is newest) |
 | `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
 | `stash apply [index]` | Apply stash without removing the entry |
 | `push <remote> [--branch <name>] [--force] [--no-verify] [--insecure]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
-| `clone <url> [path] [--token <token>] [--insecure]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
+| `clone <url> [path] [--token <token>] [--depth <N>] [--insecure]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
 | `serve [--bind <addr>] [--port <n>] [--token <token>] [--public-read] [--tls-cert <path>] [--tls-key <path>]` | Serve the repository over HTTP or HTTPS (default `127.0.0.1:9421`); token from `--token` or `ASTVCS_SERVE_TOKEN` |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
@@ -197,7 +197,9 @@ Paths added in the target state and modified again on HEAD before revert produce
 
 `fetch` updates `.astvcs/refs/remotes/<remote>/<branch>` only. To work on fetched commits without merging, use `reset` or `checkout --state` with the remote-tracking ref (for example `origin/main`).
 
-`pull <remote>` runs `fetch` then merges the remote-tracking ref (`<remote>/<branch>`) into the current branch. Default branch name is the checked-out branch (same as `push`); detached HEAD requires `--branch`. Default merge message is `Merge <remote>/<branch>`; override with `-m`. On fetch failure, no merge is attempted. On fetch success with merge conflicts, remote-tracking refs are updated but the local branch tip and working tree are unchanged (same abort guarantee as `merge`). When already up to date after fetch, `pull` succeeds with an `Already up to date` message. Merge failure after a successful fetch prints `warning: pull: merge failed after successful fetch` on stderr.
+**Shallow fetch.** `--depth N` limits downloaded timeline entries to `N` from each tip (`N=1` is tip only). Boundaries are stored in `.astvcs/shallow.json`. A full fetch (no `--depth`) clears shallow boundaries and downloads all missing history. Shallow tag fetch uses the same depth per tag tip. `merge-base` and `merge` may fail with a `shallow history` error when history is incomplete; deepen with a higher `--depth` or a full fetch.
+
+`pull <remote>` runs `fetch` then merges the remote-tracking ref (`<remote>/<branch>`) into the current branch. Default branch name is the checked-out branch (same as `push`); detached HEAD requires `--branch`. `--depth` is passed through to the fetch step. Default merge message is `Merge <remote>/<branch>`; override with `-m`. On fetch failure, no merge is attempted. On fetch success with merge conflicts, remote-tracking refs are updated but the local branch tip and working tree are unchanged (same abort guarantee as `merge`). When already up to date after fetch, `pull` succeeds with an `Already up to date` message. Merge failure after a successful fetch prints `warning: pull: merge failed after successful fetch` on stderr.
 
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 

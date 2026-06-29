@@ -8,7 +8,7 @@ use crate::merge::{MergeConflict, PathMergeConflict, PathMergeTrackedOutcome, me
 use crate::store::atomic::{self, write_atomic_json, write_atomic_text};
 use crate::store::blobs::BlobStore;
 use crate::store::error::{RepoError, RepoResult};
-use crate::store::history::{merge_base, walk_history};
+use crate::store::history::{merge_base_checked, walk_history};
 use crate::store::identity::{AuthorIdentity, resolve_author_identity};
 use crate::store::lock::{self, RepoLockGuard};
 use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_manifest};
@@ -1352,10 +1352,16 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let left_id = self.resolve_state_ref_unlocked(left)?;
         let right_id = self.resolve_state_ref_unlocked(right)?;
-        let base = merge_base(&left_id, &right_id, |id| {
-            self.load_timeline_entry_unlocked(id)
-                .map_err(|e| e.to_string())
-        })?;
+        let shallow = crate::store::shallow::load_shallow_boundaries(&self.astvcs_dir())?;
+        let base = merge_base_checked(
+            &left_id,
+            &right_id,
+            |id| {
+                self.load_timeline_entry_unlocked(id)
+                    .map_err(|e| e.to_string())
+            },
+            |id| shallow.contains(id),
+        )?;
         trace::notice(format!("merge-base: {left_id} + {right_id} -> {base}"));
         Ok(base)
     }
@@ -1448,10 +1454,16 @@ impl Repo {
             return Err("already up to date".into());
         }
 
-        let base_id = merge_base(&head, &other, |id| {
-            self.load_timeline_entry_unlocked(id)
-                .map_err(|e| e.to_string())
-        })?;
+        let shallow = crate::store::shallow::load_shallow_boundaries(&self.astvcs_dir())?;
+        let base_id = merge_base_checked(
+            &head,
+            &other,
+            |id| {
+                self.load_timeline_entry_unlocked(id)
+                    .map_err(|e| e.to_string())
+            },
+            |id| shallow.contains(id),
+        )?;
         trace::notice(format!(
             "merge plan: base={base_id} head={head} other={other}"
         ));
@@ -2953,7 +2965,7 @@ mod tests {
         fs::write(dir.path().join("main.rs"), "fn main() { let y = 2; }\n").unwrap();
         let feature_id = repo.commit("on feature").unwrap().state_id;
         let main_id = repo.branch_state("main").unwrap();
-        let lca = merge_base(&main_id, &feature_id, |id| {
+        let lca = crate::store::merge_base(&main_id, &feature_id, |id| {
             repo.load_timeline_entry(id).map_err(|e| e.to_string())
         })
         .unwrap();

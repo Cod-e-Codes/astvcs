@@ -1,3 +1,4 @@
+use crate::store::timeline_ancestry;
 use crate::store::{Repo, RepoError, TimelineEntry};
 use std::collections::HashMap;
 use subtle::ConstantTimeEq;
@@ -18,8 +19,15 @@ pub struct AuthOptions {
 pub struct ApiRequest {
     pub method: String,
     pub path: String,
+    pub query: HashMap<String, String>,
     pub body: Vec<u8>,
     pub headers: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AncestryResponse {
+    pub states: Vec<String>,
+    pub shallow_boundary: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,8 +121,13 @@ pub fn dispatch(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiRes
     if let Some(id) = path.strip_prefix(&format!("{API_PREFIX}/states/")) {
         return handle_state(repo, &method, id, body);
     }
-    if let Some(id) = path.strip_prefix(&format!("{API_PREFIX}/timeline/")) {
-        return handle_timeline(repo, &method, id, body);
+    if let Some(rest) = path.strip_prefix(&format!("{API_PREFIX}/timeline/")) {
+        if let Some((id, suffix)) = rest.split_once('/')
+            && suffix == "ancestry"
+        {
+            return handle_ancestry(repo, &method, id, &request.query);
+        }
+        return handle_timeline(repo, &method, rest, body);
     }
     api_response(404, b"not found".to_vec())
 }
@@ -278,6 +291,44 @@ fn handle_state(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiResponse
     }
 }
 
+fn handle_ancestry(
+    repo: &Repo,
+    method: &str,
+    id: &str,
+    query: &HashMap<String, String>,
+) -> ApiResponse {
+    if method != "GET" {
+        return api_response(405, b"method not allowed".to_vec());
+    }
+    let state_id = id.to_string();
+    if !repo.has_timeline(&state_id) {
+        return api_response(404, b"timeline entry not found".to_vec());
+    }
+    let depth = match query.get("depth") {
+        None => None,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(0) => return api_response(400, b"depth must be at least 1".to_vec()),
+            Ok(n) => Some(n),
+            Err(_) => return api_response(400, b"invalid depth".to_vec()),
+        },
+    };
+    match timeline_ancestry(&state_id, depth, |sid| {
+        map_repo(repo.load_timeline_entry(sid))
+    }) {
+        Ok(result) => {
+            let body = AncestryResponse {
+                states: result.states,
+                shallow_boundary: result.shallow_boundary,
+            };
+            match serde_json::to_vec(&body) {
+                Ok(bytes) => api_response(200, bytes),
+                Err(e) => api_response(500, e.to_string().into_bytes()),
+            }
+        }
+        Err(e) => api_response(500, e.into_bytes()),
+    }
+}
+
 fn handle_timeline(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiResponse {
     let state_id = id.to_string();
     match method {
@@ -319,6 +370,24 @@ fn handle_timeline(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiRespo
         }
         _ => api_response(405, b"method not allowed".to_vec()),
     }
+}
+
+pub fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let trimmed = query.strip_prefix('?').unwrap_or(query);
+    if trimmed.is_empty() {
+        return out;
+    }
+    for pair in trimmed.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if !key.is_empty() {
+                out.insert(key.to_string(), value.to_string());
+            }
+        } else if !pair.is_empty() {
+            out.insert(pair.to_string(), String::new());
+        }
+    }
+    out
 }
 
 fn api_response(status: u16, body: Vec<u8>) -> ApiResponse {
