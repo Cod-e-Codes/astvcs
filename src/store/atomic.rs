@@ -40,13 +40,24 @@ pub fn write_atomic_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<
     write_atomic_text(path, &text)
 }
 
+/// List `.astvcs-tmp` files whose canonical target path already exists.
+pub fn find_stray_temp_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut stray = Vec::new();
+    find_stray_temps_dir(root, &mut stray)?;
+    stray.sort();
+    Ok(stray)
+}
+
 /// Remove leftover temp files from a prior crash. Only deletes a temp when the
 /// canonical target path already exists (or the temp has no inferable target).
 pub fn cleanup_stray_temp_files(root: &Path) -> Result<(), String> {
-    cleanup_dir(root)
+    for path in find_stray_temp_files(root)? {
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
-fn cleanup_dir(dir: &Path) -> Result<(), String> {
+fn find_stray_temps_dir(dir: &Path, stray: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -61,7 +72,7 @@ fn cleanup_dir(dir: &Path) -> Result<(), String> {
             if is_repo_metadata_dir(&path) {
                 continue;
             }
-            cleanup_dir(&path)?;
+            find_stray_temps_dir(&path, stray)?;
             continue;
         }
         if !file_type.is_file() {
@@ -76,7 +87,7 @@ fn cleanup_dir(dir: &Path) -> Result<(), String> {
         let canonical_name = name.strip_suffix(TEMP_SUFFIX).unwrap_or(name);
         let canonical = path.with_file_name(canonical_name);
         if canonical.exists() {
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
+            stray.push(path);
         }
     }
     Ok(())

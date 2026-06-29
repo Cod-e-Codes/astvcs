@@ -56,8 +56,8 @@ assert!(out.status.success());
 - Stray `.astvcs-tmp` files from a prior crash are removed when the canonical file exists (see `stray_temp_file_cleaned_on_next_locked_command`).
 - `gc` defaults to dry-run for blobs and history; `--prune` deletes only blobs unreachable from ref tips; `--prune-history` deletes unreachable timeline and state manifests (see `gc_*` tests in `store/integrity.rs`, `cli_gc_dry_run_and_prune`).
 - `repack` packs loose blobs into `.astvcs/packs/` under the repo lock; reads fall back to pack index after loose files are removed (see `repack_roundtrip_and_fsck`, `gc_preserves_packed_blobs`, `repack_fetch_push_roundtrip`).
-- `fsck` is report-only with no `--repair`; clean repos print `fsck: repository ok` (see `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`).
-- `gc` and `fsck` fail fast under external lock with the same `repository is locked by another process` message (see `cli_gc_and_fsck_fail_under_external_lock`).
+- `fsck` defaults to report-only; `--repair` rewrites a valid-HEAD index and removes unambiguous stray temps; `--prune-refs` deletes dangling ref files; repair refuses ambiguous HEAD when other branches exist (see `fsck_repair_*`, `fsck_prune_refs_*`, `cli_fsck_*`).
+- `gc` and `fsck` (including `--repair` and `--prune-refs`) fail fast under external lock with the same `repository is locked by another process` message (see `cli_gc_and_fsck_fail_under_external_lock`).
 - `commit`, `merge`, and `revert` require configured author identity (`identity set` or env vars); see `commit_without_identity_fails_with_actionable_error`.
 - `identity set` / `identity get` use locked atomic writes to `config.json` (repository) or `~/.astvcs/config.json` (global); see `identity_set_and_read_roundtrip_via_repo_open`.
 - Author metadata is stored on timeline entries but not in state id hashes; see `identity_does_not_change_content_addressed_state_id` and `identity_recorded_on_commit_merge_and_revert`.

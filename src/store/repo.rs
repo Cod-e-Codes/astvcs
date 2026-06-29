@@ -1737,6 +1737,35 @@ impl Repo {
         Ok(manifest)
     }
 
+    pub(crate) fn repair_index_from_head_unlocked(&self, state_id: &StateId) -> RepoResult<()> {
+        if let Ok(files) = self.load_state_files_unlocked(state_id) {
+            return self.sync_index_to_state(&files, state_id);
+        }
+        self.sync_index_from_manifest_unlocked(state_id)
+    }
+
+    fn sync_index_from_manifest_unlocked(&self, state_id: &StateId) -> RepoResult<()> {
+        let manifest = self.load_manifest_unlocked(state_id)?;
+        let existing_index: HashMap<String, IndexEntry> =
+            read_json(&self.astvcs_dir().join(INDEX_FILE)).unwrap_or_default();
+        let mut index = HashMap::new();
+        for path in manifest.keys() {
+            let content_kind = existing_index
+                .get(path)
+                .map(|entry| entry.content_kind.clone())
+                .unwrap_or_else(|| "text".to_string());
+            index.insert(
+                path.clone(),
+                IndexEntry {
+                    state_id: state_id.to_string(),
+                    content_kind,
+                },
+            );
+        }
+        write_atomic_json(&self.astvcs_dir().join(INDEX_FILE), &index)?;
+        Ok(())
+    }
+
     fn sync_index_to_state(
         &self,
         files: &HashMap<String, TrackedFile>,

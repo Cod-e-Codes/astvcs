@@ -45,7 +45,7 @@ Global flags:
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
-| `fsck` | Check repository integrity; report-only, exits non-zero when issues are found |
+| `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 
 Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, and `revert` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
@@ -155,7 +155,7 @@ repack: packed 12 blob(s); removed 12 loose file(s); 48.2 KiB -> 9.1 KiB on disk
 
 ### `fsck`
 
-Read-only integrity check. Never modifies refs, HEAD, timeline, blobs, `index.json`, or the working tree. Exits with code 1 when any issue is found.
+Integrity check. By default report-only: never modifies refs, HEAD, timeline, blobs, `index.json`, or the working tree. Exits with code 1 when any issue is found.
 
 | Check | Report label |
 |-------|----------------|
@@ -167,6 +167,12 @@ Read-only integrity check. Never modifies refs, HEAD, timeline, blobs, `index.js
 | `index.json` `state_id` or paths disagree with HEAD, or index present while HEAD is invalid | `index inconsistent` |
 | Pack index entry fails to decompress or hash does not match blob id | `pack corrupt` |
 | `.astvcs-tmp` file with no canonical target (not cleaned by normal commands) | `orphan temp file` |
+
+**`--repair`** (conservative, under repo lock): when HEAD resolves to a state with timeline and manifest, rewrite `index.json` from the HEAD manifest if the index is inconsistent (wrong `state_id`, stale paths, or paths absent from HEAD). Remove stray `.astvcs-tmp` files when the canonical target already exists. Refuses when HEAD names a missing branch while other local branches exist (update HEAD manually). Never repairs missing blobs, pack corruption, or missing state manifests.
+
+**`--prune-refs`**: delete `refs/heads/*` and `refs/remotes/*/*` files that point at state ids with no timeline entry. Never modifies the `HEAD` file. Can be combined with `--repair`.
+
+Unreachable blob cleanup belongs to `gc --prune`; unreachable history cleanup to `gc --prune-history`.
 
 Clean repository:
 
@@ -182,7 +188,14 @@ fsck: 2 issue(s) found
   missing blob: state def… path main.rs: blob 789… missing
 ```
 
-There is no `fsck --repair`. Fix ref or HEAD problems manually; use `gc --prune` for unreachable blobs and optionally `gc --prune-history` for unreachable state metadata after refs reflect the history you want to keep.
+After repairs:
+
+```text
+fsck: 2 repair(s) applied
+  index rewritten: rewrote index.json from HEAD state abc…
+  dangling ref pruned: removed refs/heads/dangling (pointed to fff… with no timeline entry)
+fsck: repository ok
+```
 
 ### Merge conflict resolution
 

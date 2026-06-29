@@ -47,8 +47,8 @@
 | `parse_fallback_md_commit_stays_silent` | `.md` commit emits no warnings |
 | `parse_fallback_broken_rs_stderr_warning` | Broken `.rs` commit warns on stderr |
 | `parse_fallback_verbose_notice_detail` | `-v` adds text fallback `notice:` on commit |
-| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `gc_preserves_packed_blobs`, `gc_prune_history_idempotent`, `gc_preserves_unreachable_states_until_prune_history`, `gc_prune_history_does_not_remove_reachable_states`, `fsck_clean_repository`, `fsck_clean_after_repack` | Reachability GC, prune-history, repack, and fsck unit tests (`store/integrity.rs`) |
-| `cli_fsck_clean_repository`, `cli_fsck_detects_corruption` | fsck clean vs corrupted fixture |
+| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `gc_preserves_packed_blobs`, `gc_prune_history_idempotent`, `gc_preserves_unreachable_states_until_prune_history`, `gc_prune_history_does_not_remove_reachable_states`, `fsck_clean_repository`, `fsck_clean_after_repack`, `fsck_repair_fixes_index_inconsistency`, `fsck_repair_refuses_ambiguous_head`, `fsck_prune_refs_removes_dangling_ref` | Reachability GC, prune-history, repack, and fsck unit tests (`store/integrity.rs`) |
+| `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`, `cli_fsck_repair_fixes_index_inconsistency`, `cli_fsck_repair_refuses_ambiguous_head`, `cli_fsck_repair_leaves_missing_blob`, `cli_fsck_prune_refs_removes_dangling_ref` | fsck clean, corruption, repair, and prune-refs |
 | `cli_gc_dry_run_and_prune` | gc dry-run reports blobs and history; `--prune` removes unreachable blobs |
 | `repack_roundtrip_and_fsck` | repack loose blobs; fsck clean; working tree unchanged |
 | `gc_preserves_packed_blobs` | gc `--prune` keeps reachable packed blobs |

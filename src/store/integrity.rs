@@ -115,9 +115,39 @@ pub struct FsckFinding {
     pub detail: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct FsckOptions {
+    pub repair: bool,
+    pub prune_refs: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FsckRepairKind {
+    IndexRewritten,
+    DanglingRefPruned,
+    OrphanTempRemoved,
+}
+
+impl FsckRepairKind {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::IndexRewritten => "index rewritten",
+            Self::DanglingRefPruned => "dangling ref pruned",
+            Self::OrphanTempRemoved => "orphan temp removed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FsckRepair {
+    pub kind: FsckRepairKind,
+    pub detail: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FsckReport {
     pub findings: Vec<FsckFinding>,
+    pub repairs: Vec<FsckRepair>,
 }
 
 impl FsckReport {
@@ -126,10 +156,18 @@ impl FsckReport {
     }
 
     pub fn format_output(&self) -> String {
-        if self.is_clean() {
-            return "fsck: repository ok\n".into();
+        let mut out = String::new();
+        if !self.repairs.is_empty() {
+            out.push_str(&format!("fsck: {} repair(s) applied\n", self.repairs.len()));
+            for repair in &self.repairs {
+                out.push_str(&format!("  {}: {}\n", repair.kind.label(), repair.detail));
+            }
         }
-        let mut out = format!("fsck: {} issue(s) found\n", self.findings.len());
+        if self.is_clean() {
+            out.push_str("fsck: repository ok\n");
+            return out;
+        }
+        out.push_str(&format!("fsck: {} issue(s) found\n", self.findings.len()));
         for finding in &self.findings {
             out.push_str(&format!("  {}: {}\n", finding.kind.label(), finding.detail));
         }
@@ -264,63 +302,211 @@ impl Repo {
         self.blobs_store().repack().map_err(RepoError::from_message)
     }
 
-    /// Check repository consistency without modifying anything.
-    pub fn fsck(&self) -> RepoResult<FsckReport> {
+    /// Check repository consistency. With `FsckOptions::repair` or `prune_refs`,
+    /// applies conservative automatic fixes under the repo lock, then re-checks.
+    pub fn fsck(&self, options: FsckOptions) -> RepoResult<FsckReport> {
         let _lock = self.repo_lock()?;
-        let mut findings = Vec::new();
+        let mut repairs = Vec::new();
+        if options.repair || options.prune_refs {
+            repairs.extend(apply_fsck_repairs(self, &options)?);
+        }
+        let findings = collect_fsck_findings(self)?;
+        Ok(FsckReport { findings, repairs })
+    }
+}
 
-        findings.extend(check_head_branch(self)?);
-        findings.extend(check_refs(self)?);
-        findings.extend(check_timeline_and_blobs(self)?);
-        findings.extend(check_orphaned_state_manifests(self)?);
-        findings.extend(check_pack_integrity(self)?);
-        findings.extend(check_orphan_temps(self.root_path())?);
+fn collect_fsck_findings(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
+    let mut findings = Vec::new();
 
-        let head_result = self.head_state_unlocked();
-        let reach = self.reachability_unlocked().ok();
-        match head_result {
-            Ok(head) => {
-                if let Ok(head_manifest) = self.load_manifest_unlocked(&head)
-                    && let Ok(index) = read_index(self)
-                    && let Some(reach) = reach
-                {
-                    findings.extend(check_index(&head, &head_manifest, &index, &reach)?);
-                }
+    findings.extend(check_head_branch(repo)?);
+    findings.extend(check_refs(repo)?);
+    findings.extend(check_timeline_and_blobs(repo)?);
+    findings.extend(check_orphaned_state_manifests(repo)?);
+    findings.extend(check_pack_integrity(repo)?);
+    findings.extend(check_orphan_temps(repo.root_path())?);
+
+    let head_result = repo.head_state_unlocked();
+    let reach = repo.reachability_unlocked().ok();
+    match head_result {
+        Ok(head) => {
+            if let Ok(head_manifest) = repo.load_manifest_unlocked(&head)
+                && let Ok(index) = read_index(repo)
+                && let Some(reach) = reach
+            {
+                findings.extend(check_index(&head, &head_manifest, &index, &reach)?);
             }
-            Err(e) => {
-                if findings
-                    .iter()
-                    .any(|f| matches!(f.kind, FsckKind::HeadBranchMissing))
-                    && let Ok(index) = read_index(self)
-                    && !index.is_empty()
-                {
-                    findings.push(FsckFinding {
-                        kind: FsckKind::IndexInconsistent,
-                        detail: format!(
-                            "HEAD is invalid ({e}); index.json has {} entr(y/ies)",
-                            index.len()
-                        ),
-                    });
-                } else if !findings
-                    .iter()
-                    .any(|f| matches!(f.kind, FsckKind::HeadBranchMissing))
-                {
-                    findings.push(FsckFinding {
-                        kind: FsckKind::IndexInconsistent,
-                        detail: format!("cannot resolve HEAD: {e}"),
-                    });
-                }
+        }
+        Err(e) => {
+            if findings
+                .iter()
+                .any(|f| matches!(f.kind, FsckKind::HeadBranchMissing))
+                && let Ok(index) = read_index(repo)
+                && !index.is_empty()
+            {
+                findings.push(FsckFinding {
+                    kind: FsckKind::IndexInconsistent,
+                    detail: format!(
+                        "HEAD is invalid ({e}); index.json has {} entr(y/ies)",
+                        index.len()
+                    ),
+                });
+            } else if !findings
+                .iter()
+                .any(|f| matches!(f.kind, FsckKind::HeadBranchMissing))
+            {
+                findings.push(FsckFinding {
+                    kind: FsckKind::IndexInconsistent,
+                    detail: format!("cannot resolve HEAD: {e}"),
+                });
+            }
+        }
+    }
+
+    findings.sort_by(|a, b| {
+        a.kind
+            .label()
+            .cmp(b.kind.label())
+            .then(a.detail.cmp(&b.detail))
+    });
+    Ok(findings)
+}
+
+fn apply_fsck_repairs(repo: &Repo, options: &FsckOptions) -> RepoResult<Vec<FsckRepair>> {
+    let mut repairs = Vec::new();
+
+    if options.prune_refs {
+        repairs.extend(prune_dangling_refs(repo)?);
+    }
+
+    if options.repair {
+        let head_findings = check_head_branch(repo)?;
+        let head_branch_missing = head_findings
+            .iter()
+            .any(|f| matches!(f.kind, FsckKind::HeadBranchMissing));
+        if head_branch_missing && !repo.list_branches_unlocked()?.is_empty() {
+            return Err(RepoError::integrity_check(
+                "fsck --repair refused: HEAD names a missing branch while other branches exist; \
+                 update HEAD manually",
+            ));
+        }
+
+        if let Ok(head) = repo.head_state_unlocked()
+            && repo.has_timeline_unlocked(&head)
+            && let Ok(head_manifest) = repo.load_manifest_unlocked(&head)
+            && let Ok(index) = read_index(repo)
+        {
+            let reach = repo.reachability_unlocked().ok();
+            if index_inconsistent_with_head(&head, &head_manifest, &index, reach.as_ref()) {
+                repo.repair_index_from_head_unlocked(&head)?;
+                repairs.push(FsckRepair {
+                    kind: FsckRepairKind::IndexRewritten,
+                    detail: format!("rewrote index.json from HEAD state {head}"),
+                });
             }
         }
 
-        findings.sort_by(|a, b| {
-            a.kind
-                .label()
-                .cmp(b.kind.label())
-                .then(a.detail.cmp(&b.detail))
-        });
-        Ok(FsckReport { findings })
+        for path in
+            atomic::find_stray_temp_files(repo.root_path()).map_err(RepoError::from_message)?
+        {
+            fs::remove_file(&path).map_err(|e| RepoError::from_io("remove stray temp", e))?;
+            repairs.push(FsckRepair {
+                kind: FsckRepairKind::OrphanTempRemoved,
+                detail: path.display().to_string(),
+            });
+        }
     }
+
+    repairs.sort_by(|a, b| {
+        a.kind
+            .label()
+            .cmp(b.kind.label())
+            .then(a.detail.cmp(&b.detail))
+    });
+    Ok(repairs)
+}
+
+fn index_inconsistent_with_head(
+    head: &StateId,
+    head_manifest: &ManifestMap,
+    index: &HashMap<String, IndexEntry>,
+    reach: Option<&Reachability>,
+) -> bool {
+    if let Some(reach) = reach
+        && !reach.states.contains(head)
+    {
+        return true;
+    }
+    index
+        .iter()
+        .any(|(path, entry)| entry.state_id != *head || !head_manifest.contains_key(path))
+}
+
+fn prune_dangling_refs(repo: &Repo) -> RepoResult<Vec<FsckRepair>> {
+    let mut repairs = Vec::new();
+    for branch in repo.list_branches_unlocked()? {
+        if repo.has_timeline_unlocked(&branch.state_id) {
+            continue;
+        }
+        let path = repo.astvcs_dir().join("refs/heads").join(&branch.name);
+        if path.is_file() {
+            fs::remove_file(&path).map_err(|e| RepoError::from_io("remove dangling ref", e))?;
+            repairs.push(FsckRepair {
+                kind: FsckRepairKind::DanglingRefPruned,
+                detail: format!(
+                    "removed refs/heads/{} (pointed to {} with no timeline entry)",
+                    branch.name, branch.state_id
+                ),
+            });
+        }
+    }
+
+    let remotes_dir = repo.astvcs_dir().join("refs/remotes");
+    if remotes_dir.is_dir() {
+        for remote_entry in
+            fs::read_dir(&remotes_dir).map_err(|e| RepoError::from_io("read remotes", e))?
+        {
+            let remote_entry =
+                remote_entry.map_err(|e| RepoError::from_io("read remote entry", e))?;
+            if !remote_entry
+                .file_type()
+                .map_err(|e| RepoError::from_io("remote file type", e))?
+                .is_dir()
+            {
+                continue;
+            }
+            let remote = remote_entry.file_name().to_string_lossy().to_string();
+            for branch_entry in fs::read_dir(remote_entry.path())
+                .map_err(|e| RepoError::from_io("read remote branches", e))?
+            {
+                let branch_entry =
+                    branch_entry.map_err(|e| RepoError::from_io("read branch entry", e))?;
+                if !branch_entry
+                    .file_type()
+                    .map_err(|e| RepoError::from_io("branch file type", e))?
+                    .is_file()
+                {
+                    continue;
+                }
+                let branch = branch_entry.file_name().to_string_lossy().to_string();
+                let text = fs::read_to_string(branch_entry.path())
+                    .map_err(|e| RepoError::from_io("read remote ref", e))?;
+                let state_id = text.trim().to_string();
+                if repo.has_timeline_unlocked(&state_id) {
+                    continue;
+                }
+                fs::remove_file(branch_entry.path())
+                    .map_err(|e| RepoError::from_io("remove dangling remote ref", e))?;
+                repairs.push(FsckRepair {
+                    kind: FsckRepairKind::DanglingRefPruned,
+                    detail: format!(
+                        "removed refs/remotes/{remote}/{branch} (pointed to {state_id} with no timeline entry)"
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(repairs)
 }
 
 fn read_index(repo: &Repo) -> RepoResult<HashMap<String, IndexEntry>> {
@@ -601,6 +787,7 @@ fn format_bytes(n: u64) -> String {
 mod tests {
     use super::*;
     use crate::store::Repo;
+    use crate::store::error::RepoErrorKind;
     use crate::store::reachability::ROOT_STATE_ID;
     use tempfile::TempDir;
 
@@ -677,7 +864,7 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
         repo.commit("init").unwrap();
-        let report = repo.fsck().unwrap();
+        let report = repo.fsck(FsckOptions::default()).unwrap();
         assert!(report.is_clean());
         assert!(report.format_output().contains("repository ok"));
     }
@@ -732,7 +919,7 @@ mod tests {
         fs::write(dir.path().join("lib.rs"), "pub fn hi() {}\n").unwrap();
         repo.commit("second").unwrap();
         repo.repack().unwrap();
-        let report = repo.fsck().unwrap();
+        let report = repo.fsck(FsckOptions::default()).unwrap();
         assert!(report.is_clean());
     }
 
@@ -801,5 +988,149 @@ mod tests {
         assert!(repo.load_timeline_entry(&tip).is_ok());
         assert!(repo.load_manifest(&tip).is_ok());
         assert!(repo.load_timeline_entry(&ROOT_STATE_ID.to_string()).is_ok());
+    }
+
+    #[test]
+    fn fsck_repair_fixes_index_inconsistency() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("init").unwrap();
+        let head = repo.head_state().unwrap();
+        fs::write(
+            dir.path().join(".astvcs/index.json"),
+            r#"{
+  "main.rs": {
+    "state_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "content_kind": "text"
+  }
+}"#,
+        )
+        .unwrap();
+
+        let before = repo.fsck(FsckOptions::default()).unwrap();
+        assert!(!before.is_clean());
+        assert!(
+            before
+                .findings
+                .iter()
+                .any(|f| matches!(f.kind, FsckKind::IndexInconsistent))
+        );
+
+        let repaired = repo
+            .fsck(FsckOptions {
+                repair: true,
+                prune_refs: false,
+            })
+            .unwrap();
+        assert!(
+            repaired
+                .repairs
+                .iter()
+                .any(|r| matches!(r.kind, FsckRepairKind::IndexRewritten))
+        );
+
+        let after = repo.fsck(FsckOptions::default()).unwrap();
+        assert!(after.is_clean());
+
+        let index = read_index(&repo).unwrap();
+        assert_eq!(index.get("main.rs").unwrap().state_id, head);
+    }
+
+    #[test]
+    fn fsck_repair_refuses_ambiguous_head() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("init").unwrap();
+        fs::write(dir.path().join(".astvcs/HEAD"), "ghost\n").unwrap();
+
+        let report = repo.fsck(FsckOptions::default()).unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| matches!(f.kind, FsckKind::HeadBranchMissing))
+        );
+
+        let err = repo
+            .fsck(FsckOptions {
+                repair: true,
+                prune_refs: false,
+            })
+            .unwrap_err();
+        assert_eq!(err.kind, RepoErrorKind::IntegrityCheck);
+        assert!(err.message.contains("fsck --repair refused"));
+    }
+
+    #[test]
+    fn fsck_prune_refs_removes_dangling_ref() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("init").unwrap();
+        fs::write(
+            dir.path().join(".astvcs/refs/heads/dangling"),
+            format!("{}\n", "f".repeat(64)),
+        )
+        .unwrap();
+
+        let before = repo.fsck(FsckOptions::default()).unwrap();
+        assert!(
+            before
+                .findings
+                .iter()
+                .any(|f| matches!(f.kind, FsckKind::DanglingRef))
+        );
+        assert!(dir.path().join(".astvcs/refs/heads/dangling").is_file());
+        assert!(dir.path().join(".astvcs/refs/heads/main").is_file());
+
+        let pruned = repo
+            .fsck(FsckOptions {
+                repair: false,
+                prune_refs: true,
+            })
+            .unwrap();
+        assert!(
+            pruned
+                .repairs
+                .iter()
+                .any(|r| matches!(r.kind, FsckRepairKind::DanglingRefPruned))
+        );
+        assert!(!dir.path().join(".astvcs/refs/heads/dangling").exists());
+        assert!(dir.path().join(".astvcs/refs/heads/main").is_file());
+
+        let after = repo.fsck(FsckOptions::default()).unwrap();
+        assert!(after.is_clean());
+    }
+
+    #[test]
+    fn fsck_repair_combined_scenario() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(dir.path().join("note.txt"), "data\n").unwrap();
+        repo.commit("init").unwrap();
+        fs::write(
+            dir.path().join(".astvcs/index.json"),
+            r#"{
+  "main.rs": {
+    "state_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "content_kind": "text"
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".astvcs/refs/heads/dangling"),
+            format!("{}\n", "f".repeat(64)),
+        )
+        .unwrap();
+        fs::write(dir.path().join("note.txt"), "data\n").unwrap();
+        fs::write(dir.path().join("note.txt.astvcs-tmp"), "partial").unwrap();
+
+        let report = repo
+            .fsck(FsckOptions {
+                repair: true,
+                prune_refs: true,
+            })
+            .unwrap();
+        assert!(report.is_clean(), "{}", report.format_output());
     }
 }

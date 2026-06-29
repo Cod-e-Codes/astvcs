@@ -15,7 +15,9 @@ mod tracked;
 mod walk;
 mod working;
 
-pub use integrity::{FsckFinding, FsckKind, FsckReport, GcReport};
+pub use integrity::{
+    FsckFinding, FsckKind, FsckOptions, FsckRepair, FsckRepairKind, FsckReport, GcReport,
+};
 pub use lock::RepoLockGuard;
 pub use pack::RepackReport;
 pub use reachability::{ROOT_STATE_ID, Reachability};

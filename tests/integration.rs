@@ -1658,6 +1658,120 @@ fn cli_fsck_detects_corruption() {
 }
 
 #[test]
+fn cli_fsck_repair_fixes_index_inconsistency() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("note.txt"), "data\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("init").unwrap();
+    fs::write(
+        dir.path().join(".astvcs/index.json"),
+        r#"{
+  "main.rs": {
+    "state_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "content_kind": "text"
+  }
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".astvcs/refs/heads/dangling"),
+        format!("{}\n", "f".repeat(64)),
+    )
+    .unwrap();
+    fs::write(dir.path().join("note.txt"), "data\n").unwrap();
+    fs::write(dir.path().join("note.txt.astvcs-tmp"), "partial").unwrap();
+
+    let repair = run_astvcs(Some(dir.path()), &["fsck", "--repair", "--prune-refs"]);
+    assert_astvcs_ok(&repair, "fsck repair");
+    let repair_out = String::from_utf8_lossy(&repair.stdout);
+    assert!(repair_out.contains("repair(s) applied"), "{repair_out}");
+    assert!(repair_out.contains("index rewritten"), "{repair_out}");
+    assert!(repair_out.contains("dangling ref pruned"), "{repair_out}");
+    assert!(repair_out.contains("repository ok"), "{repair_out}");
+    assert!(!dir.path().join("note.txt.astvcs-tmp").exists());
+
+    let again = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert_astvcs_ok(&again, "fsck after repair");
+}
+
+#[test]
+fn cli_fsck_repair_refuses_ambiguous_head() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("init").unwrap();
+    fs::write(dir.path().join(".astvcs/HEAD"), "ghost\n").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["fsck", "--repair"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("fsck --repair refused"), "{stderr}");
+}
+
+#[test]
+fn cli_fsck_repair_leaves_missing_blob() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("note.txt"), "data\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("init").unwrap();
+    let head = repo.head_state().unwrap();
+    let manifest = repo.load_manifest(&head).unwrap();
+    let note_blob = manifest.get("note.txt").unwrap().blob.clone();
+    let shard = &note_blob[..2];
+    fs::remove_file(
+        dir.path()
+            .join(".astvcs/blobs")
+            .join(shard)
+            .join(format!("{note_blob}.json")),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".astvcs/index.json"),
+        r#"{
+  "main.rs": {
+    "state_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "content_kind": "text"
+  }
+}"#,
+    )
+    .unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["fsck", "--repair"]);
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("missing blob"), "{stdout}");
+    assert!(stdout.contains("repair(s) applied"), "{stdout}");
+    assert!(stdout.contains("index rewritten"), "{stdout}");
+}
+
+#[test]
+fn cli_fsck_prune_refs_removes_dangling_ref() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.commit("init").unwrap();
+    fs::write(
+        dir.path().join(".astvcs/refs/heads/dangling"),
+        format!("{}\n", "f".repeat(64)),
+    )
+    .unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["fsck", "--prune-refs"]);
+    assert_astvcs_ok(&out, "fsck prune-refs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("dangling ref pruned"), "{stdout}");
+    assert!(stdout.contains("repository ok"), "{stdout}");
+    assert!(!dir.path().join(".astvcs/refs/heads/dangling").exists());
+    assert!(dir.path().join(".astvcs/refs/heads/main").is_file());
+}
+
+#[test]
 fn cli_gc_dry_run_and_prune() {
     let dir = TempDir::new().unwrap();
     Repo::init_with_identity(dir.path()).unwrap();
@@ -1706,6 +1820,8 @@ fn cli_gc_and_fsck_fail_under_external_lock() {
         &["gc", "--prune"],
         &["gc", "--prune-history"],
         &["fsck"],
+        &["fsck", "--repair"],
+        &["fsck", "--prune-refs"],
     ] {
         let out = run_astvcs(Some(dir.path()), cmd);
         assert!(!out.status.success(), "expected lock failure for {cmd:?}");

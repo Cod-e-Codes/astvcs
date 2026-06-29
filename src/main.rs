@@ -2,7 +2,7 @@ use astvcs::network::{
     add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 use astvcs::store::{
-    FileStatus, Repo, RepoError, RepoResult, ScanOptions, configured_identity,
+    FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions, configured_identity,
     parse_merge_resolutions, set_identity,
 };
 use astvcs::trace;
@@ -127,7 +127,14 @@ enum Commands {
         #[arg(long)]
         prune_history: bool,
     },
-    Fsck,
+    Fsck {
+        /// Rewrite index.json from HEAD and remove unambiguous stray temp files.
+        #[arg(long)]
+        repair: bool,
+        /// Delete local and remote-tracking refs pointing at missing timeline entries.
+        #[arg(long)]
+        prune_refs: bool,
+    },
     Repack,
     Identity {
         #[command(subcommand)]
@@ -559,9 +566,9 @@ fn run(cli: Cli) -> RepoResult<()> {
             let report = repo.gc(prune, prune_history)?;
             print!("{}", report.format_output());
         }
-        Commands::Fsck => {
+        Commands::Fsck { repair, prune_refs } => {
             let repo = Repo::open(&root)?;
-            let report = repo.fsck()?;
+            let report = repo.fsck(FsckOptions { repair, prune_refs })?;
             print!("{}", report.format_output());
             if !report.is_clean() {
                 return Err(RepoError::integrity_check(
