@@ -1,5 +1,9 @@
 # Architecture
 
+## Feature scope
+
+astvcs is a local-first version control tool with optional network sync. It is **not Git-compatible**. Where tree-sitter parses a file, commits store AST structure and diff/merge operate on structural edits; other UTF-8 paths use line-oriented text blobs, and NUL or non-UTF-8 content is stored as binary. The CLI covers familiar workflow commands (init through repack), including staging, tags, rebase, cherry-pick, blame, bisect, client hooks, author identity, structured `--json` errors, repository locking, `gc`/`fsck`/`repack`, and remotes over file, HTTP, HTTPS, or SSH with optional bearer tokens, TLS on serve, and shallow fetch/clone. Out of scope today: Git interoperability, conflict markers in files, managed hosting, interactive rebase, annotated tags, and DAG bisect. See [commands.md](commands.md) for flags and [README.md](../README.md) for a concise scope table.
+
 ## Repository model
 
 **States.** Each `commit` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Committing with no file changes is a no-op.
@@ -282,6 +286,13 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `cli_trivia_only_commit` | Whitespace-only formatting commit round-trips through the CLI |
 | `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |
 | `cli_reset_hard_soft_and_force` | Hard/soft reset, drift repair, force clobber warnings |
+| `reset_modes_soft_mixed_hard_comparison` | Soft, mixed, and hard reset with dirty tree and staging |
+| `reset_mixed_unstages_and_keeps_disk` | Mixed reset clears staging and keeps disk |
+| `partial_commit_only_stages_paths`, `status_shows_staged_and_unstaged_columns`, `cli_commit_empty_staging_errors` | Staging index: partial commit, two-column status, empty staging error |
+| `serve_requires_token_for_mutations`, `serve_read_requires_token_by_default`, `serve_public_read_allows_anonymous_get`, `serve_put_returns_503_when_advisory_lock_held`, `serve_concurrent_reads_during_writes` | HTTP serve bearer auth, TLS config pairing, advisory lock 503, concurrent reads during writes (unit, `network/serve.rs`) |
+| `parse_remote_url_accepts_https`, `insecure_client_accepts_self_signed_cert`, `http_transport_sends_bearer_token` | HTTPS remotes, `--insecure`, client bearer token (unit, `network/transport.rs`) |
+| `parse_remote_url_accepts_ssh`, `ssh_session_sends_bearer_token`, `remote_serve_io_get_config_put_blob_head_404` | SSH remotes and remote-serve protocol (unit, `network/ssh.rs`, `network/remote_serve.rs`) |
+| `repack_roundtrip_and_fsck`, `repack_fetch_push_roundtrip`, `gc_preserves_packed_blobs` | Blob repack and network round-trip after repack |
 | `cli_revert_and_dry_run` | Revert conflicts, dry-run, and successful undo |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | `origin/main`-style ref resolution |
 | `pull_merges_upstream_changes` | `pull` fetches and merges upstream commits |

@@ -2,7 +2,9 @@
 
 Version control for a working tree of source files. Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges structural edits. Everything else is stored as UTF-8 text with a line-oriented diff.
 
-The CLI follows familiar names (`init`, `status`, `add`, `commit`, `branch`, `tag`, `merge`, `checkout`, `reset`, `revert`, `stash`, `log`, `fetch`, `pull`, `push`, `clone`). astvcs is a local-first tool with optional network sync over file paths or HTTP. There is no Git interoperability and no conflict markers written into files.
+The CLI follows familiar names (`init`, `identity`, `status`, `add`, `diff`, `commit`, `branch`, `tag`, `merge`, `merge-base`, `checkout`, `reset`, `revert`, `rebase`, `cherry-pick`, `log`, `blame`, `bisect`, `remote`, `fetch`, `pull`, `push`, `clone`, `serve`, `stash`, `gc`, `fsck`, `repack`). astvcs is a local-first tool with optional network sync over local paths, HTTP, HTTPS, or SSH (optional bearer tokens, TLS on serve, shallow fetch/clone via `--depth`). **astvcs is not Git-compatible** and does not write conflict markers into files.
+
+Full CLI reference: [`docs/commands.md`](docs/commands.md). Design and repository model: [`docs/architecture.md`](docs/architecture.md).
 
 ## Why structure matters
 
@@ -22,17 +24,19 @@ Three-way merge applies both sides when alignment finds disjoint structural edit
 ```powershell
 cargo build --release
 
+.\target\release\astvcs.exe identity set --name "You" --email you@example.com
 .\target\release\astvcs.exe init
 # edit tracked files (AST extensions: see docs/architecture.md) or other UTF-8 text
 .\target\release\astvcs.exe status
+.\target\release\astvcs.exe add .
 .\target\release\astvcs.exe commit -m "describe the change"
 .\target\release\astvcs.exe diff
 .\target\release\astvcs.exe log
 ```
 
-Use `--repo <path>` to target a repository outside the current directory. Pass `-v` / `--verbose` for operational detail (`notice:`) on stderr.
+Use `--repo <path>` to target a repository outside the current directory. Pass `-v` / `--verbose` for operational detail (`notice:`) on stderr. Pass `--json` on any command for structured JSON errors on failure.
 
-Fixture walkthroughs live under [`examples/`](examples/README.md). Design and CLI reference: [`docs/architecture.md`](docs/architecture.md), [`docs/commands.md`](docs/commands.md). Cursor [Agent Skills](https://cursor.com/docs/skills) for contributors live in [`.cursor/skills/`](.cursor/skills/) (`/astvcs-develop`, `/astvcs-structural-diff-merge`, `/astvcs-add-tree-sitter-language`, `/astvcs-integration-tests`).
+Fixture walkthroughs live under [`examples/`](examples/README.md). Cursor [Agent Skills](https://cursor.com/docs/skills) for contributors live in [`.cursor/skills/`](.cursor/skills/) (`/astvcs-develop`, `/astvcs-structural-diff-merge`, `/astvcs-add-tree-sitter-language`, `/astvcs-integration-tests`).
 
 ## Build
 
@@ -52,13 +56,19 @@ Binary: `target\release\astvcs.exe`
 
 | In scope | Out of scope (today) |
 |----------|----------------------|
-| Content-addressed states, branches, and staging index (`add`, `diff --staged`) | Git interoperability |
-| AST diff and three-way merge for supported languages | Interactive conflict resolution in the working tree |
-| Network sync (`fetch`, `pull`, `push`, `clone`, `serve`) over file or HTTP | Hosting service or authentication |
-| Per-path merge resolution (`--resolve path:ours\|theirs`) | Conflict markers in files |
-| `reset`, `revert`, detached checkout (refs include remote-tracking); `--force` on merge, checkout, revert, and hard reset when the working tree is dirty | Git interoperability |
-| Binary file tracking (NUL or non-UTF-8 content, byte-for-byte round-trip) | Interactive conflict resolution in the working tree |
-| `.gitignore` / `.astvcsignore` scanning | |
+| Content-addressed states, branches, lightweight tags, and staging index (`add`, `diff --staged`) | Git interoperability |
+| AST diff and three-way merge for supported languages | Conflict markers written into files |
+| Network sync (`fetch`, `pull`, `push`, `clone`, `serve`) over file, HTTP, HTTPS, or SSH; optional bearer auth; TLS on serve; shallow `--depth` | Managed hosting service (you run `serve` yourself) |
+| Per-path merge resolution (`--resolve path:ours\|theirs`) | Interactive in-editor conflict resolution |
+| `reset` (soft, mixed, hard), `revert`, detached checkout; `--force` on merge, checkout, revert, rebase, cherry-pick, and hard reset when dirty | Interactive rebase editor or commit reordering |
+| `rebase`, `cherry-pick`, `blame`, `bisect` (linear first-parent history) | DAG bisect or merge-heavy bisect |
+| Author identity (`identity`), structured CLI errors (`--json`) | Annotated tags |
+| Client hooks (`.astvcs/hooks/`; skip with `--no-verify`) | |
+| `gc`, `fsck`, `repack`; blob pack storage | |
+| Binary file tracking, symlink and executable file modes | |
+| Path rename detection in status/diff/merge | |
+| Repository advisory locking; serve concurrent reads during writes | |
+| Incremental working-tree scan cache (`--full-scan` to bypass) | |
 
 Unsupported extensions and parse failures fall back to text blobs; astvcs prints `warning:` to stderr when that happens. NUL-containing or non-UTF-8 file content is stored as binary blobs.
 

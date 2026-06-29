@@ -65,6 +65,7 @@ Global flags:
 | `push <remote> [--branch <name>] [--force] [--no-verify] [--insecure]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
 | `clone <url> [path] [--token <token>] [--depth <N>] [--insecure]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
 | `serve [--bind <addr>] [--port <n>] [--token <token>] [--public-read] [--tls-cert <path>] [--tls-key <path>]` | Serve the repository over HTTP or HTTPS (default `127.0.0.1:9421`); token from `--token` or `ASTVCS_SERVE_TOKEN` |
+| `remote-serve --repo <path> [--token <token>] [--public-read]` | Internal operator command: newline-delimited JSON protocol on stdin/stdout (used by SSH remotes; same `/v1/` API as HTTP serve) |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |

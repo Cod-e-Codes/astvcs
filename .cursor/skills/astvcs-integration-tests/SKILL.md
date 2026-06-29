@@ -15,6 +15,7 @@ metadata:
 1. Read existing helpers at the top of `tests/integration.rs`: `astvcs_bin()`, `run_astvcs()`, `copy_fixture()`.
 2. Pick or create a fixture directory under `examples/`.
 3. Map the scenario to an existing test in [references/test-catalog.md](references/test-catalog.md) before adding a duplicate.
+4. Cross-check [docs/architecture.md](../../../docs/architecture.md) Testing table when adding integration tests that guard new CLI behavior.
 
 ## Act
 
