@@ -90,6 +90,12 @@ Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs remain unti
 
 Default mode is **hard**: move the branch tip or detached HEAD to the target and materialize the state to disk (sync working tree and `index.json`, clear staging). **Mixed** (`--mixed`) moves the ref and syncs `index.json` to the target manifest while clearing staging and leaving the working tree unchanged (git-like default). **Soft** (`--soft`) moves the ref only; disk, `index.json`, and staging stay as-is.
 
+| astvcs | git equivalent | Notes |
+|--------|----------------|-------|
+| `reset <ref>` (no mode flag) | `git reset --hard <ref>` | astvcs defaults to hard; git defaults to mixed |
+| `reset --mixed <ref>` | `git reset --mixed <ref>` | git's default mode when no `--soft`/`--hard` |
+| `reset --soft <ref>` | `git reset --soft <ref>` | ref only; index and working tree unchanged |
+
 | Flag | Behavior |
 |------|----------|
 | (none) | Hard reset: refuse when the working tree is dirty (unstaged changes or non-empty staging) |

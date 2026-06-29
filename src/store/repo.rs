@@ -3582,6 +3582,31 @@ mod tests {
     }
 
     #[test]
+    fn reset_mixed_syncs_index_clears_staging_preserves_disk() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.commit("v1").unwrap().state_id;
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        repo.commit("v2").unwrap();
+        fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
+        repo.add(&["note.txt".into()], false, false).unwrap();
+
+        repo.reset(&v1, false, true, false).unwrap();
+        assert_eq!(repo.head_state().unwrap(), v1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "dirty\n"
+        );
+        let staging = repo.load_staging_unlocked().unwrap();
+        assert!(staging.entries.is_empty());
+        let status = repo.status().unwrap();
+        assert_eq!(
+            status.entries.get("note.txt"),
+            Some(&FileStatus::unstaged_modified())
+        );
+    }
+
+    #[test]
     fn reset_hard_refuses_dirty_tree_without_force() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();

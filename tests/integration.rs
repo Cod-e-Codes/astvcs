@@ -1,7 +1,7 @@
 use astvcs::diff::diff_graphs;
 use astvcs::frontend::parse_source;
 use astvcs::graph::Mutation;
-use astvcs::store::{FileStatus, Repo, RepoErrorKind, configured_identity, set_identity};
+use astvcs::store::{FileStatus, Repo, RepoErrorKind, StateId, configured_identity, set_identity};
 use astvcs::trace;
 use astvcs::unparse;
 use std::fs;
@@ -2813,6 +2813,70 @@ fn reset_mixed_unstages_and_keeps_disk() {
             .unwrap();
     assert!(staging.entries.is_empty(), "staging should be cleared");
     assert_eq!(repo.head_state().unwrap(), v1);
+}
+
+#[test]
+fn reset_modes_soft_mixed_hard_comparison() {
+    fn setup_v2_with_dirty_disk_and_staging() -> (TempDir, StateId) {
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
+        fs::write(dir.path().join("f.txt"), "v1\n").unwrap();
+        let v1 = repo.commit("v1").unwrap().state_id;
+        fs::write(dir.path().join("f.txt"), "v2\n").unwrap();
+        repo.commit("v2").unwrap();
+        fs::write(dir.path().join("f.txt"), "dirty\n").unwrap();
+        repo.add(&["f.txt".into()], false, false).unwrap();
+        (dir, v1)
+    }
+
+    let (soft_dir, v1) = setup_v2_with_dirty_disk_and_staging();
+    let out = run_astvcs(Some(soft_dir.path()), &["reset", "--soft", &v1]);
+    assert_astvcs_ok(&out, "reset --soft");
+    assert_eq!(
+        fs::read_to_string(soft_dir.path().join("f.txt")).unwrap(),
+        "dirty\n"
+    );
+    let staging: astvcs::store::StagingIndex = serde_json::from_str(
+        &fs::read_to_string(soft_dir.path().join(".astvcs/staging.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !staging.entries.is_empty(),
+        "soft reset leaves staging unchanged"
+    );
+
+    let (mixed_dir, v1) = setup_v2_with_dirty_disk_and_staging();
+    let out = run_astvcs(Some(mixed_dir.path()), &["reset", "--mixed", &v1]);
+    assert_astvcs_ok(&out, "reset --mixed");
+    assert_eq!(
+        fs::read_to_string(mixed_dir.path().join("f.txt")).unwrap(),
+        "dirty\n"
+    );
+    let staging: astvcs::store::StagingIndex = serde_json::from_str(
+        &fs::read_to_string(mixed_dir.path().join(".astvcs/staging.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(staging.entries.is_empty(), "mixed reset clears staging");
+    let mixed_repo = Repo::open(mixed_dir.path()).unwrap();
+    let status = mixed_repo.status().unwrap();
+    assert_eq!(
+        status.entries.get("f.txt"),
+        Some(&astvcs::store::FileStatus::unstaged_modified())
+    );
+
+    let (hard_dir, v1) = setup_v2_with_dirty_disk_and_staging();
+    let out = run_astvcs(Some(hard_dir.path()), &["reset", &v1]);
+    assert!(!out.status.success(), "hard reset refuses dirty tree");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("uncommitted changes"),
+        "expected dirty-tree error"
+    );
+    let out = run_astvcs(Some(hard_dir.path()), &["reset", &v1, "--force"]);
+    assert_astvcs_ok(&out, "reset --force");
+    assert_eq!(
+        fs::read_to_string(hard_dir.path().join("f.txt")).unwrap(),
+        "v1\n"
+    );
 }
 
 #[test]

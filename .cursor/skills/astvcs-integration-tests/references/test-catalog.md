@@ -105,6 +105,8 @@
 | `merge_refuses_with_staged_changes` | Merge blocked when staging non-empty |
 | `checkout_force_with_staged_changes` | Checkout `--force` with staged edits warns |
 | `reset_mixed_unstages_and_keeps_disk` | `reset --mixed` clears staging, keeps disk |
+| `reset_modes_soft_mixed_hard_comparison` | Soft/mixed/hard reset behavior with dirty tree and staging |
+| `reset_mixed_syncs_index_clears_staging_preserves_disk` | Mixed reset unit test (unit, `store/repo.rs`) |
 | `cli_commit_empty_staging_errors` | Active staging with no staged paths errors on commit |
 | `parse_remote_url_accepts_https` | `https://` remotes accepted by URL parser (unit, `network/transport.rs`) |
 | `parse_remote_url_accepts_ssh` | scp-style SSH remotes accepted by URL parser (unit, `network/transport.rs`) |
