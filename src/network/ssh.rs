@@ -407,7 +407,7 @@ fn shell_quote(path: &str) -> String {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 mod unix_ssh_integration {
     use super::*;
     use crate::store::Repo;
