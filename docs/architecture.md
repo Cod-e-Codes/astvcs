@@ -4,7 +4,7 @@ Design reference for astvcs: on-disk layout, structural diff and merge, locking,
 
 ## Feature scope
 
-User-facing boundaries (in scope vs out of scope) are summarized in [README.md#scope-at-a-glance](../README.md#scope-at-a-glance). This document describes **how** those features are implemented.
+User-facing boundaries (in scope vs out of scope) are summarized in the [README scope section](../README.md#scope-at-a-glance). This document describes **how** those features are implemented.
 
 ## Repository model
 
