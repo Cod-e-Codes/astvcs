@@ -4,6 +4,7 @@ Global flags:
 
 | Flag | Description |
 |------|-------------|
+| `--version` | Print crate version and exit |
 | `--repo <path>` | Repository root (default: current directory) |
 | `-v`, `--verbose` | Print operational `notice:` detail to stderr (also forces a full working-tree scan) |
 | `--json` | On failure, print a structured JSON error object on stderr instead of `error: …` |

@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            bin_name: astvcs-linux-x86_64
+            archive: astvcs-linux-x86_64.tar.gz
+          - os: windows-latest
+            bin_name: astvcs-windows-x86_64.exe
+            archive: astvcs-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Enable symlink creation (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1
+      - run: cargo build --release --locked
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $bin = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            './target/release/astvcs.exe'
+          } else {
+            './target/release/astvcs'
+          }
+          $expected = (Select-String -Path Cargo.toml -Pattern '^version = ' | ForEach-Object {
+            $_.Line -replace 'version = "(.+)"', '$1'
+          })
+          $version = & $bin --version
+          if ($LASTEXITCODE -ne 0) { throw "astvcs --version failed with exit $LASTEXITCODE" }
+          if ($version -notmatch [regex]::Escape($expected)) {
+            throw "expected version $expected in output: $version"
+          }
+          $tmpdir = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "astvcs-init-smoke")
+          & $bin init $tmpdir.FullName
+          if ($LASTEXITCODE -ne 0) { throw "astvcs init failed with exit $LASTEXITCODE" }
+          $meta = Join-Path $tmpdir.FullName '.astvcs'
+          if (-not (Test-Path $meta)) { throw "expected $meta after init" }
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            Copy-Item target/release/astvcs.exe "dist/${{ matrix.bin_name }}"
+            Compress-Archive -Path "dist/${{ matrix.bin_name }}" -DestinationPath "dist/${{ matrix.archive }}"
+          } else {
+            Copy-Item target/release/astvcs "dist/${{ matrix.bin_name }}"
+            tar czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.bin_name }}"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: dist/${{ matrix.archive }}
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

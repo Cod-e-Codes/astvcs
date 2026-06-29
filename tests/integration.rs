@@ -74,6 +74,20 @@ fn copy_identity_demo(dir: &TempDir) -> std::io::Result<()> {
     copy_fixture(dir, &identity_demo_root())
 }
 
+#[test]
+fn cli_version_prints_crate_version() {
+    let out = Command::new(astvcs_bin())
+        .arg("--version")
+        .output()
+        .expect("spawn astvcs");
+    assert_astvcs_ok(&out, "astvcs --version");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(env!("CARGO_PKG_VERSION")),
+        "expected version in stdout: {stdout}"
+    );
+}
+
 fn create_test_symlink(target: &Path, link: &Path) {
     #[cfg(unix)]
     {

@@ -66,6 +66,7 @@
 | `cherry_pick_from_remote_tracking_ref` | Cherry-pick `origin/feature` after fetch |
 | `blame_linear_two_commits` | Line blame attributes edits to correct commits in linear history |
 | `bisect_linear_four_commits` | Bisect finds first bad commit via script in linear history |
+| `cli_version_prints_crate_version` | `astvcs --version` prints `CARGO_PKG_VERSION` (integration) |
 | `bisect_run_releases_lock_for_nested_astvcs` | Bisect script runs nested `astvcs status` without lock error |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |

@@ -38,6 +38,23 @@ Use `--repo <path>` to target a repository outside the current directory. Pass `
 
 Fixture walkthroughs live under [`examples/`](examples/README.md). Cursor [Agent Skills](https://cursor.com/docs/skills) for contributors live in [`.cursor/skills/`](.cursor/skills/) (`/astvcs-develop`, `/astvcs-structural-diff-merge`, `/astvcs-add-tree-sitter-language`, `/astvcs-integration-tests`).
 
+## Install
+
+Prebuilt binaries for Linux and Windows are published on [GitHub Releases](https://github.com/Cod-e-Codes/astvcs/releases).
+
+| Platform | Download |
+|----------|----------|
+| Linux x86_64 | `astvcs-linux-x86_64.tar.gz` |
+| Windows x86_64 | `astvcs-windows-x86_64.zip` |
+
+Extract the archive, put the binary on your `PATH`, then verify:
+
+```powershell
+astvcs --version
+```
+
+Release notes template: [`docs/RELEASE.md`](docs/RELEASE.md).
+
 ## Build
 
 Requires Rust 1.96+ (edition 2024).

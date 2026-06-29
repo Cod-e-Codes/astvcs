@@ -13,6 +13,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(
     name = "astvcs",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Local version control with AST structural diff"
 )]
 struct Cli {

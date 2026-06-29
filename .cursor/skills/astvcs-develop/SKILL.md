@@ -1,7 +1,7 @@
 ---
 name: astvcs-develop
 description: Builds, tests, and validates the astvcs Rust CLI. Use when changing astvcs source, fixing CI, running cargo test or clippy, or when the user asks about project layout, build requirements, or release binaries.
-compatibility: Requires Rust 1.96+ (edition 2024), cargo, and a working C toolchain for tree-sitter native deps. CI runs on push/PR via `.github/workflows/ci.yml`.
+compatibility: Requires Rust 1.96+ (edition 2024), cargo, and a working C toolchain for tree-sitter native deps. CI runs on push/PR via `.github/workflows/ci.yml`. Tagged releases (`v*`) build and publish binaries via `.github/workflows/release.yml`.
 metadata:
   project: astvcs
 ---
@@ -32,6 +32,14 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --release
 ```
+
+### Release packaging
+
+- `astvcs --version` prints `CARGO_PKG_VERSION` from `Cargo.toml` (clap `#[command(version = env!("CARGO_PKG_VERSION"))]` on the root `Parser` in `src/main.rs`).
+- Push a tag matching `v*` (for example `v0.1.0`) to trigger `.github/workflows/release.yml`.
+- The workflow matrix builds on `ubuntu-latest` and `windows-latest` with `cargo build --release --locked`, runs smoke tests (`astvcs --version`, `astvcs init` creating `.astvcs`), packages `astvcs-linux-x86_64.tar.gz` and `astvcs-windows-x86_64.zip`, and attaches them to a GitHub Release via `softprops/action-gh-release`.
+- Windows jobs enable symlink creation (same registry step as `ci.yml`) so smoke tests can create symlinks if needed.
+- Draft release notes from [`docs/RELEASE.md`](../../../docs/RELEASE.md). Do not publish to crates.io.
 
 ### Code change rules
 
