@@ -1,4 +1,4 @@
-use crate::network::remote::{ensure_remote_dir, remote_url};
+use crate::network::remote::{ensure_remote_dir, remote_token, remote_url};
 use crate::network::transport::Transport;
 use crate::store::{Repo, RepoError, StateId};
 use crate::trace;
@@ -149,7 +149,8 @@ pub struct FetchOutcome {
 pub fn fetch(repo: &Repo, remote_name: &str, branch: Option<&str>) -> Result<FetchOutcome, String> {
     let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
-    let transport = Transport::open(&url)?;
+    let token = remote_token(repo, remote_name)?;
+    let transport = Transport::open_with_token(&url, token.as_deref())?;
     ensure_remote_dir(repo, remote_name)?;
 
     let refs = transport.list_refs()?;
@@ -192,7 +193,8 @@ pub fn push(
 ) -> Result<PushOutcome, String> {
     let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
-    let transport = Transport::open(&url)?;
+    let token = remote_token(repo, remote_name)?;
+    let transport = Transport::open_with_token(&url, token.as_deref())?;
 
     let branch_name = match branch {
         Some(name) => name.to_string(),
@@ -240,8 +242,8 @@ pub fn push(
     })
 }
 
-pub fn clone_repo(url: &str, path: &Path) -> Result<(Repo, String), String> {
-    Transport::open(url)?;
+pub fn clone_repo(url: &str, path: &Path, token: Option<&str>) -> Result<(Repo, String), String> {
+    Transport::open_with_token(url, token)?;
     if path.exists() {
         if path.read_dir().map_err(|e| e.to_string())?.next().is_some() {
             return Err(format!("destination is not empty: {}", path.display()));
@@ -251,9 +253,9 @@ pub fn clone_repo(url: &str, path: &Path) -> Result<(Repo, String), String> {
     }
 
     let repo = map_repo(Repo::init(path))?;
-    crate::network::remote::add_remote(&repo, "origin", url)?;
+    crate::network::remote::add_remote(&repo, "origin", url, token)?;
 
-    let transport = Transport::open(url)?;
+    let transport = Transport::open_with_token(url, token)?;
     let default_branch = transport.default_branch()?;
     let refs = transport.list_refs()?;
     let tip = refs
@@ -303,6 +305,7 @@ mod tests {
             &downstream_repo,
             "origin",
             upstream.path().to_str().unwrap(),
+            None,
         )
         .unwrap();
 
@@ -334,7 +337,7 @@ mod tests {
 
         let clone_dir = TempDir::new().unwrap();
         let (repo, branch) =
-            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path()).unwrap();
+            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path(), None).unwrap();
         assert_eq!(branch, "main");
         assert!(repo.has_timeline(&repo.head_state().unwrap()));
         assert_eq!(
@@ -359,7 +362,7 @@ mod tests {
 
         let clone_dir = TempDir::new().unwrap();
         let (repo, branch) =
-            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path()).unwrap();
+            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path(), None).unwrap();
         assert_eq!(branch, "develop");
         assert_eq!(repo.head_branch().unwrap(), Some("develop".into()));
         assert_eq!(

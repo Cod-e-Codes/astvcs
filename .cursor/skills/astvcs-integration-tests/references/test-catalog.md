@@ -28,6 +28,8 @@
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync |
+| `serve_requires_token_for_mutations`, `serve_read_requires_token_by_default`, `serve_public_read_allows_anonymous_get` | HTTP serve bearer auth (unit, `network/serve.rs`) |
+| `http_transport_sends_bearer_token`, `remote_token_roundtrip` | Client bearer token and remotes.json storage (unit, `network/transport.rs`, `network/remote.rs`) |
 | `clone_uses_remote_default_branch` | Clone checks out upstream `default_branch` (unit, `network/sync.rs`) |
 | `cli_reset_hard_soft_and_force` | Reset modes, force clobber warnings |
 | `cli_materialize_refuses_dirty_tree_and_force_overrides` | Merge, checkout, revert refuse dirty tree; `--force` clobber warnings |

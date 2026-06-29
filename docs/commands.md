@@ -53,7 +53,7 @@ Global flags:
 | `bisect good [ref]` | Mark a revision as good during bisect (default: HEAD) |
 | `bisect run <script> [args...]` | Checkout midpoint revisions and run a test script (exit 0=good, 1=bad, 125=skip) |
 | `bisect reset` | End bisect and restore the original checkout |
-| `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
+| `remote add <name> <url> [--token <token>]` | Register a remote (local path, `file://`, or `http://`); optional bearer token for HTTP remotes |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
 | `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs and all remote tags |
@@ -63,8 +63,8 @@ Global flags:
 | `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
 | `stash apply [index]` | Apply stash without removing the entry |
 | `push <remote> [--branch <name>] [--force] [--no-verify]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
-| `clone <url> [path]` | Clone a remote repository (default path: `.`) |
-| `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
+| `clone <url> [path] [--token <token>]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
+| `serve [--bind <addr>] [--port <n>] [--token <token>] [--public-read]` | Serve the repository over HTTP (default `127.0.0.1:9421`); token from `--token` or `ASTVCS_SERVE_TOKEN` |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
@@ -201,7 +201,7 @@ Paths added in the target state and modified again on HEAD before revert produce
 
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 
-Remote URLs may be a local repository path, a `file://` URL, or an `http://` base URL from `astvcs serve`.
+Remote URLs may be a local repository path, a `file://` URL, or an `http://` base URL from `astvcs serve`. Register an HTTP bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes.
 
 ### `gc`
 

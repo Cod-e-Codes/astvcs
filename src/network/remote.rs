@@ -8,6 +8,8 @@ const REMOTES_FILE: &str = "remotes.json";
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RemoteEntry {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -29,7 +31,7 @@ fn save_remotes(repo: &Repo, config: &RemoteConfig) -> Result<(), String> {
     write_atomic_json(&path, config)
 }
 
-pub fn add_remote(repo: &Repo, name: &str, url: &str) -> Result<(), String> {
+pub fn add_remote(repo: &Repo, name: &str, url: &str, token: Option<&str>) -> Result<(), String> {
     let _lock = repo.repo_lock().map_err(|e| e.to_string())?;
     if name.is_empty() {
         return Err("remote name cannot be empty".into());
@@ -43,6 +45,7 @@ pub fn add_remote(repo: &Repo, name: &str, url: &str) -> Result<(), String> {
         name.to_string(),
         RemoteEntry {
             url: url.to_string(),
+            token: token.map(str::to_string),
         },
     );
     save_remotes(repo, &config)
@@ -83,6 +86,15 @@ pub fn remote_url(repo: &Repo, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("remote not found: {name}"))
 }
 
+pub fn remote_token(repo: &Repo, name: &str) -> Result<Option<String>, String> {
+    let config = load_remotes(repo)?;
+    config
+        .remotes
+        .get(name)
+        .map(|e| e.token.clone())
+        .ok_or_else(|| format!("remote not found: {name}"))
+}
+
 pub fn ensure_remote_dir(repo: &Repo, name: &str) -> Result<(), String> {
     let dir = repo.astvcs_dir().join("refs/remotes").join(name);
     fs::create_dir_all(dir).map_err(|e| e.to_string())
@@ -98,11 +110,22 @@ mod tests {
     fn add_list_remove_remote() {
         let dir = TempDir::new().unwrap();
         let repo = Repo::init_with_identity(dir.path()).unwrap();
-        add_remote(&repo, "origin", dir.path().to_str().unwrap()).unwrap();
+        add_remote(&repo, "origin", dir.path().to_str().unwrap(), None).unwrap();
         let list = list_remotes(&repo).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, "origin");
         remove_remote(&repo, "origin").unwrap();
         assert!(list_remotes(&repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_token_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
+        add_remote(&repo, "origin", "http://127.0.0.1:9421", Some("my-token")).unwrap();
+        assert_eq!(
+            remote_token(&repo, "origin").unwrap(),
+            Some("my-token".into())
+        );
     }
 }

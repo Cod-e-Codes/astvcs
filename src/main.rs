@@ -155,12 +155,21 @@ enum Commands {
         url: String,
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Bearer token for authenticated HTTP remotes (stored in origin remote config).
+        #[arg(long)]
+        token: Option<String>,
     },
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
         #[arg(long, default_value_t = 9421)]
         port: u16,
+        /// Bearer token required for mutating requests (and reads unless --public-read).
+        #[arg(long)]
+        token: Option<String>,
+        /// Allow anonymous GET/HEAD on /v1/* when a token is configured.
+        #[arg(long)]
+        public_read: bool,
     },
     Gc {
         /// Delete unreachable blobs (default is dry-run).
@@ -207,9 +216,16 @@ enum IdentityAction {
 
 #[derive(Subcommand)]
 enum RemoteAction {
-    Add { name: String, url: String },
+    Add {
+        name: String,
+        url: String,
+        #[arg(long)]
+        token: Option<String>,
+    },
     List,
-    Remove { name: String },
+    Remove {
+        name: String,
+    },
 }
 
 #[derive(Args)]
@@ -810,8 +826,9 @@ fn run(cli: Cli) -> RepoResult<()> {
         Commands::Remote { action } => {
             let repo = Repo::open(&root)?;
             match action {
-                RemoteAction::Add { name, url } => {
-                    add_remote(&repo, &name, &url).map_err(RepoError::from_message)?;
+                RemoteAction::Add { name, url, token } => {
+                    add_remote(&repo, &name, &url, token.as_deref())
+                        .map_err(RepoError::from_message)?;
                     println!("Added remote {name} ({url})");
                 }
                 RemoteAction::List => {
@@ -913,16 +930,24 @@ fn run(cli: Cli) -> RepoResult<()> {
                 }
             }
         }
-        Commands::Clone { url, path } => {
-            let (_, branch) = clone_repo(&url, &path).map_err(RepoError::from_message)?;
+        Commands::Clone { url, path, token } => {
+            let (_, branch) =
+                clone_repo(&url, &path, token.as_deref()).map_err(RepoError::from_message)?;
             println!(
                 "Cloned into {} (checked out branch {branch})",
                 path.display()
             );
         }
-        Commands::Serve { bind, port } => {
+        Commands::Serve {
+            bind,
+            port,
+            token,
+            public_read,
+        } => {
             let repo = Repo::open(&root)?;
-            serve_repo(&repo, &bind, port).map_err(RepoError::from_message)?;
+            let token = token.or_else(|| std::env::var("ASTVCS_SERVE_TOKEN").ok());
+            let options = astvcs::network::ServeOptions { token, public_read };
+            serve_repo(&repo, &bind, port, options).map_err(RepoError::from_message)?;
         }
         Commands::Gc {
             prune,

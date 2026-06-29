@@ -2,6 +2,7 @@ use crate::store::{Repo, RepoError, TimelineEntry};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+use subtle::ConstantTimeEq;
 
 fn map_repo<T>(result: Result<T, RepoError>) -> Result<T, String> {
     result.map_err(|e| e.to_string())
@@ -9,14 +10,20 @@ fn map_repo<T>(result: Result<T, RepoError>) -> Result<T, String> {
 
 const API_PREFIX: &str = "/v1";
 
-pub fn serve_repo(repo: &Repo, bind: &str, port: u16) -> Result<(), String> {
+#[derive(Clone, Debug, Default)]
+pub struct ServeOptions {
+    pub token: Option<String>,
+    pub public_read: bool,
+}
+
+pub fn serve_repo(repo: &Repo, bind: &str, port: u16, options: ServeOptions) -> Result<(), String> {
     let addr = format!("{bind}:{port}");
     let server = tiny_http::Server::http(&addr).map_err(|e| e.to_string())?;
     let repo = Arc::new(Mutex::new(map_repo(Repo::open(repo.root_path()))?));
     eprintln!("astvcs serve listening on http://{addr}/");
 
     for mut request in server.incoming_requests() {
-        let response = match dispatch(&repo, &mut request) {
+        let response = match dispatch(&repo, &mut request, &options) {
             Ok(resp) => resp,
             Err(e) => text_response(500, &e),
         };
@@ -30,15 +37,21 @@ pub fn serve_repo(repo: &Repo, bind: &str, port: u16) -> Result<(), String> {
 fn dispatch(
     repo: &Arc<Mutex<Repo>>,
     request: &mut tiny_http::Request,
+    options: &ServeOptions,
 ) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, String> {
     let method = request.method().clone();
     let url = request.url().to_string();
+    let path = url.split('?').next().unwrap_or(&url);
+
+    if let Err(resp) = check_auth(options, &method, path, request) {
+        return Ok(resp);
+    }
+
     let force = request
         .headers()
         .iter()
         .any(|h| h.field.as_str().as_str() == "X-Astvcs-Force" && h.value.as_str() == "true");
     let body = read_body(request)?;
-    let path = url.split('?').next().unwrap_or(&url);
 
     if path == format!("{API_PREFIX}/config") && method == tiny_http::Method::Get {
         let repo = repo.lock().map_err(|e| e.to_string())?;
@@ -86,6 +99,61 @@ fn dispatch(
         return handle_timeline(repo, &method, id, &body);
     }
     Ok(text_response(404, "not found"))
+}
+
+fn check_auth(
+    options: &ServeOptions,
+    method: &tiny_http::Method,
+    path: &str,
+    request: &tiny_http::Request,
+) -> Result<(), tiny_http::Response<Cursor<Vec<u8>>>> {
+    let Some(expected) = options.token.as_deref() else {
+        return Ok(());
+    };
+    if !path.starts_with(API_PREFIX) {
+        return Ok(());
+    }
+
+    let is_read = *method == tiny_http::Method::Get || *method == tiny_http::Method::Head;
+    if is_read && options.public_read {
+        return Ok(());
+    }
+
+    let provided = parse_bearer_token(request);
+    let authorized = provided
+        .as_deref()
+        .is_some_and(|p| token_matches(expected, p));
+    if authorized {
+        Ok(())
+    } else {
+        Err(text_response(401, "unauthorized"))
+    }
+}
+
+fn parse_bearer_token(request: &tiny_http::Request) -> Option<String> {
+    for header in request.headers() {
+        if !header
+            .field
+            .as_str()
+            .as_str()
+            .eq_ignore_ascii_case("authorization")
+        {
+            continue;
+        }
+        let value = header.value.as_str();
+        if value.len() < 7 {
+            continue;
+        }
+        if !value[..7].eq_ignore_ascii_case("bearer ") {
+            continue;
+        }
+        return Some(value[7..].to_string());
+    }
+    None
+}
+
+fn token_matches(expected: &str, provided: &str) -> bool {
+    expected.as_bytes().ct_eq(provided.as_bytes()).into()
 }
 
 fn read_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, String> {
@@ -294,4 +362,167 @@ fn json_response(status: u16, body: &[u8]) -> tiny_http::Response<Cursor<Vec<u8>
 
 fn bytes_response(status: u16, body: &[u8]) -> tiny_http::Response<Cursor<Vec<u8>>> {
     tiny_http::Response::from_data(body.to_vec()).with_status_code(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Repo;
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    struct TestServer {
+        base_url: String,
+        shutdown: Arc<AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl TestServer {
+        fn start(repo: &Repo, options: ServeOptions) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let base_url = format!("http://127.0.0.1:{port}");
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let shutdown_flag = Arc::clone(&shutdown);
+            let repo_path = repo.root_path().to_path_buf();
+
+            let server = tiny_http::Server::from_listener(listener, None).unwrap();
+            let repo = Arc::new(Mutex::new(Repo::open(&repo_path).unwrap()));
+
+            let handle = thread::spawn(move || {
+                for mut request in server.incoming_requests() {
+                    if shutdown_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let response = match dispatch(&repo, &mut request, &options) {
+                        Ok(resp) => resp,
+                        Err(e) => text_response(500, &e),
+                    };
+                    let _ = request.respond(response);
+                }
+            });
+            thread::sleep(Duration::from_millis(50));
+
+            Self {
+                base_url,
+                shutdown,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.shutdown.store(true, Ordering::Relaxed);
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(500))
+                .build()
+                .unwrap();
+            let _ = client.get(format!("{}/", self.base_url)).send();
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn init_repo() -> (TempDir, Repo) {
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
+        (dir, repo)
+    }
+
+    fn http_client() -> reqwest::blocking::Client {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+    }
+
+    fn get(base: &str, path: &str, token: Option<&str>) -> (u16, String) {
+        let client = http_client();
+        let mut req = client.get(format!("{base}{path}"));
+        if let Some(token) = token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = req.send().unwrap();
+        (resp.status().as_u16(), resp.text().unwrap_or_default())
+    }
+
+    fn put(base: &str, path: &str, body: &str, token: Option<&str>) -> (u16, String) {
+        let client = http_client();
+        let mut req = client.put(format!("{base}{path}")).body(body.to_string());
+        if let Some(token) = token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = req.send().unwrap();
+        (resp.status().as_u16(), resp.text().unwrap_or_default())
+    }
+
+    #[test]
+    fn serve_requires_token_for_mutations() {
+        let (_dir, repo) = init_repo();
+        let state_id = repo.head_state().unwrap();
+        let server = TestServer::start(
+            &repo,
+            ServeOptions {
+                token: Some("secret-token".into()),
+                public_read: false,
+            },
+        );
+
+        let (status, body) = put(&server.base_url, "/v1/refs/heads/main", &state_id, None);
+        assert_eq!(status, 401);
+        assert_eq!(body.trim(), "unauthorized");
+
+        let (status, body) = put(
+            &server.base_url,
+            "/v1/refs/heads/main",
+            &state_id,
+            Some("secret-token"),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(body.trim(), "ok");
+    }
+
+    #[test]
+    fn serve_read_requires_token_by_default() {
+        let (_dir, repo) = init_repo();
+        let server = TestServer::start(
+            &repo,
+            ServeOptions {
+                token: Some("read-secret".into()),
+                public_read: false,
+            },
+        );
+
+        let (status, body) = get(&server.base_url, "/v1/config", None);
+        assert_eq!(status, 401);
+        assert_eq!(body.trim(), "unauthorized");
+
+        let (status, _) = get(&server.base_url, "/v1/config", Some("read-secret"));
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn serve_public_read_allows_anonymous_get() {
+        let (_dir, repo) = init_repo();
+        let state_id = repo.head_state().unwrap();
+        let server = TestServer::start(
+            &repo,
+            ServeOptions {
+                token: Some("pub-secret".into()),
+                public_read: true,
+            },
+        );
+
+        let (status, _) = get(&server.base_url, "/v1/config", None);
+        assert_eq!(status, 200);
+
+        let (status, body) = put(&server.base_url, "/v1/refs/heads/main", &state_id, None);
+        assert_eq!(status, 401);
+        assert_eq!(body.trim(), "unauthorized");
+    }
 }

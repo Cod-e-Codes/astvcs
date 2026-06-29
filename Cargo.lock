@@ -81,6 +81,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "similar",
+ "subtle",
  "tempfile",
  "tiny_http",
  "tree-sitter",

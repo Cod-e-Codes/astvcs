@@ -36,18 +36,27 @@ pub enum Transport {
     Http {
         base: String,
         client: reqwest::blocking::Client,
+        token: Option<String>,
     },
 }
 
 impl Transport {
     pub fn open(url: &str) -> Result<Self, String> {
+        Self::open_with_token(url, None)
+    }
+
+    pub fn open_with_token(url: &str, token: Option<&str>) -> Result<Self, String> {
         if url.starts_with("http://") || url.starts_with("https://") {
             let base = url.trim_end_matches('/').to_string();
             let client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .map_err(|e| e.to_string())?;
-            return Ok(Self::Http { base, client });
+            return Ok(Self::Http {
+                base,
+                client,
+                token: token.map(str::to_string),
+            });
         }
         let path = parse_remote_url(url)?;
         let repo = map_repo(Repo::open(&path))?;
@@ -61,12 +70,27 @@ impl Transport {
         }
     }
 
+    fn authorize_request(
+        &self,
+        req: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        match self {
+            Self::Http {
+                token: Some(token), ..
+            } => req.header("Authorization", format!("Bearer {token}")),
+            _ => req,
+        }
+    }
+
     pub fn has_blob(&self, id: &str) -> Result<bool, String> {
         match self {
             Self::File(repo) => Ok(repo.has_blob(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
-                let resp = client.head(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.head(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 Ok(resp.status().is_success())
             }
         }
@@ -77,7 +101,10 @@ impl Transport {
             Self::File(repo) => map_repo(repo.read_blob_bytes(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if !resp.status().is_success() {
                     return Err(format!("blob {id}: HTTP {}", resp.status()));
                 }
@@ -91,8 +118,8 @@ impl Transport {
             Self::File(repo) => map_repo(repo.import_blob_bytes(id, bytes)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/blobs/{id}"))?;
-                let resp = client
-                    .put(&url)
+                let resp = self
+                    .authorize_request(client.put(&url))
                     .body(bytes.to_vec())
                     .send()
                     .map_err(|e| e.to_string())?;
@@ -109,7 +136,10 @@ impl Transport {
             Self::File(repo) => Ok(repo.has_state(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
-                let resp = client.head(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.head(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 Ok(resp.status().is_success())
             }
         }
@@ -120,7 +150,10 @@ impl Transport {
             Self::File(repo) => map_repo(repo.load_manifest(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if !resp.status().is_success() {
                     return Err(format!("state {id}: HTTP {}", resp.status()));
                 }
@@ -134,8 +167,8 @@ impl Transport {
             Self::File(repo) => map_repo(repo.import_state_manifest(id, manifest)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/states/{id}"))?;
-                let resp = client
-                    .put(&url)
+                let resp = self
+                    .authorize_request(client.put(&url))
                     .json(manifest)
                     .send()
                     .map_err(|e| e.to_string())?;
@@ -152,7 +185,10 @@ impl Transport {
             Self::File(repo) => Ok(repo.has_timeline(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{id}"))?;
-                let resp = client.head(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.head(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 Ok(resp.status().is_success())
             }
         }
@@ -163,7 +199,10 @@ impl Transport {
             Self::File(repo) => map_repo(repo.load_timeline_entry(id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{id}"))?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if !resp.status().is_success() {
                     return Err(format!("timeline {id}: HTTP {}", resp.status()));
                 }
@@ -177,8 +216,8 @@ impl Transport {
             Self::File(repo) => map_repo(repo.import_timeline_entry(entry)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/timeline/{}", entry.id))?;
-                let resp = client
-                    .put(&url)
+                let resp = self
+                    .authorize_request(client.put(&url))
                     .json(entry)
                     .send()
                     .map_err(|e| e.to_string())?;
@@ -201,7 +240,10 @@ impl Transport {
             }
             Self::Http { client, .. } => {
                 let url = self.http_url("/refs/heads")?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if !resp.status().is_success() {
                     return Err(format!("list refs: HTTP {}", resp.status()));
                 }
@@ -221,7 +263,10 @@ impl Transport {
             }
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/heads/{branch}"))?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if resp.status().as_u16() == 404 {
                     return Ok(None);
                 }
@@ -248,7 +293,9 @@ impl Transport {
             }
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/heads/{branch}"))?;
-                let mut req = client.put(&url).body(state_id.clone());
+                let mut req = self
+                    .authorize_request(client.put(&url))
+                    .body(state_id.clone());
                 if force {
                     req = req.header("X-Astvcs-Force", "true");
                 }
@@ -268,7 +315,10 @@ impl Transport {
             Self::File(repo) => Ok(map_repo(repo.load_config())?.default_branch),
             Self::Http { client, .. } => {
                 let url = self.http_url("/config")?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if !resp.status().is_success() {
                     return Ok("main".into());
                 }
@@ -289,7 +339,10 @@ impl Transport {
             }
             Self::Http { client, .. } => {
                 let url = self.http_url("/refs/tags")?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if !resp.status().is_success() {
                     return Err(format!("list tags: HTTP {}", resp.status()));
                 }
@@ -309,7 +362,10 @@ impl Transport {
             }
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/tags/{name}"))?;
-                let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+                let resp = self
+                    .authorize_request(client.get(&url))
+                    .send()
+                    .map_err(|e| e.to_string())?;
                 if resp.status().as_u16() == 404 {
                     return Ok(None);
                 }
@@ -327,8 +383,8 @@ impl Transport {
             Self::File(repo) => map_repo(repo.write_tag(name, state_id)),
             Self::Http { client, .. } => {
                 let url = self.http_url(&format!("/refs/tags/{name}"))?;
-                let resp = client
-                    .put(&url)
+                let resp = self
+                    .authorize_request(client.put(&url))
                     .body(state_id.clone())
                     .send()
                     .map_err(|e| e.to_string())?;
@@ -340,5 +396,50 @@ impl Transport {
                 Err(format!("set tag {name}: HTTP {status} {body}"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    #[test]
+    fn http_transport_sends_bearer_token() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tiny_http::Server::from_listener(listener, None).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_flag = Arc::clone(&seen);
+
+        let handle = thread::spawn(move || {
+            if let Some(request) = server.incoming_requests().next() {
+                let auth = request
+                    .headers()
+                    .iter()
+                    .find(|h| {
+                        h.field
+                            .as_str()
+                            .as_str()
+                            .eq_ignore_ascii_case("authorization")
+                    })
+                    .map(|h| h.value.as_str().to_string());
+                seen_flag.lock().unwrap().push(auth);
+                let _ =
+                    request.respond(tiny_http::Response::from_string("ok").with_status_code(200));
+            }
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let transport =
+            Transport::open_with_token(&base, Some("client-secret")).expect("open transport");
+        transport.list_refs().ok();
+
+        let _ = handle.join();
+        let auths = seen.lock().unwrap();
+        assert_eq!(auths.len(), 1);
+        assert_eq!(auths[0].as_deref(), Some("Bearer client-secret"));
     }
 }

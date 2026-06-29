@@ -172,7 +172,7 @@ When conflicts cannot be merged structurally, `merge --resolve path:ours|theirs`
 
 ## Network sync
 
-Remotes are stored in `.astvcs/remotes.json`. Remote-tracking branch tips live under `.astvcs/refs/remotes/<name>/`.
+Remotes are stored in `.astvcs/remotes.json`. Remote-tracking branch tips live under `.astvcs/refs/remotes/<name>/`. HTTP remotes may include an optional bearer token in `remotes.json` (stored in plaintext; file permissions are the operator's responsibility). Local path and `file://` remotes ignore tokens.
 
 Supported remote URLs:
 
@@ -186,6 +186,8 @@ Sync transfers content-addressed objects only: blobs, state manifests, timeline 
 HTTP API: `GET /v1/refs/tags` returns a JSON map of tag name to state id; `GET`/`PUT`/`HEAD /v1/refs/tags/{name}` read or overwrite a tag tip as plain text.
 
 The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, and repository config.
+
+**HTTP authentication.** `astvcs serve` accepts an optional bearer token via `--token` or the `ASTVCS_SERVE_TOKEN` environment variable (CLI wins when both are set). With no token configured, the server is open for local development. When a token is configured, the server fails closed: `PUT` on `/v1/*` always requires `Authorization: Bearer <token>`; `GET` and `HEAD` require the token unless `--public-read` is set. Wrong or missing credentials return HTTP 401 with a plain text body. Token comparison uses constant-time equality. The HTTP client transport sends the stored remote token on every request when configured. Local file remotes remain unrestricted.
 
 ## Source layout
 
