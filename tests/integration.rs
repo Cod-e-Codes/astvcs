@@ -2197,3 +2197,136 @@ fn parse_fallback_verbose_notice_detail() {
     );
     trace::set_verbose(false);
 }
+
+#[test]
+fn repack_roundtrip_and_fsck() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("init").unwrap();
+    fs::write(dir.path().join("lib.rs"), "pub fn hi() {}\n").unwrap();
+    repo.commit("second").unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["repack"]);
+    assert_astvcs_ok(&out, "repack");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("repack: packed"), "{stdout}");
+
+    let repo = Repo::open(dir.path()).unwrap();
+    assert!(repo.working_tree_is_clean().unwrap());
+
+    let fsck = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert_astvcs_ok(&fsck, "fsck after repack");
+    assert!(
+        String::from_utf8_lossy(&fsck.stdout).contains("repository ok"),
+        "{}",
+        String::from_utf8_lossy(&fsck.stdout)
+    );
+}
+
+#[test]
+fn gc_preserves_packed_blobs() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("kept", None).unwrap();
+    repo.checkout_branch("kept").unwrap();
+    fs::write(dir.path().join("note.txt"), "remote kept\n").unwrap();
+    let kept_tip = repo.commit("kept commit").unwrap().state_id;
+    repo.create_branch("orphan", None).unwrap();
+    repo.checkout_branch("orphan").unwrap();
+    fs::write(dir.path().join("orphan.txt"), "drop me\n").unwrap();
+    repo.commit("orphan commit").unwrap();
+    repo.checkout_branch("main").unwrap();
+    fs::create_dir_all(repo.astvcs_dir().join("refs/remotes/origin")).unwrap();
+    repo.write_remote_ref("origin", "kept", &kept_tip).unwrap();
+    repo.remove_branch("kept").unwrap();
+    repo.remove_branch("orphan").unwrap();
+
+    let kept_blob = repo
+        .load_manifest(&kept_tip)
+        .unwrap()
+        .get("note.txt")
+        .map(|e| e.blob.clone())
+        .unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["repack"]),
+        "repack before gc",
+    );
+    assert!(repo.has_blob(&kept_blob));
+
+    let prune = run_astvcs(Some(dir.path()), &["gc", "--prune"]);
+    assert_astvcs_ok(&prune, "gc --prune with packed blobs");
+    assert!(
+        String::from_utf8_lossy(&prune.stdout).contains("removed"),
+        "{}",
+        String::from_utf8_lossy(&prune.stdout)
+    );
+    assert!(repo.has_blob(&kept_blob));
+}
+
+#[test]
+fn repack_fetch_push_roundtrip() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
+    upstream_repo.commit("v1").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(upstream.path()), &["repack"]),
+        "repack upstream",
+    );
+
+    let clone_dir = TempDir::new().unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(
+            None,
+            &[
+                "clone",
+                upstream.path().to_str().unwrap(),
+                clone_dir.path().to_str().unwrap(),
+            ],
+        ),
+        "clone from repacked upstream",
+    );
+    assert_eq!(
+        fs::read_to_string(clone_dir.path().join("note.txt")).unwrap(),
+        "v1\n"
+    );
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Test User",
+                "--email",
+                "test@example.com",
+            ],
+        ),
+        "identity set",
+    );
+    fs::write(clone_dir.path().join("note.txt"), "v2\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(clone_dir.path()), &["commit", "-m", "v2"]),
+        "commit v2",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &["push", "origin", "--branch", "main"],
+        ),
+        "push after repack",
+    );
+    assert_eq!(
+        upstream_repo.head_state().unwrap(),
+        Repo::open(clone_dir.path()).unwrap().head_state().unwrap()
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(clone_dir.path()), &["fsck"]),
+        "fsck clone after push from repacked upstream",
+    );
+}

@@ -44,6 +44,7 @@ Global flags:
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
 | `gc [--prune]` | Report unreachable blobs (default dry-run); `--prune` deletes them |
+| `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only, exits non-zero when issues are found |
 
 Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, and `revert` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
@@ -132,6 +133,14 @@ After `--prune` with nothing to do:
 gc: examined 3 blob(s); nothing to prune
 ```
 
+### `repack`
+
+Packs all loose blobs under `.astvcs/blobs/` into zstd-compressed pack files under `.astvcs/packs/`, updates `packs/index.json`, and removes the loose copies. Safe to run online under the repository lock. New commits continue writing loose blobs until the next `repack`. Content-addressed blob ids are unchanged.
+
+```text
+repack: packed 12 blob(s); removed 12 loose file(s); 48.2 KiB -> 9.1 KiB on disk
+```
+
 ### `fsck`
 
 Read-only integrity check. Never modifies refs, HEAD, timeline, blobs, `index.json`, or the working tree. Exits with code 1 when any issue is found.
@@ -142,6 +151,7 @@ Read-only integrity check. Never modifies refs, HEAD, timeline, blobs, `index.js
 | Branch or remote-tracking ref points to a state with no timeline entry | `dangling ref` |
 | `HEAD` names a branch with no `refs/heads/` file | `HEAD branch missing` |
 | `index.json` `state_id` or paths disagree with HEAD, or index present while HEAD is invalid | `index inconsistent` |
+| Pack index entry fails to decompress or hash does not match blob id | `pack corrupt` |
 | `.astvcs-tmp` file with no canonical target (not cleaned by normal commands) | `orphan temp file` |
 
 Clean repository:

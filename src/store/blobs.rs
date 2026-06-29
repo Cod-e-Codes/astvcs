@@ -1,5 +1,6 @@
 use crate::frontend::FileContent;
 use crate::store::atomic;
+use crate::store::pack::{PackStore, RepackReport, verify_blob_hash};
 use crate::trace;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -10,18 +11,27 @@ pub type BlobId = String;
 const BLOBS_DIR: &str = "blobs";
 
 pub struct BlobStore {
-    root: PathBuf,
+    astvcs_root: PathBuf,
 }
 
 impl BlobStore {
     pub fn new(astvcs_root: impl AsRef<Path>) -> Self {
         Self {
-            root: astvcs_root.as_ref().join(BLOBS_DIR),
+            astvcs_root: astvcs_root.as_ref().to_path_buf(),
         }
     }
 
+    fn blobs_root(&self) -> PathBuf {
+        self.astvcs_root.join(BLOBS_DIR)
+    }
+
+    fn packs(&self) -> PackStore {
+        PackStore::new(&self.astvcs_root)
+    }
+
     pub fn ensure_dirs(&self) -> Result<(), String> {
-        fs::create_dir_all(&self.root).map_err(|e| e.to_string())
+        fs::create_dir_all(self.blobs_root()).map_err(|e| e.to_string())?;
+        self.packs().ensure_dirs()
     }
 
     pub fn hash_content(content: &FileContent) -> Result<BlobId, String> {
@@ -34,11 +44,11 @@ impl BlobStore {
     pub fn write(&self, content: &FileContent) -> Result<BlobId, String> {
         self.ensure_dirs()?;
         let id = Self::hash_content(content)?;
-        let path = self.blob_path(&id);
-        if path.exists() {
+        if self.contains(&id) {
             trace::notice(format!("blob {id}: already stored (deduplicated)"));
             return Ok(id);
         }
+        let path = self.blob_path(&id);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -49,36 +59,31 @@ impl BlobStore {
     }
 
     pub fn read(&self, id: &BlobId) -> Result<FileContent, String> {
-        let path = self.blob_path(id);
-        let bytes = fs::read(&path).map_err(|e| format!("blob {id}: {e}"))?;
+        let bytes = self.read_bytes(id)?;
         serde_json::from_slice(&bytes).map_err(|e| e.to_string())
     }
 
     pub fn contains(&self, id: &BlobId) -> bool {
-        self.blob_path(id).exists()
+        self.blob_path(id).exists() || self.packs().contains(id)
     }
 
     pub fn read_bytes(&self, id: &BlobId) -> Result<Vec<u8>, String> {
         let path = self.blob_path(id);
-        fs::read(&path).map_err(|e| format!("blob {id}: {e}"))
+        if path.is_file() {
+            return fs::read(&path).map_err(|e| format!("blob {id}: {e}"));
+        }
+        self.packs().read_bytes(id)
     }
 
     /// Store pre-serialized blob bytes when the id matches the content hash.
     pub fn write_bytes(&self, id: &BlobId, bytes: &[u8]) -> Result<(), String> {
-        let computed = {
-            let mut hasher = Sha256::new();
-            hasher.update(bytes);
-            hex::encode(hasher.finalize())
-        };
-        if computed != *id {
-            return Err(format!("blob id mismatch: expected {id}, got {computed}"));
-        }
+        verify_blob_hash(id, bytes)?;
         self.ensure_dirs()?;
-        let path = self.blob_path(id);
-        if path.exists() {
+        if self.contains(id) {
             trace::notice(format!("blob {id}: already stored (deduplicated)"));
             return Ok(());
         }
+        let path = self.blob_path(id);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -87,38 +92,101 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Returns on-disk byte length when the blob file exists.
+    /// Returns on-disk byte length when the blob exists (loose file or packed entry).
     pub fn file_size(&self, id: &BlobId) -> Result<u64, String> {
         let path = self.blob_path(id);
-        fs::metadata(&path)
-            .map(|m| m.len())
-            .map_err(|e| e.to_string())
+        if path.is_file() {
+            return fs::metadata(&path)
+                .map(|m| m.len())
+                .map_err(|e| e.to_string());
+        }
+        self.packs().on_disk_size(id)
     }
 
     fn blob_path(&self, id: &BlobId) -> PathBuf {
         let shard = if id.len() >= 2 { &id[..2] } else { "00" };
-        self.root.join(shard).join(format!("{id}.json"))
+        self.blobs_root().join(shard).join(format!("{id}.json"))
     }
 
-    /// List every blob id stored on disk.
+    /// List every blob id stored on disk (loose and packed).
     pub fn list_all_ids(&self) -> Result<Vec<BlobId>, String> {
         self.ensure_dirs()?;
         let mut ids = Vec::new();
-        list_blob_ids_recursive(&self.root, &mut ids)?;
+        list_blob_ids_recursive(&self.blobs_root(), &mut ids)?;
+        for packed in self.packs().list_ids()? {
+            if !ids.iter().any(|id| id == &packed) {
+                ids.push(packed);
+            }
+        }
         ids.sort();
         Ok(ids)
     }
 
-    /// Remove a blob file. Returns bytes reclaimed.
+    /// Remove a blob from loose storage and/or the pack index. Returns bytes reclaimed.
     pub fn remove(&self, id: &BlobId) -> Result<u64, String> {
+        let mut reclaimed = 0u64;
         let path = self.blob_path(id);
-        if !path.is_file() {
-            return Ok(0);
+        if path.is_file() {
+            reclaimed += fs::metadata(&path).map_err(|e| e.to_string())?.len();
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
         }
-        let size = fs::metadata(&path).map_err(|e| e.to_string())?.len();
-        fs::remove_file(&path).map_err(|e| e.to_string())?;
-        Ok(size)
+        reclaimed += self.packs().remove(id)?;
+        Ok(reclaimed)
     }
+
+    /// Pack all loose blobs into pack files and remove the loose copies.
+    pub fn repack(&self) -> Result<RepackReport, String> {
+        self.ensure_dirs()?;
+        let loose_ids = list_loose_ids(&self.blobs_root())?;
+        if loose_ids.is_empty() {
+            return Ok(RepackReport {
+                blobs_packed: 0,
+                loose_removed: 0,
+                bytes_before: 0,
+                bytes_after: 0,
+            });
+        }
+
+        let mut blobs = Vec::with_capacity(loose_ids.len());
+        let mut bytes_before = 0u64;
+        for id in &loose_ids {
+            let path = self.blob_path(id);
+            let bytes = fs::read(&path).map_err(|e| format!("read loose blob {id}: {e}"))?;
+            verify_blob_hash(id, &bytes)?;
+            bytes_before += bytes.len() as u64;
+            blobs.push((id.clone(), bytes));
+        }
+        blobs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let store = self.packs();
+        let lookup = |id: &str| {
+            blobs
+                .iter()
+                .find(|(blob_id, _)| blob_id == id)
+                .map(|(_, bytes)| bytes.clone())
+        };
+        let mut report = store.pack_loose_blobs(&blobs, &lookup)?;
+
+        let mut loose_removed = 0usize;
+        for id in &loose_ids {
+            let path = self.blob_path(id);
+            if path.is_file() {
+                fs::remove_file(&path).map_err(|e| e.to_string())?;
+                loose_removed += 1;
+            }
+        }
+
+        report.loose_removed = loose_removed;
+        report.bytes_before = bytes_before;
+        Ok(report)
+    }
+}
+
+fn list_loose_ids(blobs_root: &Path) -> Result<Vec<BlobId>, String> {
+    let mut ids = Vec::new();
+    list_blob_ids_recursive(blobs_root, &mut ids)?;
+    ids.sort();
+    Ok(ids)
 }
 
 fn list_blob_ids_recursive(dir: &Path, out: &mut Vec<BlobId>) -> Result<(), String> {
@@ -184,5 +252,33 @@ mod tests {
         let id = store.write(&content).unwrap();
         let loaded = store.read(&id).unwrap();
         assert_eq!(content, loaded);
+    }
+
+    #[test]
+    fn repack_preserves_read_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::new(dir.path());
+        let a = store
+            .write(&FileContent::Text(TextBlob::new("alpha\n".into())))
+            .unwrap();
+        let b = store
+            .write(&FileContent::Text(TextBlob::new("beta\n".into())))
+            .unwrap();
+        let report = store.repack().unwrap();
+        assert_eq!(report.blobs_packed, 2);
+        assert_eq!(report.loose_removed, 2);
+        assert!(!store.blob_path(&a).exists());
+        assert!(!store.blob_path(&b).exists());
+        assert!(store.contains(&a));
+        assert!(store.contains(&b));
+        assert_eq!(
+            store.read(&a).unwrap(),
+            FileContent::Text(TextBlob::new("alpha\n".into()))
+        );
+        assert_eq!(
+            store.read(&b).unwrap(),
+            FileContent::Text(TextBlob::new("beta\n".into()))
+        );
+        assert_eq!(store.list_all_ids().unwrap().len(), 2);
     }
 }

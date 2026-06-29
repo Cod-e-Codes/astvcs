@@ -125,6 +125,7 @@ enum Commands {
         prune: bool,
     },
     Fsck,
+    Repack,
     Identity {
         #[command(subcommand)]
         action: IdentityAction,
@@ -561,6 +562,11 @@ fn run(cli: Cli) -> RepoResult<()> {
                     "repository integrity check failed",
                 ));
             }
+        }
+        Commands::Repack => {
+            let repo = Repo::open(&root)?;
+            let report = repo.repack()?;
+            print!("{}", report.format_output());
         }
     }
     Ok(())

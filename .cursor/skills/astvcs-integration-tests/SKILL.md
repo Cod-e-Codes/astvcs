@@ -55,6 +55,7 @@ assert!(out.status.success());
 - `sequential_acquire_after_release_on_same_thread` guards back-to-back in-process repo calls on Linux (see `src/store/lock.rs`).
 - Stray `.astvcs-tmp` files from a prior crash are removed when the canonical file exists (see `stray_temp_file_cleaned_on_next_locked_command`).
 - `gc` defaults to dry-run; `--prune` deletes only blobs unreachable from ref tips; timeline entries are kept (see `gc_*` tests in `store/integrity.rs`, `cli_gc_dry_run_and_prune`).
+- `repack` packs loose blobs into `.astvcs/packs/` under the repo lock; reads fall back to pack index after loose files are removed (see `repack_roundtrip_and_fsck`, `gc_preserves_packed_blobs`, `repack_fetch_push_roundtrip`).
 - `fsck` is report-only with no `--repair`; clean repos print `fsck: repository ok` (see `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`).
 - `gc` and `fsck` fail fast under external lock with the same `repository is locked by another process` message (see `cli_gc_and_fsck_fail_under_external_lock`).
 - `commit`, `merge`, and `revert` require configured author identity (`identity set` or env vars); see `commit_without_identity_fails_with_actionable_error`.

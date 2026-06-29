@@ -7,6 +7,7 @@ mod integrity;
 mod lock;
 mod manifest;
 mod merge_resolve;
+mod pack;
 mod reachability;
 mod repo;
 mod scan_cache;
@@ -16,6 +17,7 @@ mod working;
 
 pub use integrity::{FsckFinding, FsckKind, FsckReport, GcReport};
 pub use lock::RepoLockGuard;
+pub use pack::RepackReport;
 pub use reachability::{ROOT_STATE_ID, Reachability};
 
 pub use blobs::{BlobId, BlobStore};

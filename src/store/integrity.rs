@@ -1,6 +1,7 @@
 use crate::store::atomic;
 use crate::store::error::{RepoError, RepoResult};
 use crate::store::manifest::ManifestMap;
+use crate::store::pack::PackStore;
 use crate::store::reachability::{Reachability, reachable_from_tips};
 use crate::store::repo::IndexEntry;
 use crate::store::{Repo, StateId};
@@ -52,6 +53,7 @@ pub enum FsckKind {
     IndexInconsistent,
     OrphanTempFile,
     MissingStateManifest,
+    PackCorrupt,
 }
 
 impl FsckKind {
@@ -63,6 +65,7 @@ impl FsckKind {
             Self::IndexInconsistent => "index inconsistent",
             Self::OrphanTempFile => "orphan temp file",
             Self::MissingStateManifest => "missing state manifest",
+            Self::PackCorrupt => "pack corrupt",
         }
     }
 }
@@ -196,6 +199,12 @@ impl Repo {
         Ok(report)
     }
 
+    /// Pack loose blobs into compressed pack files and remove loose copies.
+    pub fn repack(&self) -> RepoResult<super::RepackReport> {
+        let _lock = self.repo_lock()?;
+        self.blobs_store().repack().map_err(RepoError::from_message)
+    }
+
     /// Check repository consistency without modifying anything.
     pub fn fsck(&self) -> RepoResult<FsckReport> {
         let _lock = self.repo_lock()?;
@@ -204,6 +213,7 @@ impl Repo {
         findings.extend(check_head_branch(self)?);
         findings.extend(check_refs(self)?);
         findings.extend(check_timeline_and_blobs(self)?);
+        findings.extend(check_pack_integrity(self)?);
         findings.extend(check_orphan_temps(self.root_path())?);
 
         let head_result = self.head_state_unlocked();
@@ -372,6 +382,20 @@ fn check_timeline_and_blobs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     Ok(findings)
 }
 
+fn check_pack_integrity(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
+    let packs = PackStore::new(repo.astvcs_dir());
+    let problems = packs
+        .verify_all_entries()
+        .map_err(RepoError::from_message)?;
+    Ok(problems
+        .into_iter()
+        .map(|detail| FsckFinding {
+            kind: FsckKind::PackCorrupt,
+            detail,
+        })
+        .collect())
+}
+
 fn check_index(
     head: &StateId,
     head_manifest: &ManifestMap,
@@ -512,5 +536,59 @@ mod tests {
         let report = repo.fsck().unwrap();
         assert!(report.is_clean());
         assert!(report.format_output().contains("repository ok"));
+    }
+
+    #[test]
+    fn gc_preserves_packed_blobs() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("kept", None).unwrap();
+        repo.checkout_branch("kept").unwrap();
+        fs::write(dir.path().join("note.txt"), "remote kept\n").unwrap();
+        let kept_tip = repo.commit("kept commit").unwrap().state_id;
+        repo.create_branch("orphan", None).unwrap();
+        repo.checkout_branch("orphan").unwrap();
+        fs::write(dir.path().join("orphan.txt"), "drop me\n").unwrap();
+        let _orphan_tip = repo.commit("orphan commit").unwrap().state_id;
+        repo.checkout_branch("main").unwrap();
+        fs::create_dir_all(repo.astvcs_dir().join("refs/remotes/origin")).unwrap();
+        repo.write_remote_ref("origin", "kept", &kept_tip).unwrap();
+        repo.remove_branch("kept").unwrap();
+        repo.remove_branch("orphan").unwrap();
+
+        let kept_blob = repo
+            .load_manifest(&kept_tip)
+            .unwrap()
+            .get("note.txt")
+            .map(|e| e.blob.clone())
+            .unwrap();
+
+        repo.repack().unwrap();
+        let shard = &kept_blob[..2];
+        let loose_path = repo
+            .astvcs_dir()
+            .join("blobs")
+            .join(shard)
+            .join(format!("{kept_blob}.json"));
+        assert!(!loose_path.exists());
+        assert!(repo.blobs_store().contains(&kept_blob));
+
+        let report = repo.gc(true).unwrap();
+        assert!(report.blobs_removed >= 1);
+        assert!(repo.blobs_store().contains(&kept_blob));
+        assert!(!repo.blobs_store().list_all_ids().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fsck_clean_after_repack() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("init").unwrap();
+        fs::write(dir.path().join("lib.rs"), "pub fn hi() {}\n").unwrap();
+        repo.commit("second").unwrap();
+        repo.repack().unwrap();
+        let report = repo.fsck().unwrap();
+        assert!(report.is_clean());
     }
 }
