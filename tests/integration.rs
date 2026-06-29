@@ -3460,3 +3460,61 @@ fn cherry_pick_from_remote_tracking_ref() {
     let clone_repo = Repo::open(clone_dir.path()).unwrap();
     assert!(clone_repo.working_tree_is_clean().unwrap());
 }
+
+#[test]
+fn blame_linear_two_commits() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    set_identity(&repo, "Alice", "alice@example.com", false).unwrap();
+
+    fs::write(dir.path().join("notes.txt"), "line one\nline two\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "add notes"]),
+        "first commit",
+    );
+
+    fs::write(
+        dir.path().join("notes.txt"),
+        "line one\nline two changed\nline three\n",
+    )
+    .unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "edit and append"]),
+        "second commit",
+    );
+
+    let out = run_astvcs(Some(dir.path()), &["blame", "notes.txt"]);
+    assert_astvcs_ok(&out, "blame notes.txt");
+    let blame = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        blame.contains("add notes"),
+        "first line should blame first commit: {blame}"
+    );
+    assert!(
+        blame.contains("edit and append"),
+        "changed and appended lines should blame second commit: {blame}"
+    );
+
+    let lines: Vec<&str> = blame.lines().collect();
+    assert_eq!(
+        lines.len(),
+        6,
+        "expected 3 blame pairs (header+content): {blame}"
+    );
+
+    assert!(lines[0].contains("add notes"));
+    assert_eq!(lines[1], "line one");
+
+    assert!(lines[2].contains("edit and append"));
+    assert_eq!(lines[3], "line two changed");
+
+    assert!(lines[4].contains("edit and append"));
+    assert_eq!(lines[5], "line three");
+
+    let blame_lines = repo.blame("notes.txt").unwrap();
+    assert_eq!(blame_lines.len(), 3);
+    assert_eq!(blame_lines[0].message, "add notes");
+    assert_eq!(blame_lines[1].message, "edit and append");
+    assert_eq!(blame_lines[2].message, "edit and append");
+}

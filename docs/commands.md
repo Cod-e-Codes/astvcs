@@ -47,6 +47,7 @@ Global flags:
 | `cherry-pick <ref> -m <msg>` | Apply a single state's changes onto HEAD as a new commit |
 | `cherry-pick <ref> -m <msg> --force` | Cherry-pick when the working tree is dirty (warns per clobbered path) |
 | `log [-n N]` | Walk timeline history (default 20 entries); shows author when present |
+| `blame <path>` | Annotate each line with the commit that last changed it (linear first-parent history) |
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
@@ -132,6 +133,17 @@ v1 does not include an interactive rebase editor or commit reordering.
 `cherry-pick <ref> -m <msg>` applies the changes introduced by a single state onto HEAD as a new commit. Resolves `<ref>` like other commands (branch, tag, remote-tracking ref, or state id). Refuses merge commits and the root empty state. Refuses when staging is non-empty or the working tree is dirty unless `--force`. On conflict, aborts with no side effects (HEAD, refs, disk, and timeline unchanged), same contract as `merge`. On success, writes a new state with the user message and current author identity, materializes it, and updates the branch tip or detached HEAD.
 
 Three-way roles match rebase replay geometry (`base` = parent of the cherry-picked commit, `left` = HEAD, `right` = cherry-picked commit). Unlike `revert` (which inverts roles: `base` = target, `left` = parent, `right` = HEAD), cherry-pick applies **right vs base** onto **left**.
+
+### `blame`
+
+`blame <path>` prints one annotation block per source line (git-blame style):
+
+```
+<short_state_id> (<author_name> <author_email> <timestamp>) <message>
+<line content>
+```
+
+The short state id is the first 8 characters of the 64-character state id. Blame walks linear first-parent history from HEAD, comparing parent vs child file content at each step with a line-oriented diff. Lines introduced or modified in a commit are attributed to that commit; unchanged lines are traced further back. AST files are unparsed to text for line-based blame. Binary files and symlinks error with `blame does not support binary files` or `blame does not support symlinks`. Merge commits in the ancestry block further walk with an error.
 
 ### Client hooks
 

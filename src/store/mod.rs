@@ -1,4 +1,5 @@
 pub(crate) mod atomic;
+mod blame;
 mod blobs;
 mod cherry_pick;
 pub mod error;
@@ -29,6 +30,7 @@ pub use lock::RepoLockGuard;
 pub use pack::RepackReport;
 pub use reachability::{ROOT_STATE_ID, Reachability};
 
+pub use blame::BlameLine;
 pub use blobs::{BlobId, BlobStore};
 pub use error::{RepoError, RepoErrorKind, RepoResult};
 pub use history::{ancestors, merge_base, walk_history};

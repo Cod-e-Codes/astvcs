@@ -120,6 +120,9 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "20")]
         limit: usize,
     },
+    Blame {
+        path: String,
+    },
     Remote {
         #[command(subcommand)]
         action: RemoteAction,
@@ -708,6 +711,20 @@ fn run(cli: Cli) -> RepoResult<()> {
                     }
                 }
                 println!();
+            }
+        }
+        Commands::Blame { path } => {
+            let repo = Repo::open(&root)?;
+            for line in repo.blame(&path)? {
+                println!(
+                    "{} ({} {} {}) {}",
+                    line.short_state_id(),
+                    line.author_name,
+                    line.author_email,
+                    line.timestamp,
+                    line.message
+                );
+                println!("{}", line.content);
             }
         }
         Commands::Identity { action } => {

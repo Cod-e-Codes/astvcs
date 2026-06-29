@@ -33,6 +33,7 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 | (CLI-only) | `rebase_linear_success` | Linear feature branch replayed onto updated main |
 | (CLI-only) | `rebase_conflict_abort_restores`, `rebase_conflict_continue` | Replay conflict, abort restore, and `--resolve` on continue |
 | (CLI-only) | `cherry_pick_clean_commit`, `cherry_pick_conflict_leaves_head_unchanged`, `cherry_pick_from_remote_tracking_ref` | Cherry-pick success, conflict rollback, remote-tracking ref |
+| (CLI-only) | `blame_linear_two_commits` | Line blame attributes edits to correct commits |
 
 ## Workflow demo
 

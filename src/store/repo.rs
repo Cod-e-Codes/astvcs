@@ -2650,7 +2650,7 @@ impl Repo {
     }
 }
 
-fn normalize_repo_path(raw: &str) -> RepoResult<String> {
+pub(crate) fn normalize_repo_path(raw: &str) -> RepoResult<String> {
     let path = raw.replace('\\', "/");
     if path.is_empty() || path.contains("..") {
         return Err(RepoError::invalid_input(format!("invalid path: {raw}")));

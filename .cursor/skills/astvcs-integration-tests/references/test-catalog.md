@@ -58,6 +58,7 @@
 | `cherry_pick_clean_commit` | Cherry-pick feature commit onto diverged main |
 | `cherry_pick_conflict_leaves_head_unchanged` | Conflicting cherry-pick aborts without side effects |
 | `cherry_pick_from_remote_tracking_ref` | Cherry-pick `origin/feature` after fetch |
+| `blame_linear_two_commits` | Line blame attributes edits to correct commits in linear history |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |
