@@ -150,7 +150,7 @@ Supported remote URLs:
 | Local path | `C:/repos/project` or `file:///C:/repos/project` |
 | HTTP | `http://127.0.0.1:9421` (from `astvcs serve`) |
 
-Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, and branch refs. `fetch` downloads missing history and updates remote-tracking refs; it does not change local branches or the working tree. Use `reset`, `checkout --state`, or `merge` with a remote-tracking ref (for example `origin/main`) to work on fetched commits. `push` uploads missing objects and fast-forwards the remote branch (use `--force` to override). `clone` initializes a repository, fetches from the remote, and checks out the default branch.
+Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, and branch refs. `fetch` downloads missing history and updates remote-tracking refs; it does not change local branches or the working tree. `pull` is fetch followed by merge of the remote-tracking branch into the current branch. Use `reset` or `checkout --state` with a remote-tracking ref (for example `origin/main`) to inspect fetched commits without merging. `push` uploads missing objects and fast-forwards the remote branch (use `--force` to override). `clone` initializes a repository, fetches from the remote, and checks out the default branch.
 
 The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, and repository config.
 
@@ -227,6 +227,10 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `cli_reset_hard_soft_and_force` | Hard/soft reset, drift repair, force clobber warnings |
 | `cli_revert_and_dry_run` | Revert conflicts, dry-run, and successful undo |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | `origin/main`-style ref resolution |
+| `pull_merges_upstream_changes` | `pull` fetches and merges upstream commits |
+| `pull_detached_head_requires_branch` | `pull` on detached HEAD requires `--branch` |
+| `pull_merge_conflict_after_fetch` | Fetch succeeds; merge conflict leaves local branch unchanged |
+| `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | Lock held externally: CLI fails fast with lock path |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Second writer gets lock error; succeeds after release (unit, `src/store/repo.rs`) |
 | `sequential_acquire_after_release_on_same_thread` | Back-to-back lock acquire on same thread (unit, `src/store/lock.rs`) |

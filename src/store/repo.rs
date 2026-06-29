@@ -1404,7 +1404,7 @@ impl Repo {
 
     fn plan_merge_unlocked(&self, branch: &str) -> RepoResult<MergePlan> {
         let head = self.head_state_unlocked()?;
-        let other = self.read_branch_ref(branch)?;
+        let other = self.resolve_state_ref_unlocked(branch)?;
         if head == other {
             return Err("already up to date".into());
         }
@@ -3602,6 +3602,27 @@ mod tests {
         repo.write_remote_ref("origin", "main", &v1).unwrap();
 
         assert_eq!(repo.resolve_state_ref("origin/main").unwrap(), v1);
+    }
+
+    #[test]
+    fn merge_remote_tracking_ref() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("v1").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        repo.checkout_branch("feature").unwrap();
+        fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
+        let v2 = repo.commit("v2 on feature").unwrap().state_id;
+        repo.checkout_branch("main").unwrap();
+        repo.write_remote_ref("origin", "main", &v2).unwrap();
+
+        let merged = repo.merge_branch("origin/main", "merge upstream").unwrap();
+        assert_eq!(merged, v2);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "v2\n"
+        );
+        assert!(repo.working_tree_is_clean().unwrap());
     }
 
     #[test]

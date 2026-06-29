@@ -42,6 +42,7 @@ Global flags:
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
 | `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs |
+| `pull <remote> [--branch <name>] [-m <msg>] [--force] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
 | `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch |
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
@@ -49,7 +50,7 @@ Global flags:
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, and `revert` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, and `merge` include local branch names, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### `branch remove`
 
@@ -109,7 +110,9 @@ Paths added in the target state and modified again on HEAD before revert produce
 
 ### Network sync
 
-`fetch` updates `.astvcs/refs/remotes/<remote>/<branch>` only. To work on fetched commits, use `reset`, `checkout --state`, or `merge` with the remote-tracking ref (for example `origin/main`).
+`fetch` updates `.astvcs/refs/remotes/<remote>/<branch>` only. To work on fetched commits without merging, use `reset` or `checkout --state` with the remote-tracking ref (for example `origin/main`).
+
+`pull <remote>` runs `fetch` then merges the remote-tracking ref (`<remote>/<branch>`) into the current branch. Default branch name is the checked-out branch (same as `push`); detached HEAD requires `--branch`. Default merge message is `Merge <remote>/<branch>`; override with `-m`. On fetch failure, no merge is attempted. On fetch success with merge conflicts, remote-tracking refs are updated but the local branch tip and working tree are unchanged (same abort guarantee as `merge`). When already up to date after fetch, `pull` succeeds with an `Already up to date` message. Merge failure after a successful fetch prints `warning: pull: merge failed after successful fetch` on stderr.
 
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 

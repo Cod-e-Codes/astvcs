@@ -1285,6 +1285,146 @@ fn resolve_remote_ref_for_diff_merge_base_and_checkout() {
 }
 
 #[test]
+fn pull_merges_upstream_changes() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
+    upstream_repo.commit("v1").unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(
+            None,
+            &[
+                "clone",
+                upstream.path().to_str().unwrap(),
+                clone_dir.path().to_str().unwrap(),
+            ],
+        ),
+        "clone",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(clone_dir.path()),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Test User",
+                "--email",
+                "test@example.com",
+            ],
+        ),
+        "identity set",
+    );
+
+    fs::write(upstream.path().join("note.txt"), "v2\n").unwrap();
+    upstream_repo.commit("v2").unwrap();
+
+    let out = run_astvcs(Some(clone_dir.path()), &["pull", "origin"]);
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Fetched origin/main"));
+    assert!(stdout.contains("Merged origin/main"));
+    assert_eq!(
+        fs::read_to_string(clone_dir.path().join("note.txt")).unwrap(),
+        "v2\n"
+    );
+    let clone_repo = Repo::open(clone_dir.path()).unwrap();
+    assert!(clone_repo.working_tree_is_clean().unwrap());
+    assert_eq!(
+        clone_repo.head_state().unwrap(),
+        upstream_repo.head_state().unwrap()
+    );
+}
+
+#[test]
+fn pull_detached_head_requires_branch() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(upstream.path().join("note.txt"), "v1\n").unwrap();
+    upstream_repo.commit("v1").unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    run_astvcs(
+        None,
+        &[
+            "clone",
+            upstream.path().to_str().unwrap(),
+            clone_dir.path().to_str().unwrap(),
+        ],
+    );
+    let v1 = Repo::open(clone_dir.path()).unwrap().head_state().unwrap();
+    run_astvcs(Some(clone_dir.path()), &["checkout", "--state", &v1]);
+
+    let out = run_astvcs(Some(clone_dir.path()), &["pull", "origin"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("detached HEAD"));
+    assert!(stderr.contains("--branch"));
+}
+
+#[test]
+fn pull_merge_conflict_after_fetch() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    fs::write(
+        upstream.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    upstream_repo.commit("base").unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    run_astvcs(
+        None,
+        &[
+            "clone",
+            upstream.path().to_str().unwrap(),
+            clone_dir.path().to_str().unwrap(),
+        ],
+    );
+    let clone_repo = Repo::open(clone_dir.path()).unwrap();
+    set_identity(&clone_repo, "Test User", "test@example.com", false).unwrap();
+
+    fs::write(
+        clone_dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    clone_repo.commit("local edit").unwrap();
+    let head_before = clone_repo.head_state().unwrap();
+
+    fs::write(
+        upstream.path().join("main.rs"),
+        "fn foo() {\n    let z = 1;\n}\n",
+    )
+    .unwrap();
+    upstream_repo.commit("upstream edit").unwrap();
+    let upstream_tip = upstream_repo.head_state().unwrap();
+
+    let out = run_astvcs(Some(clone_dir.path()), &["pull", "origin"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("merge failed after successful fetch"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Fetched origin/main"));
+
+    let after = Repo::open(clone_dir.path()).unwrap();
+    assert_eq!(after.head_state().unwrap(), head_before);
+    assert_eq!(
+        after.read_remote_ref("origin", "main").unwrap().unwrap(),
+        upstream_tip
+    );
+    assert!(after.working_tree_is_clean().unwrap());
+}
+
+#[test]
 fn go_sum_and_ps1_status_are_quiet() {
     trace::clear_log();
     trace::clear_warned();

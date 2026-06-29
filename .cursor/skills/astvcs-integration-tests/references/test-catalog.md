@@ -38,6 +38,10 @@
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
 | `cli_revert_of_revert_restores_content` | Revert then revert the revert commit (parent state reuse) |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |
+| `pull_merges_upstream_changes` | `pull` fetches and merges upstream commits |
+| `pull_detached_head_requires_branch` | `pull` on detached HEAD requires `--branch` |
+| `pull_merge_conflict_after_fetch` | Fetch succeeds; merge conflict leaves local branch unchanged |
+| `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |
 | `sequential_acquire_after_release_on_same_thread` | Back-to-back lock acquire on same thread (unit, `src/store/lock.rs`) |

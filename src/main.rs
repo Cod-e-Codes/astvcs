@@ -120,6 +120,7 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    Pull(PullArgs),
     Clone {
         url: String,
         #[arg(default_value = ".")]
@@ -204,6 +205,19 @@ struct DiffArgs {
     right: Option<String>,
 
     path: Option<String>,
+}
+
+#[derive(Args)]
+struct PullArgs {
+    remote: String,
+    #[arg(long)]
+    branch: Option<String>,
+    #[arg(short, long)]
+    message: Option<String>,
+    #[arg(long)]
+    force: bool,
+    #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
+    resolve: Vec<String>,
 }
 
 #[derive(Args)]
@@ -611,6 +625,43 @@ fn run(cli: Cli) -> RepoResult<()> {
                 "Pushed {} to {}/{} ({})",
                 outcome.branch, remote, outcome.branch, outcome.state_id
             );
+        }
+        Commands::Pull(args) => {
+            let repo = Repo::open(&root)?;
+            let branch_name = match args.branch {
+                Some(name) => name,
+                None => repo.head_branch()?.ok_or_else(|| {
+                    RepoError::invalid_input("detached HEAD; specify --branch to pull")
+                })?,
+            };
+            let remote_ref = format!("{}/{}", args.remote, branch_name);
+            let outcome =
+                fetch(&repo, &args.remote, Some(&branch_name)).map_err(RepoError::from_message)?;
+            for (name, tip) in outcome.branches {
+                println!("Fetched {}/{} -> {tip}", args.remote, name);
+            }
+            let resolutions =
+                parse_merge_resolutions(&args.resolve).map_err(RepoError::from_message)?;
+            let message = args
+                .message
+                .unwrap_or_else(|| format!("Merge {remote_ref}"));
+            match repo.merge_branch_with_resolutions_force(
+                &remote_ref,
+                &message,
+                &resolutions,
+                args.force,
+            ) {
+                Ok(id) => {
+                    println!("Merged {remote_ref} into current branch (state {id})");
+                }
+                Err(e) if e.message == "already up to date" => {
+                    println!("Already up to date with {remote_ref}");
+                }
+                Err(e) => {
+                    trace::warn("pull: merge failed after successful fetch");
+                    return Err(e);
+                }
+            }
         }
         Commands::Clone { url, path } => {
             let (_, branch) = clone_repo(&url, &path).map_err(RepoError::from_message)?;

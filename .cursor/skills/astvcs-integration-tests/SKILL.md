@@ -77,6 +77,7 @@ assert!(out.status.success());
 - Incremental scan cache: `incremental_status_reuses_unchanged_file_reads` (unit, `store/repo.rs`); `incremental_scan_reuses_unchanged_paths`, `incremental_scan_finds_new_file_in_changed_dir` (unit, `store/walk.rs`); `verified_detects_content_change_with_unchanged_stat` (unit, `store/scan_cache.rs`); `--full-scan` on `status` and `commit`; `-v` forces full scan.
 - `default_branch` config: removing the default branch promotes `main` when present else lexicographically first remaining name (`remove_default_branch_updates_config` in `store/repo.rs` and `tests/integration.rs`); `branch create` fixes dangling default refs; `clone_uses_remote_default_branch` (unit, `network/sync.rs`) checks out upstream non-`main` default.
 - Staging index: `partial_commit_only_stages_paths`, `status_shows_staged_and_unstaged_columns`, `merge_refuses_with_staged_changes`, `checkout_force_with_staged_changes`, `reset_mixed_unstages_and_keeps_disk`, `cli_commit_empty_staging_errors`; legacy whole-tree `commit` when `staging.json` is empty and `active` is false.
+- `pull`: `pull_merges_upstream_changes`, `pull_detached_head_requires_branch`, `pull_merge_conflict_after_fetch`; `merge_remote_tracking_ref` (unit, `src/store/repo.rs`) for `merge origin/main` after fetch.
 
 ### What to avoid
 
