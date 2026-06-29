@@ -43,7 +43,7 @@ Global flags:
 | `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch |
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
-| `gc [--prune]` | Report unreachable blobs (default dry-run); `--prune` deletes them |
+| `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only, exits non-zero when issues are found |
 
@@ -51,7 +51,7 @@ Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, and `revert`
 
 ### `branch remove`
 
-Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs remain until `gc --prune` removes blobs unreachable from any ref tip; states remain reachable by id via the timeline.
+Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs remain until `gc --prune` removes blobs unreachable from any ref tip. Unreachable states remain until `gc --prune-history`; until then they stay checkoutable by state id.
 
 | Guardrail | Behavior |
 |-----------|----------|
@@ -114,23 +114,35 @@ Remote URLs may be a local repository path, a `file://` URL, or an `http://` bas
 
 ### `gc`
 
-Walks reachability from every local branch tip, remote-tracking ref tip, and detached HEAD, then reports blob store objects not referenced by any reachable state manifest. Timeline entries and state manifests are never deleted.
+Walks reachability from every local branch tip, remote-tracking ref tip, and detached HEAD. **Tier 1:** reports and optionally deletes blob store objects not referenced by any reachable state manifest (`--prune`). **Tier 2:** reports and optionally deletes unreachable timeline entries and state manifests (`--prune-history`). The root empty state is never deleted.
 
 | Flag | Behavior |
 |------|----------|
-| (none) | Dry-run: print how many blobs are unreachable and how much space `--prune` would reclaim |
-| `--prune` | Delete unreachable blob files and print how many were removed |
+| (none) | Dry-run: report unreachable blobs and unreachable states with reclaimable bytes for each tier |
+| `--prune` | Delete unreachable blob files (loose and packed) |
+| `--prune-history` | Delete unreachable `.astvcs/timeline/{id}.json` and `.astvcs/states/{id}.json` files |
+| `--prune --prune-history` | Delete both unreachable blobs and unreachable state history in one run |
+
+After `gc --prune-history`, `checkout --state <id>` fails for pruned state ids because the timeline entry is gone. States retained when history is not pruned remain checkoutable by id even when no ref names them.
 
 Example output (dry-run):
 
 ```text
 gc dry-run: 2 unreachable blob(s) (examined 5); would reclaim 1.2 KiB
+gc dry-run: 3 unreachable state(s) (examined 10); would reclaim 4.5 KiB history (use --prune-history to delete)
 ```
 
 After `--prune` with nothing to do:
 
 ```text
 gc: examined 3 blob(s); nothing to prune
+gc: 10 state(s) examined; no unreachable history
+```
+
+After `--prune-history` with removals:
+
+```text
+gc: examined 10 state(s); removed 3 unreachable; reclaimed 4.5 KiB history
 ```
 
 ### `repack`
@@ -149,6 +161,8 @@ Read-only integrity check. Never modifies refs, HEAD, timeline, blobs, `index.js
 |-------|----------------|
 | State manifest references a missing blob | `missing blob` |
 | Branch or remote-tracking ref points to a state with no timeline entry | `dangling ref` |
+| Timeline entry exists but `.astvcs/states/{id}.json` is missing | `missing state manifest` |
+| `.astvcs/states/{id}.json` exists but timeline entry is missing | `orphaned state manifest` |
 | `HEAD` names a branch with no `refs/heads/` file | `HEAD branch missing` |
 | `index.json` `state_id` or paths disagree with HEAD, or index present while HEAD is invalid | `index inconsistent` |
 | Pack index entry fails to decompress or hash does not match blob id | `pack corrupt` |
@@ -168,7 +182,7 @@ fsck: 2 issue(s) found
   missing blob: state def… path main.rs: blob 789… missing
 ```
 
-There is no `fsck --repair`. Fix ref or HEAD problems manually; use `gc --prune` for unreachable blobs after refs reflect the history you want to keep.
+There is no `fsck --repair`. Fix ref or HEAD problems manually; use `gc --prune` for unreachable blobs and optionally `gc --prune-history` for unreachable state metadata after refs reflect the history you want to keep.
 
 ### Merge conflict resolution
 

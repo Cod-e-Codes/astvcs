@@ -123,6 +123,9 @@ enum Commands {
         /// Delete unreachable blobs (default is dry-run).
         #[arg(long)]
         prune: bool,
+        /// Delete unreachable timeline entries and state manifests.
+        #[arg(long)]
+        prune_history: bool,
     },
     Fsck,
     Repack,
@@ -548,9 +551,12 @@ fn run(cli: Cli) -> RepoResult<()> {
             let repo = Repo::open(&root)?;
             serve_repo(&repo, &bind, port).map_err(RepoError::from_message)?;
         }
-        Commands::Gc { prune } => {
+        Commands::Gc {
+            prune,
+            prune_history,
+        } => {
             let repo = Repo::open(&root)?;
-            let report = repo.gc(prune)?;
+            let report = repo.gc(prune, prune_history)?;
             print!("{}", report.format_output());
         }
         Commands::Fsck => {

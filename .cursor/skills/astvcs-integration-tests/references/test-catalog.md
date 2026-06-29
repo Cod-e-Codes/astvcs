@@ -47,9 +47,9 @@
 | `parse_fallback_md_commit_stays_silent` | `.md` commit emits no warnings |
 | `parse_fallback_broken_rs_stderr_warning` | Broken `.rs` commit warns on stderr |
 | `parse_fallback_verbose_notice_detail` | `-v` adds text fallback `notice:` on commit |
-| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `gc_preserves_packed_blobs`, `fsck_clean_repository`, `fsck_clean_after_repack` | Reachability GC, repack, and fsck unit tests (`store/integrity.rs`) |
+| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `gc_preserves_packed_blobs`, `gc_prune_history_idempotent`, `gc_preserves_unreachable_states_until_prune_history`, `gc_prune_history_does_not_remove_reachable_states`, `fsck_clean_repository`, `fsck_clean_after_repack` | Reachability GC, prune-history, repack, and fsck unit tests (`store/integrity.rs`) |
 | `cli_fsck_clean_repository`, `cli_fsck_detects_corruption` | fsck clean vs corrupted fixture |
-| `cli_gc_dry_run_and_prune` | gc dry-run default; `--prune` removes unreachable blobs |
+| `cli_gc_dry_run_and_prune` | gc dry-run reports blobs and history; `--prune` removes unreachable blobs |
 | `repack_roundtrip_and_fsck` | repack loose blobs; fsck clean; working tree unchanged |
 | `gc_preserves_packed_blobs` | gc `--prune` keeps reachable packed blobs |
 | `repack_fetch_push_roundtrip` | fetch/push/clone after upstream repack |

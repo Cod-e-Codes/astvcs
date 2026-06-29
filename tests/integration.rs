@@ -1676,6 +1676,7 @@ fn cli_gc_dry_run_and_prune() {
     let dry_out = String::from_utf8_lossy(&dry.stdout);
     assert!(dry_out.contains("dry-run"), "{dry_out}");
     assert!(dry_out.contains("unreachable"), "{dry_out}");
+    assert!(dry_out.contains("state(s)"), "{dry_out}");
 
     let prune = run_astvcs(Some(dir.path()), &["gc", "--prune"]);
     assert_astvcs_ok(&prune, "gc --prune");
@@ -1700,7 +1701,12 @@ fn cli_gc_and_fsck_fail_under_external_lock() {
     let astvcs = dir.path().join(".astvcs");
     let _guard = RepoLockGuard::acquire(&astvcs).unwrap();
 
-    for cmd in [&["gc"] as &[&str], &["gc", "--prune"], &["fsck"]] {
+    for cmd in [
+        &["gc"] as &[&str],
+        &["gc", "--prune"],
+        &["gc", "--prune-history"],
+        &["fsck"],
+    ] {
         let out = run_astvcs(Some(dir.path()), cmd);
         assert!(!out.status.success(), "expected lock failure for {cmd:?}");
         let err = String::from_utf8_lossy(&out.stderr);

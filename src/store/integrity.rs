@@ -2,7 +2,7 @@ use crate::store::atomic;
 use crate::store::error::{RepoError, RepoResult};
 use crate::store::manifest::ManifestMap;
 use crate::store::pack::PackStore;
-use crate::store::reachability::{Reachability, reachable_from_tips};
+use crate::store::reachability::{ROOT_STATE_ID, Reachability, reachable_from_tips};
 use crate::store::repo::IndexEntry;
 use crate::store::{Repo, StateId};
 use std::collections::HashMap;
@@ -15,33 +15,70 @@ pub struct GcReport {
     pub blobs_removed: usize,
     pub bytes_reclaimed: u64,
     pub pruned: bool,
+    pub states_examined: usize,
+    pub states_removed: usize,
+    pub history_bytes_reclaimable: u64,
+    pub history_pruned: bool,
 }
 
 impl GcReport {
     pub fn format_output(&self) -> String {
+        let mut out = String::new();
+
         if !self.pruned {
             if self.blobs_removed == 0 {
-                return "gc dry-run: no unreachable blobs\n".into();
+                out.push_str("gc dry-run: no unreachable blobs\n");
+            } else {
+                out.push_str(&format!(
+                    "gc dry-run: {} unreachable blob(s) (examined {}); would reclaim {}\n",
+                    self.blobs_removed,
+                    self.blobs_examined,
+                    format_bytes(self.bytes_reclaimed)
+                ));
             }
-            return format!(
-                "gc dry-run: {} unreachable blob(s) (examined {}); would reclaim {}\n",
-                self.blobs_removed,
-                self.blobs_examined,
-                format_bytes(self.bytes_reclaimed)
-            );
-        }
-        if self.blobs_removed == 0 {
-            return format!(
+        } else if self.blobs_removed == 0 {
+            out.push_str(&format!(
                 "gc: examined {} blob(s); nothing to prune\n",
                 self.blobs_examined
-            );
+            ));
+        } else {
+            out.push_str(&format!(
+                "gc: examined {} blob(s); removed {} unreachable; reclaimed {}\n",
+                self.blobs_examined,
+                self.blobs_removed,
+                format_bytes(self.bytes_reclaimed)
+            ));
         }
-        format!(
-            "gc: examined {} blob(s); removed {} unreachable; reclaimed {}\n",
-            self.blobs_examined,
-            self.blobs_removed,
-            format_bytes(self.bytes_reclaimed)
-        )
+
+        if !self.history_pruned {
+            if self.states_removed == 0 {
+                out.push_str(&format!(
+                    "gc: {} state(s) examined; no unreachable history\n",
+                    self.states_examined
+                ));
+            } else {
+                out.push_str(&format!(
+                    "gc dry-run: {} unreachable state(s) (examined {}); would reclaim {} history (use --prune-history to delete)\n",
+                    self.states_removed,
+                    self.states_examined,
+                    format_bytes(self.history_bytes_reclaimable)
+                ));
+            }
+        } else if self.states_removed == 0 {
+            out.push_str(&format!(
+                "gc: examined {} state(s); no unreachable history to prune\n",
+                self.states_examined
+            ));
+        } else {
+            out.push_str(&format!(
+                "gc: examined {} state(s); removed {} unreachable; reclaimed {} history\n",
+                self.states_examined,
+                self.states_removed,
+                format_bytes(self.history_bytes_reclaimable)
+            ));
+        }
+
+        out
     }
 }
 
@@ -53,6 +90,7 @@ pub enum FsckKind {
     IndexInconsistent,
     OrphanTempFile,
     MissingStateManifest,
+    OrphanedStateManifest,
     PackCorrupt,
 }
 
@@ -65,6 +103,7 @@ impl FsckKind {
             Self::IndexInconsistent => "index inconsistent",
             Self::OrphanTempFile => "orphan temp file",
             Self::MissingStateManifest => "missing state manifest",
+            Self::OrphanedStateManifest => "orphaned state manifest",
             Self::PackCorrupt => "pack corrupt",
         }
     }
@@ -171,8 +210,10 @@ impl Repo {
             .is_file()
     }
 
-    /// Remove unreachable blobs. Dry-run unless `prune` is true.
-    pub fn gc(&self, prune: bool) -> RepoResult<GcReport> {
+    /// Remove unreachable blobs and optionally unreachable state history.
+    /// Blob deletion runs only when `prune` is true; state history deletion only
+    /// when `prune_history` is true. Default is dry-run for both tiers.
+    pub fn gc(&self, prune: bool, prune_history: bool) -> RepoResult<GcReport> {
         let _lock = self.repo_lock()?;
         let reach = self.reachability_unlocked()?;
         let store = self.blobs_store();
@@ -182,6 +223,10 @@ impl Repo {
             blobs_removed: 0,
             bytes_reclaimed: 0,
             pruned: prune,
+            states_examined: 0,
+            states_removed: 0,
+            history_bytes_reclaimable: 0,
+            history_pruned: prune_history,
         };
 
         for id in on_disk {
@@ -193,6 +238,20 @@ impl Repo {
                 report.bytes_reclaimed += store.remove(&id)?;
             } else {
                 report.bytes_reclaimed += store.file_size(&id).unwrap_or(0);
+            }
+        }
+
+        let state_ids = list_on_disk_state_ids(&self.astvcs_dir())?;
+        report.states_examined = state_ids.len();
+        for state_id in state_ids {
+            if state_id == ROOT_STATE_ID || reach.states.contains(&state_id) {
+                continue;
+            }
+            report.states_removed += 1;
+            let bytes = state_history_bytes(&self.astvcs_dir(), &state_id);
+            report.history_bytes_reclaimable += bytes;
+            if prune_history {
+                remove_state_history_files(&self.astvcs_dir(), &state_id)?;
             }
         }
 
@@ -213,6 +272,7 @@ impl Repo {
         findings.extend(check_head_branch(self)?);
         findings.extend(check_refs(self)?);
         findings.extend(check_timeline_and_blobs(self)?);
+        findings.extend(check_orphaned_state_manifests(self)?);
         findings.extend(check_pack_integrity(self)?);
         findings.extend(check_orphan_temps(self.root_path())?);
 
@@ -341,6 +401,89 @@ fn check_refs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     Ok(findings)
 }
 
+fn list_on_disk_state_ids(astvcs_dir: &Path) -> RepoResult<std::collections::HashSet<StateId>> {
+    use std::collections::HashSet;
+    let mut ids = HashSet::new();
+    for subdir in ["timeline", "states"] {
+        let dir = astvcs_dir.join(subdir);
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).map_err(|e| RepoError::from_io("read state dir", e))? {
+            let entry = entry.map_err(|e| RepoError::from_io("read state entry", e))?;
+            if !entry
+                .file_type()
+                .map_err(|e| RepoError::from_io("state file type", e))?
+                .is_file()
+            {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(state_id) = name.strip_suffix(".json") else {
+                continue;
+            };
+            ids.insert(state_id.to_string());
+        }
+    }
+    Ok(ids)
+}
+
+fn state_history_path(astvcs_dir: &Path, subdir: &str, state_id: &StateId) -> std::path::PathBuf {
+    astvcs_dir.join(subdir).join(format!("{state_id}.json"))
+}
+
+fn state_history_bytes(astvcs_dir: &Path, state_id: &StateId) -> u64 {
+    let mut bytes = 0;
+    for subdir in ["timeline", "states"] {
+        let path = state_history_path(astvcs_dir, subdir, state_id);
+        if let Ok(meta) = path.metadata() {
+            bytes += meta.len();
+        }
+    }
+    bytes
+}
+
+fn remove_state_history_files(astvcs_dir: &Path, state_id: &StateId) -> RepoResult<()> {
+    for subdir in ["timeline", "states"] {
+        let path = state_history_path(astvcs_dir, subdir, state_id);
+        if path.is_file() {
+            fs::remove_file(&path).map_err(|e| RepoError::from_io("remove state history", e))?;
+        }
+    }
+    Ok(())
+}
+
+fn check_orphaned_state_manifests(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
+    let mut findings = Vec::new();
+    let states_dir = repo.astvcs_dir().join("states");
+    if !states_dir.is_dir() {
+        return Ok(findings);
+    }
+    for entry in fs::read_dir(&states_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(state_id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if !repo.has_timeline_unlocked(&state_id.to_string()) {
+            findings.push(FsckFinding {
+                kind: FsckKind::OrphanedStateManifest,
+                detail: format!("states/{state_id}.json has no timeline entry"),
+            });
+        }
+    }
+    Ok(findings)
+}
+
 fn check_timeline_and_blobs(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     let mut findings = Vec::new();
     let timeline_dir = repo.astvcs_dir().join("timeline");
@@ -458,6 +601,7 @@ fn format_bytes(n: u64) -> String {
 mod tests {
     use super::*;
     use crate::store::Repo;
+    use crate::store::reachability::ROOT_STATE_ID;
     use tempfile::TempDir;
 
     fn sample_repo() -> (TempDir, Repo) {
@@ -471,7 +615,7 @@ mod tests {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
         repo.commit("init").unwrap();
-        let report = repo.gc(false).unwrap();
+        let report = repo.gc(false, false).unwrap();
         assert_eq!(report.blobs_removed, 0);
         assert!(report.format_output().contains("no unreachable"));
     }
@@ -503,7 +647,7 @@ mod tests {
             .unwrap();
         assert!(repo.blobs_store().contains(&kept_blob));
 
-        let report = repo.gc(true).unwrap();
+        let report = repo.gc(true, false).unwrap();
         assert!(report.blobs_removed >= 1);
         assert!(repo.blobs_store().contains(&kept_blob));
         assert!(!repo.blobs_store().list_all_ids().unwrap().is_empty());
@@ -521,8 +665,8 @@ mod tests {
         repo.checkout_branch("main").unwrap();
         repo.remove_branch("temp").unwrap();
 
-        let first = repo.gc(true).unwrap();
-        let second = repo.gc(true).unwrap();
+        let first = repo.gc(true, false).unwrap();
+        let second = repo.gc(true, false).unwrap();
         assert!(first.blobs_removed >= 1);
         assert_eq!(second.blobs_removed, 0);
         assert!(second.format_output().contains("nothing to prune"));
@@ -574,7 +718,7 @@ mod tests {
         assert!(!loose_path.exists());
         assert!(repo.blobs_store().contains(&kept_blob));
 
-        let report = repo.gc(true).unwrap();
+        let report = repo.gc(true, false).unwrap();
         assert!(report.blobs_removed >= 1);
         assert!(repo.blobs_store().contains(&kept_blob));
         assert!(!repo.blobs_store().list_all_ids().unwrap().is_empty());
@@ -590,5 +734,72 @@ mod tests {
         repo.repack().unwrap();
         let report = repo.fsck().unwrap();
         assert!(report.is_clean());
+    }
+
+    #[test]
+    fn gc_prune_history_idempotent() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("temp", None).unwrap();
+        repo.checkout_branch("temp").unwrap();
+        fs::write(dir.path().join("temp.txt"), "temporary\n").unwrap();
+        repo.commit("temp only").unwrap();
+        repo.checkout_branch("main").unwrap();
+        repo.remove_branch("temp").unwrap();
+
+        let first = repo.gc(true, true).unwrap();
+        let second = repo.gc(true, true).unwrap();
+        assert!(first.states_removed >= 1);
+        assert_eq!(second.states_removed, 0);
+        assert!(
+            second
+                .format_output()
+                .contains("no unreachable history to prune")
+        );
+    }
+
+    #[test]
+    fn gc_preserves_unreachable_states_until_prune_history() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("temp", None).unwrap();
+        repo.checkout_branch("temp").unwrap();
+        fs::write(dir.path().join("temp.txt"), "keep until prune\n").unwrap();
+        let orphan_tip = repo.commit("temp only").unwrap().state_id;
+        repo.checkout_branch("main").unwrap();
+        repo.remove_branch("temp").unwrap();
+
+        assert!(repo.load_timeline_entry(&orphan_tip).is_ok());
+        assert!(repo.load_manifest(&orphan_tip).is_ok());
+
+        let dry = repo.gc(false, false).unwrap();
+        assert!(dry.states_removed >= 1);
+        assert!(repo.load_timeline_entry(&orphan_tip).is_ok());
+
+        repo.gc(false, true).unwrap();
+        assert!(repo.load_timeline_entry(&orphan_tip).is_err());
+        assert!(repo.load_manifest(&orphan_tip).is_err());
+        assert!(repo.checkout_state(&orphan_tip).is_err());
+    }
+
+    #[test]
+    fn gc_prune_history_does_not_remove_reachable_states() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        let tip = repo.commit("base").unwrap().state_id;
+        repo.create_branch("temp", None).unwrap();
+        repo.checkout_branch("temp").unwrap();
+        fs::write(dir.path().join("temp.txt"), "orphan\n").unwrap();
+        repo.commit("temp only").unwrap();
+        repo.checkout_branch("main").unwrap();
+        repo.remove_branch("temp").unwrap();
+
+        let report = repo.gc(true, true).unwrap();
+        assert!(report.states_removed >= 1);
+        assert!(repo.load_timeline_entry(&tip).is_ok());
+        assert!(repo.load_manifest(&tip).is_ok());
+        assert!(repo.load_timeline_entry(&ROOT_STATE_ID.to_string()).is_ok());
     }
 }
