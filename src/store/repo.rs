@@ -2517,7 +2517,11 @@ impl Repo {
 
     pub fn load_config(&self) -> RepoResult<RepoConfig> {
         let _lock = self.repo_lock()?;
-        read_json(&self.astvcs_dir().join(CONFIG_FILE))
+        self.load_config_unlocked()
+    }
+
+    pub(crate) fn load_config_unlocked(&self) -> RepoResult<RepoConfig> {
+        read_json_unlocked(&self.astvcs_dir().join(CONFIG_FILE))
     }
 
     pub fn has_blob(&self, id: &str) -> bool {

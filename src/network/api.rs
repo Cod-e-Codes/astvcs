@@ -1,5 +1,5 @@
 use crate::store::timeline_ancestry;
-use crate::store::{Repo, RepoError, TimelineEntry};
+use crate::store::{Repo, RepoError, StateId, TimelineEntry};
 use std::collections::HashMap;
 use subtle::ConstantTimeEq;
 
@@ -60,7 +60,26 @@ impl ApiRequest {
     }
 }
 
+/// True when the HTTP serve layer must take the in-process write lock and advisory lock.
+pub fn is_write_request(request: &ApiRequest) -> bool {
+    request.method.eq_ignore_ascii_case("PUT")
+}
+
 pub fn dispatch(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiResponse {
+    dispatch_inner(repo, request, auth, false)
+}
+
+/// HTTP serve reads: no advisory `repo.lock`; uses unlocked repo paths so local CLI is not blocked.
+pub fn dispatch_serve_read(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiResponse {
+    dispatch_inner(repo, request, auth, true)
+}
+
+fn dispatch_inner(
+    repo: &Repo,
+    request: &ApiRequest,
+    auth: &AuthOptions,
+    serve_read: bool,
+) -> ApiResponse {
     if let Some(resp) = check_auth(auth, request) {
         return resp;
     }
@@ -71,7 +90,12 @@ pub fn dispatch(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiRes
     let body = &request.body;
 
     if path == format!("{API_PREFIX}/config") && method == "GET" {
-        return match map_repo(repo.load_config()) {
+        let config = if serve_read {
+            repo.load_config_unlocked()
+        } else {
+            repo.load_config()
+        };
+        return match map_repo(config) {
             Ok(config) => match serde_json::to_vec(&config) {
                 Ok(bytes) => api_response(200, bytes),
                 Err(e) => api_response(500, e.to_string().into_bytes()),
@@ -81,7 +105,12 @@ pub fn dispatch(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiRes
     }
     if path == format!("{API_PREFIX}/refs/heads") && method == "GET" {
         let mut refs = HashMap::new();
-        return match map_repo(repo.list_branches()) {
+        let branches = if serve_read {
+            repo.list_branches_unlocked()
+        } else {
+            repo.list_branches()
+        };
+        return match map_repo(branches) {
             Ok(branches) => {
                 for branch in branches {
                     refs.insert(branch.name, branch.state_id);
@@ -96,7 +125,12 @@ pub fn dispatch(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiRes
     }
     if path == format!("{API_PREFIX}/refs/tags") && method == "GET" {
         let mut refs = HashMap::new();
-        return match map_repo(repo.list_tags()) {
+        let tags = if serve_read {
+            repo.list_tags_unlocked()
+        } else {
+            repo.list_tags()
+        };
+        return match map_repo(tags) {
             Ok(tags) => {
                 for tag in tags {
                     refs.insert(tag.name, tag.state_id);
@@ -110,24 +144,24 @@ pub fn dispatch(repo: &Repo, request: &ApiRequest, auth: &AuthOptions) -> ApiRes
         };
     }
     if let Some(branch) = path.strip_prefix(&format!("{API_PREFIX}/refs/heads/")) {
-        return handle_ref(repo, &method, branch, body, force);
+        return handle_ref(repo, &method, branch, body, force, serve_read);
     }
     if let Some(name) = path.strip_prefix(&format!("{API_PREFIX}/refs/tags/")) {
-        return handle_tag(repo, &method, name, body);
+        return handle_tag(repo, &method, name, body, serve_read);
     }
     if let Some(id) = path.strip_prefix(&format!("{API_PREFIX}/blobs/")) {
-        return handle_blob(repo, &method, id, body);
+        return handle_blob(repo, &method, id, body, serve_read);
     }
     if let Some(id) = path.strip_prefix(&format!("{API_PREFIX}/states/")) {
-        return handle_state(repo, &method, id, body);
+        return handle_state(repo, &method, id, body, serve_read);
     }
     if let Some(rest) = path.strip_prefix(&format!("{API_PREFIX}/timeline/")) {
         if let Some((id, suffix)) = rest.split_once('/')
             && suffix == "ancestry"
         {
-            return handle_ancestry(repo, &method, id, &request.query);
+            return handle_ancestry(repo, &method, id, &request.query, serve_read);
         }
-        return handle_timeline(repo, &method, rest, body);
+        return handle_timeline(repo, &method, rest, body, serve_read);
     }
     api_response(404, b"not found".to_vec())
 }
@@ -158,14 +192,26 @@ fn token_matches(expected: &str, provided: &str) -> bool {
     expected.as_bytes().ct_eq(provided.as_bytes()).into()
 }
 
-fn handle_ref(repo: &Repo, method: &str, branch: &str, body: &[u8], force: bool) -> ApiResponse {
+fn handle_ref(
+    repo: &Repo,
+    method: &str,
+    branch: &str,
+    body: &[u8],
+    force: bool,
+    serve_read: bool,
+) -> ApiResponse {
     match method {
         "GET" => {
             let path = repo.astvcs_dir().join("refs/heads").join(branch);
             if !path.is_file() {
                 return api_response(404, b"branch not found".to_vec());
             }
-            match map_repo(repo.branch_state(branch)) {
+            let state = if serve_read {
+                repo.read_branch_ref(branch)
+            } else {
+                repo.branch_state(branch)
+            };
+            match map_repo(state) {
                 Ok(state_id) => api_response(200, format!("{state_id}\n").into_bytes()),
                 Err(e) => api_response(500, e.into_bytes()),
             }
@@ -196,14 +242,19 @@ fn handle_ref(repo: &Repo, method: &str, branch: &str, body: &[u8], force: bool)
     }
 }
 
-fn handle_tag(repo: &Repo, method: &str, name: &str, body: &[u8]) -> ApiResponse {
+fn handle_tag(repo: &Repo, method: &str, name: &str, body: &[u8], serve_read: bool) -> ApiResponse {
     match method {
         "GET" => {
             let path = repo.astvcs_dir().join("refs/tags").join(name);
             if !path.is_file() {
                 return api_response(404, b"tag not found".to_vec());
             }
-            match map_repo(repo.read_tag(name)) {
+            let state = if serve_read {
+                repo.read_tag_unlocked(name)
+            } else {
+                repo.read_tag(name)
+            };
+            match map_repo(state) {
                 Ok(state_id) => api_response(200, format!("{state_id}\n").into_bytes()),
                 Err(e) => api_response(500, e.into_bytes()),
             }
@@ -227,13 +278,20 @@ fn handle_tag(repo: &Repo, method: &str, name: &str, body: &[u8]) -> ApiResponse
     }
 }
 
-fn handle_blob(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiResponse {
+fn handle_blob(repo: &Repo, method: &str, id: &str, body: &[u8], serve_read: bool) -> ApiResponse {
     match method {
         "GET" => {
             if !repo.has_blob(id) {
                 return api_response(404, b"blob not found".to_vec());
             }
-            match map_repo(repo.read_blob_bytes(id)) {
+            let bytes = if serve_read {
+                repo.blobs()
+                    .read_bytes(&id.to_string())
+                    .map_err(RepoError::from_message)
+            } else {
+                repo.read_blob_bytes(id)
+            };
+            match map_repo(bytes) {
                 Ok(bytes) => api_response(200, bytes),
                 Err(e) => api_response(500, e.into_bytes()),
             }
@@ -255,14 +313,19 @@ fn handle_blob(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiResponse 
     }
 }
 
-fn handle_state(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiResponse {
+fn handle_state(repo: &Repo, method: &str, id: &str, body: &[u8], serve_read: bool) -> ApiResponse {
     let state_id = id.to_string();
     match method {
         "GET" => {
             if !repo.has_state(&state_id) {
                 return api_response(404, b"state not found".to_vec());
             }
-            match map_repo(repo.load_manifest(&state_id)) {
+            let manifest = if serve_read {
+                repo.load_manifest_unlocked(&state_id)
+            } else {
+                repo.load_manifest(&state_id)
+            };
+            match map_repo(manifest) {
                 Ok(manifest) => match serde_json::to_vec(&manifest) {
                     Ok(bytes) => api_response(200, bytes),
                     Err(e) => api_response(500, e.to_string().into_bytes()),
@@ -296,6 +359,7 @@ fn handle_ancestry(
     method: &str,
     id: &str,
     query: &HashMap<String, String>,
+    serve_read: bool,
 ) -> ApiResponse {
     if method != "GET" {
         return api_response(405, b"method not allowed".to_vec());
@@ -312,9 +376,14 @@ fn handle_ancestry(
             Err(_) => return api_response(400, b"invalid depth".to_vec()),
         },
     };
-    match timeline_ancestry(&state_id, depth, |sid| {
-        map_repo(repo.load_timeline_entry(sid))
-    }) {
+    let load_entry = |sid: &StateId| {
+        if serve_read {
+            map_repo(repo.load_timeline_entry_unlocked(sid))
+        } else {
+            map_repo(repo.load_timeline_entry(sid))
+        }
+    };
+    match timeline_ancestry(&state_id, depth, load_entry) {
         Ok(result) => {
             let body = AncestryResponse {
                 states: result.states,
@@ -329,14 +398,25 @@ fn handle_ancestry(
     }
 }
 
-fn handle_timeline(repo: &Repo, method: &str, id: &str, body: &[u8]) -> ApiResponse {
+fn handle_timeline(
+    repo: &Repo,
+    method: &str,
+    id: &str,
+    body: &[u8],
+    serve_read: bool,
+) -> ApiResponse {
     let state_id = id.to_string();
     match method {
         "GET" => {
             if !repo.has_timeline(&state_id) {
                 return api_response(404, b"timeline entry not found".to_vec());
             }
-            match map_repo(repo.load_timeline_entry(&state_id)) {
+            let entry = if serve_read {
+                repo.load_timeline_entry_unlocked(&state_id)
+            } else {
+                repo.load_timeline_entry(&state_id)
+            };
+            match map_repo(entry) {
                 Ok(entry) => match serde_json::to_vec(&entry) {
                     Ok(bytes) => api_response(200, bytes),
                     Err(e) => api_response(500, e.to_string().into_bytes()),

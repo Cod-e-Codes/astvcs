@@ -1,9 +1,12 @@
-use crate::network::api::{ApiRequest, AuthOptions, dispatch};
-use crate::store::Repo;
+use crate::network::api::{
+    ApiRequest, AuthOptions, dispatch, dispatch_serve_read, is_write_request,
+};
+use crate::store::error::RepoErrorKind;
+use crate::store::{Repo, RepoLockGuard};
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 fn map_repo<T>(result: Result<T, crate::store::RepoError>) -> Result<T, String> {
     result.map_err(|e| e.to_string())
@@ -15,6 +18,20 @@ pub struct ServeOptions {
     pub public_read: bool,
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
+}
+
+/// In-process serve state: concurrent reads, serialized writes.
+#[derive(Clone)]
+struct SharedServeRepo {
+    repo: Arc<RwLock<Repo>>,
+}
+
+impl SharedServeRepo {
+    fn open(path: &Path) -> Result<Self, String> {
+        Ok(Self {
+            repo: Arc::new(RwLock::new(map_repo(Repo::open(path))?)),
+        })
+    }
 }
 
 pub fn validate_tls_config(
@@ -53,13 +70,13 @@ pub fn serve_repo(repo: &Repo, bind: &str, port: u16, options: ServeOptions) -> 
     } else {
         tiny_http::Server::http(&addr).map_err(|e| e.to_string())?
     };
-    let repo = Arc::new(Mutex::new(map_repo(Repo::open(repo.root_path()))?));
+    let shared = SharedServeRepo::open(repo.root_path())?;
     let auth = auth_options(&options);
     let scheme = if tls_enabled { "https" } else { "http" };
     eprintln!("astvcs serve listening on {scheme}://{addr}/");
 
     for mut request in server.incoming_requests() {
-        let response = match http_dispatch(&repo, &mut request, &auth) {
+        let response = match http_dispatch(&shared, &mut request, &auth) {
             Ok(resp) => resp,
             Err(e) => text_response(500, &e),
         };
@@ -78,7 +95,7 @@ fn auth_options(options: &ServeOptions) -> AuthOptions {
 }
 
 fn http_dispatch(
-    repo: &Arc<Mutex<Repo>>,
+    shared: &SharedServeRepo,
     request: &mut tiny_http::Request,
     auth: &AuthOptions,
 ) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, String> {
@@ -110,9 +127,31 @@ fn http_dispatch(
         body,
         headers,
     };
-    let repo = repo.lock().map_err(|e| e.to_string())?;
-    let api_response = dispatch(&repo, &api_request, auth);
-    Ok(to_http_response(api_response))
+
+    if is_write_request(&api_request) {
+        let repo_guard = shared
+            .repo
+            .write()
+            .map_err(|e| format!("serve write lock poisoned: {e}"))?;
+        let astvcs_dir = repo_guard.astvcs_dir().to_path_buf();
+        let advisory = match RepoLockGuard::acquire(&astvcs_dir) {
+            Ok(guard) => guard,
+            Err(e) if e.kind == RepoErrorKind::LockContention => {
+                return Ok(text_response(503, "repository locked"));
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        let api_response = dispatch(&repo_guard, &api_request, auth);
+        drop(advisory);
+        Ok(to_http_response(api_response))
+    } else {
+        let repo_guard = shared
+            .repo
+            .read()
+            .map_err(|e| format!("serve read lock poisoned: {e}"))?;
+        let api_response = dispatch_serve_read(&repo_guard, &api_request, auth);
+        Ok(to_http_response(api_response))
+    }
 }
 
 fn read_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, String> {
@@ -159,8 +198,10 @@ fn bytes_response(status: u16, body: &[u8]) -> tiny_http::Response<Cursor<Vec<u8
 mod tests {
     use super::*;
     use crate::store::Repo;
+    use sha2::{Digest, Sha256};
     use std::net::TcpListener;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -182,14 +223,14 @@ mod tests {
             let auth = auth_options(&options);
 
             let server = tiny_http::Server::from_listener(listener, None).unwrap();
-            let repo = Arc::new(Mutex::new(Repo::open(&repo_path).unwrap()));
+            let shared = SharedServeRepo::open(&repo_path).unwrap();
 
             let handle = thread::spawn(move || {
                 for mut request in server.incoming_requests() {
                     if shutdown_flag.load(Ordering::Relaxed) {
                         break;
                     }
-                    let response = match http_dispatch(&repo, &mut request, &auth) {
+                    let response = match http_dispatch(&shared, &mut request, &auth) {
                         Ok(resp) => resp,
                         Err(e) => text_response(500, &e),
                     };
@@ -251,6 +292,15 @@ mod tests {
         }
         let resp = req.send().unwrap();
         (resp.status().as_u16(), resp.text().unwrap_or_default())
+    }
+
+    fn put_bytes(base: &str, path: &str, body: &[u8], token: Option<&str>) -> u16 {
+        let client = http_client();
+        let mut req = client.put(format!("{base}{path}")).body(body.to_vec());
+        if let Some(token) = token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        req.send().unwrap().status().as_u16()
     }
 
     #[test]
@@ -339,5 +389,106 @@ mod tests {
         let (status, body) = put(&server.base_url, "/v1/refs/heads/main", &state_id, None);
         assert_eq!(status, 401);
         assert_eq!(body.trim(), "unauthorized");
+    }
+
+    #[test]
+    fn serve_put_returns_503_when_advisory_lock_held() {
+        let (dir, repo) = init_repo();
+        let state_id = repo.head_state().unwrap();
+        let astvcs = dir.path().join(".astvcs");
+        let server = TestServer::start(&repo, ServeOptions::default());
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_holder = Arc::clone(&barrier);
+        let astvcs_holder = astvcs.clone();
+
+        let holder = thread::spawn(move || {
+            let _guard = RepoLockGuard::acquire(&astvcs_holder).unwrap();
+            barrier_holder.wait();
+            thread::sleep(Duration::from_millis(200));
+        });
+
+        barrier.wait();
+        let (status, body) = put(&server.base_url, "/v1/refs/heads/main", &state_id, None);
+        holder.join().unwrap();
+        assert_eq!(status, 503);
+        assert_eq!(body.trim(), "repository locked");
+    }
+
+    #[test]
+    fn serve_concurrent_reads_during_writes() {
+        let (_dir, repo) = init_repo();
+        let state_id = repo.head_state().unwrap();
+        let seed = b"seed-blob-for-concurrent-reads";
+        let existing_blob = hex::encode(Sha256::digest(seed));
+        repo.import_blob_bytes(&existing_blob, seed).unwrap();
+
+        let server = TestServer::start(
+            &repo,
+            ServeOptions {
+                public_read: true,
+                ..Default::default()
+            },
+        );
+        let base = server.base_url.clone();
+        let read_ok = Arc::new(AtomicUsize::new(0));
+        let write_ok = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(9));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let base = base.clone();
+            let blob_id = existing_blob.clone();
+            let state_id = state_id.clone();
+            let read_ok = Arc::clone(&read_ok);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                let client = http_client();
+                for _ in 0..20 {
+                    let blob_status = client
+                        .get(format!("{base}/v1/blobs/{blob_id}"))
+                        .send()
+                        .unwrap()
+                        .status()
+                        .as_u16();
+                    let state_status = client
+                        .get(format!("{base}/v1/states/{state_id}"))
+                        .send()
+                        .unwrap()
+                        .status()
+                        .as_u16();
+                    if blob_status == 200 && state_status == 200 {
+                        read_ok.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }));
+        }
+
+        let base_writer = base.clone();
+        let write_ok_writer = Arc::clone(&write_ok);
+        let barrier_writer = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            barrier_writer.wait();
+            for i in 0..10 {
+                let payload = format!("concurrent-payload-{i}");
+                let blob_id = hex::encode(Sha256::digest(payload.as_bytes()));
+                let status = put_bytes(
+                    &base_writer,
+                    &format!("/v1/blobs/{blob_id}"),
+                    payload.as_bytes(),
+                    None,
+                );
+                if status == 201 {
+                    write_ok_writer.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }));
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(read_ok.load(Ordering::Relaxed), 160);
+        assert_eq!(write_ok.load(Ordering::Relaxed), 10);
     }
 }
