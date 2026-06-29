@@ -25,7 +25,8 @@ metadata:
 - Keep mutations anchored to the **old** graph.
 - Prefer sibling anchors over index-based inserts so prepends do not cascade `MoveNode`.
 - Path-level renames use `detect_path_renames` and surface as `EditIntent::RenamePath` in `status`/`diff` (exact content or AST edit-only pairing).
-- Intra-file moves use `Mutation::MoveSubtree` after LCS when structure fingerprints match uniquely; `MoveNode` remains for role/key LCS repositioning.
+- Intra-file moves use `Mutation::MoveSubtree` after LCS when structure fingerprints match uniquely; fingerprints include editable-leaf payloads so same-shape siblings with different literals can disambiguate. `MoveNode` remains for role/key LCS repositioning.
+- After LCS, unmatched structural siblings pair by kind with a child-count + index-distance score (not first-match scan order); editable leaves use index-distance only.
 - Trivia-only edits use `SetTrivia` / `SetRootTrailingTrivia`. Same-id nodes still recurse into children; the reorder path diffs child trivia after `ReorderChildren`.
 - Trailing comment text often lives in leading trivia before the next sibling token, not in the comment node payload.
 - After alignment changes, run `workflow_demo_prepend_and_disjoint_merge`, `identity_demo_payload_edit_disjoint_merge_and_conflict`, and `trailing_comment_and_literal_edit_merge`.

@@ -132,10 +132,16 @@ Materialization uses trivia-aware unparsing (see **Working tree materialization*
 ## Structural diff
 
 1. Parse old and new sources into graphs.
-2. Align children between old and new: LCS on matching `NodeId` (unchanged subtrees), then LCS on `(NodeKind, child_count)` (role pass; payload ignored), then further pairing for structural nodes and payload-editable leaves.
+2. Align children between old and new: LCS on matching `NodeId` (unchanged subtrees), then LCS on `(NodeKind, child_count)` (role pass; payload ignored), then LCS on `(NodeKind, payload, child_count)` (key pass), then unique structure-fingerprint pairing, then position-aware fallback for remaining structural nodes and payload-editable leaves.
 3. Emit mutations anchored to the old graph: `EditPayload`, `InsertSubtree`, `DeleteSubtree`, `RenameIdentifier`, `MoveNode`, `MoveSubtree`, `ReorderChildren`, `SetTrivia`, `SetRootTrailingTrivia`, and others. Insertions use sibling anchors (`before: Option<NodeId>`) rather than absolute indices, so prepending one node does not emit move cascades for trailing siblings. When matched siblings keep the same `NodeId` but leading trivia changes (for example trailing comment text stored before the next sibling token), `SetTrivia` captures the gap. Same-id internal nodes still recurse into children so trivia-only edits and reorder-with-trivia changes are not skipped.
 
-Alignment is heuristic. Wrong sibling pairing can produce delete+insert instead of `EditPayload`, or mis-anchored mutations. The `identity-demo` fixture exercises literal `EditPayload` and cases where alignment fails (rename conflict).
+Alignment is heuristic. Wrong sibling pairing can still produce delete+insert instead of `EditPayload`, or mis-anchored mutations. The `identity-demo` fixture exercises literal `EditPayload` and cases where alignment fails (rename conflict).
+
+**Sibling fallback pairing.** After LCS passes, unmatched structural siblings are paired by kind, preferring equal `child_count` and smallest index distance (so swapped same-shape siblings are not matched to the first same-kind candidate in scan order). Unmatched payload-editable leaves use the same proximity rule. Pass `-v` to see `notice: diff: … fallback paired siblings …` when this path runs.
+
+**Structure fingerprints.** Fingerprints used for `MoveSubtree` pairing are a preorder `(kind, child_count, payload)` list. Payload is included for editable leaves (`Literal`, `Identifier`, `Token`, `Unknown`) so subtrees that share shape but differ in literal text can be distinguished. Fingerprints still ignore `NodeId` and non-editable node text.
+
+**Known limitations.** Ambiguous siblings with identical structure and identical editable payloads (for example two functions whose bodies are both `1`) are not uniquely pairable; `MoveNode`/`ReorderChildren` or delete+insert may still result. Cross-file subtree moves are out of scope (path rename only). Adding or removing children (for example a new comment sibling) can still force a looser structural match when no equal-`child_count` candidate exists. Delete+insert coalescing into `EditPayload` when fingerprints match is not implemented; full subtree replacement stays delete+insert.
 
 **Rename and move detection.** Two problems are handled separately:
 
@@ -146,7 +152,7 @@ Alignment is heuristic. Wrong sibling pairing can produce delete+insert instead 
 
 **Path rename pairing.** Text files pair only on exact content (`semantic_eq`). AST files also pair when `diff_graphs` reports edit-only changes (no `DeleteSubtree` or `InsertSubtree`), surfaced as `rename with edits`. Near-identical text paths stay unpaired (delete+add). Merge planning correlates base paths through per-side rename maps; conflicting renames of the same base path to different destinations conflict; keeping the source path while the other branch renamed it to a destination that HEAD also modified independently conflicts.
 
-**Intra-file move scope.** `MoveSubtree` runs after id/role/key LCS passes when exactly one unmatched old child and one unmatched new child share a structure fingerprint (kind tree, ignoring payloads and `NodeId`). Ambiguous siblings (multiple same-shape items) are left to existing `MoveNode`/`ReorderChildren` heuristics or delete+insert. Merge treats `MoveSubtree`/`MoveNode` as disjoint from payload edits on the same `node_id`, so a move on one branch and a body edit on the other apply together. Cross-file function moves are out of scope (path rename only).
+**Intra-file move scope.** `MoveSubtree` runs after id/role/key LCS passes when exactly one unmatched old child and one unmatched new child share a structure fingerprint (preorder kind tree with editable-leaf payloads; `NodeId` ignored). Ambiguous siblings (multiple same-shape items with identical fingerprints) are left to `MoveNode`/`ReorderChildren` heuristics or delete+insert. Merge treats `MoveSubtree`/`MoveNode` as disjoint from payload edits on the same `node_id`, so a move on one branch and a body edit on the other apply together. Cross-file function moves are out of scope (path rename only).
 
 **Edit intents.** Raw mutations are classified for human-readable output (`EditLiteral`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, `PrependComment`, `InsertStatement`, etc.). `diff` prints intents by default; pass `-v` to also print raw mutations.
 

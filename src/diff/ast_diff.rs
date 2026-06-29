@@ -1,5 +1,6 @@
 use crate::diff::lcs::lcs_pairs;
 use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
+use crate::trace;
 
 /// Result of diffing two AST graphs.
 #[derive(Clone, Debug)]
@@ -95,13 +96,87 @@ fn insert_trivia(
     trivia
 }
 
-fn structure_fingerprint(graph: &AstGraph, id: &NodeId) -> Vec<(NodeKind, usize)> {
+fn structure_fingerprint(graph: &AstGraph, id: &NodeId) -> Vec<StructureSig> {
     let n = graph.get(id).unwrap();
-    let mut out = vec![(n.kind.clone(), n.children.len())];
+    let payload = if n.is_leaf() && is_payload_editable_leaf(&n.kind) {
+        n.payload.clone()
+    } else {
+        String::new()
+    };
+    let mut out = vec![StructureSig {
+        kind: n.kind.clone(),
+        child_count: n.children.len(),
+        payload,
+    }];
     for child in &n.children {
         out.extend(structure_fingerprint(graph, child));
     }
     out
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StructureSig {
+    kind: NodeKind,
+    child_count: usize,
+    payload: String,
+}
+
+fn best_structural_match(
+    oi: usize,
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_new: &[bool],
+    old: &AstGraph,
+    new: &AstGraph,
+) -> Option<usize> {
+    let oc = old.get(&old_children[oi]).unwrap();
+    let mut best: Option<(usize, usize)> = None;
+    for (ni, new_child) in new_children.iter().enumerate() {
+        if matched_new[ni] {
+            continue;
+        }
+        let nc = new.get(new_child).unwrap();
+        if oc.kind != nc.kind || oc.is_leaf() || nc.is_leaf() {
+            continue;
+        }
+        let dist = oi.abs_diff(ni);
+        let score = oc.children.len().abs_diff(nc.children.len()) * 1_000 + dist;
+        if best.is_none_or(|(best_score, _)| score < best_score) {
+            best = Some((score, ni));
+        }
+    }
+    best.map(|(_, ni)| ni)
+}
+
+fn best_leaf_payload_match(
+    oi: usize,
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_new: &[bool],
+    old: &AstGraph,
+    new: &AstGraph,
+) -> Option<usize> {
+    let oc = old.get(&old_children[oi]).unwrap();
+    let mut best: Option<(usize, usize)> = None;
+    for (ni, new_child) in new_children.iter().enumerate() {
+        if matched_new[ni] {
+            continue;
+        }
+        let nc = new.get(new_child).unwrap();
+        if oc.kind != nc.kind
+            || !oc.is_leaf()
+            || !nc.is_leaf()
+            || !is_payload_editable_leaf(&oc.kind)
+            || oc.payload == nc.payload
+        {
+            continue;
+        }
+        let dist = oi.abs_diff(ni);
+        if best.is_none_or(|(best_dist, _)| dist < best_dist) {
+            best = Some((dist, ni));
+        }
+    }
+    best.map(|(_, ni)| ni)
 }
 
 fn same_id_multiset(a: &[NodeId], b: &[NodeId]) -> bool {
@@ -416,85 +491,82 @@ fn diff_children(
         if matched_old[oi] {
             continue;
         }
-        for (ni, new_child) in new_children.iter().enumerate() {
-            if matched_new[ni] {
-                continue;
-            }
-            let oc = old.get(old_child).unwrap();
-            let nc = new.get(new_child).unwrap();
-            if oc.kind == nc.kind && !oc.is_leaf() {
-                matched_old[oi] = true;
-                matched_new[ni] = true;
-                if oi != ni {
-                    out.push(Mutation::MoveNode {
-                        node_id: *old_child,
-                        new_parent: old_node_id,
-                        before: insert_anchor(&new_children, ni),
-                    });
-                }
-                diff_subtree(old, new, *old_child, *new_child, out);
-                diff_child_trivia(
-                    old,
-                    new,
-                    old_node_id,
-                    new_node_id,
-                    *old_child,
-                    *new_child,
-                    out,
-                );
-                break;
-            }
+        let Some(ni) =
+            best_structural_match(oi, &old_children, &new_children, &matched_new, old, new)
+        else {
+            continue;
+        };
+        let new_child = new_children[ni];
+        matched_old[oi] = true;
+        matched_new[ni] = true;
+        if oi != ni {
+            out.push(Mutation::MoveNode {
+                node_id: *old_child,
+                new_parent: old_node_id,
+                before: insert_anchor(&new_children, ni),
+            });
+            trace::notice(format!(
+                "diff: structural fallback paired siblings at old[{oi}] new[{ni}] (distance {})",
+                oi.abs_diff(ni)
+            ));
         }
+        diff_subtree(old, new, *old_child, new_child, out);
+        diff_child_trivia(
+            old,
+            new,
+            old_node_id,
+            new_node_id,
+            *old_child,
+            new_child,
+            out,
+        );
     }
 
     for (oi, old_child) in old_children.iter().enumerate() {
         if matched_old[oi] {
             continue;
         }
-        for (ni, new_child) in new_children.iter().enumerate() {
-            if matched_new[ni] {
-                continue;
-            }
-            let oc = old.get(old_child).unwrap();
-            let nc = new.get(new_child).unwrap();
-            if oc.kind == nc.kind
-                && oc.is_leaf()
-                && nc.is_leaf()
-                && is_payload_editable_leaf(&oc.kind)
-                && oc.payload != nc.payload
-            {
-                matched_old[oi] = true;
-                matched_new[ni] = true;
-                if oi != ni {
-                    out.push(Mutation::MoveNode {
-                        node_id: *old_child,
-                        new_parent: old_node_id,
-                        before: insert_anchor(&new_children, ni),
-                    });
-                }
-                if oc.kind == NodeKind::Identifier {
-                    out.push(Mutation::RenameIdentifier {
-                        node_id: *old_child,
-                        new_name: nc.payload.clone(),
-                    });
-                } else {
-                    out.push(Mutation::EditPayload {
-                        node_id: *old_child,
-                        new_payload: nc.payload.clone(),
-                    });
-                }
-                diff_child_trivia(
-                    old,
-                    new,
-                    old_node_id,
-                    new_node_id,
-                    *old_child,
-                    *new_child,
-                    out,
-                );
-                break;
-            }
+        let Some(ni) =
+            best_leaf_payload_match(oi, &old_children, &new_children, &matched_new, old, new)
+        else {
+            continue;
+        };
+        let new_child = new_children[ni];
+        let oc = old.get(old_child).unwrap();
+        let nc = new.get(&new_child).unwrap();
+        matched_old[oi] = true;
+        matched_new[ni] = true;
+        if oi != ni {
+            out.push(Mutation::MoveNode {
+                node_id: *old_child,
+                new_parent: old_node_id,
+                before: insert_anchor(&new_children, ni),
+            });
+            trace::notice(format!(
+                "diff: leaf fallback paired siblings at old[{oi}] new[{ni}] (distance {})",
+                oi.abs_diff(ni)
+            ));
         }
+        if oc.kind == NodeKind::Identifier {
+            out.push(Mutation::RenameIdentifier {
+                node_id: *old_child,
+                new_name: nc.payload.clone(),
+            });
+        } else {
+            out.push(Mutation::EditPayload {
+                node_id: *old_child,
+                new_payload: nc.payload.clone(),
+            });
+        }
+        diff_child_trivia(
+            old,
+            new,
+            old_node_id,
+            new_node_id,
+            *old_child,
+            new_child,
+            out,
+        );
     }
 
     for (oi, old_child) in old_children.iter().enumerate() {
@@ -525,8 +597,31 @@ fn diff_children(
 mod tests {
     use super::*;
     use crate::frontend::parse_rust;
-    use crate::graph::Mutation;
+    use crate::graph::{Mutation, Node, NodeKind};
     use crate::unparser::unparse;
+    use std::collections::HashMap;
+
+    fn graph_from_two_blocks(first: &[&str], second: &[&str]) -> AstGraph {
+        let mut nodes = HashMap::new();
+        let build_block = |literals: &[&str], nodes: &mut HashMap<_, _>| -> NodeId {
+            let leaves: Vec<_> = literals
+                .iter()
+                .map(|s| {
+                    let n = Node::leaf(NodeKind::Literal, (*s).to_string());
+                    nodes.insert(n.id, n.clone());
+                    n.id
+                })
+                .collect();
+            let block = Node::new(NodeKind::Block, String::new(), leaves);
+            nodes.insert(block.id, block.clone());
+            block.id
+        };
+        let first_id = build_block(first, &mut nodes);
+        let second_id = build_block(second, &mut nodes);
+        let root = Node::new(NodeKind::Module, String::new(), vec![first_id, second_id]);
+        nodes.insert(root.id, root.clone());
+        AstGraph::new(root, nodes)
+    }
 
     #[test]
     fn identical_sources_produce_no_mutations() {
@@ -707,6 +802,87 @@ mod tests {
         merged.apply_batch(&combined).unwrap();
         let expected = "fn foo() {\n    let y = 1;\n    let z = 2;\n}\n";
         assert_eq!(unparse(&merged), expected);
+    }
+
+    #[test]
+    fn swapped_blocks_with_different_child_counts_pair_by_proximity() {
+        let old = graph_from_two_blocks(&["a", "b"], &["c"]);
+        let new = graph_from_two_blocks(&["c"], &["a", "d"]);
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            !diff
+                .mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::DeleteSubtree { .. })),
+            "unexpected delete: {:?}",
+            diff.mutations
+        );
+        assert!(
+            !diff
+                .mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::InsertSubtree { .. })),
+            "unexpected insert: {:?}",
+            diff.mutations
+        );
+        assert!(
+            diff.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::EditPayload { .. })),
+            "expected EditPayload for literal edit: {:?}",
+            diff.mutations
+        );
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        working.validate().unwrap();
+        assert_eq!(working.to_snapshot(), new.to_snapshot());
+    }
+
+    #[test]
+    fn swapped_leaf_literals_pair_by_proximity() {
+        let old = graph_from_two_blocks(&["1", "2"], &["9"]);
+        let new = graph_from_two_blocks(&["9"], &["1", "3"]);
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            diff.mutations.iter().any(|m| {
+                matches!(m, Mutation::EditPayload { new_payload, .. } if new_payload == "3")
+            }),
+            "expected literal edit to 3: {:?}",
+            diff.mutations
+        );
+        assert!(
+            !diff
+                .mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::DeleteSubtree { .. })),
+            "unexpected delete: {:?}",
+            diff.mutations
+        );
+    }
+
+    #[test]
+    fn structure_fingerprint_includes_literal_payload_for_moves() {
+        let old = parse_rust("fn alpha() { 1 }\nfn beta() { 2 }\n").unwrap();
+        let new = parse_rust("fn beta() { 2 }\nfn alpha() { 9 }\n").unwrap();
+        let diff = diff_graphs(&old, &new);
+        assert!(
+            diff.mutations.iter().any(|m| {
+                matches!(m, Mutation::EditPayload { new_payload, .. } if new_payload == "9")
+            }),
+            "expected literal edit: {:?}",
+            diff.mutations
+        );
+        assert!(
+            !diff
+                .mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::DeleteSubtree { .. })),
+            "unexpected delete: {:?}",
+            diff.mutations
+        );
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
     }
 
     #[test]

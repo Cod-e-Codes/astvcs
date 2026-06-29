@@ -102,6 +102,14 @@ fn revisions_left(state: &BisectState) -> usize {
     }
 }
 
+fn rough_steps_remaining(low: usize, high: usize) -> usize {
+    if low >= high {
+        1
+    } else {
+        (high - low).ilog2() as usize + 1
+    }
+}
+
 impl Repo {
     pub fn bisect_start(&self, bad_ref: Option<&str>, good_ref: &str) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
@@ -253,7 +261,7 @@ impl Repo {
             println!(
                 "Bisecting: {} revisions left to test after this (roughly {} steps)",
                 revisions_left(&state),
-                (state.high - state.low).ilog2() + 1
+                rough_steps_remaining(state.low, state.high)
             );
 
             self.checkout_bisect_state_unlocked(&candidate)?;
@@ -432,6 +440,12 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.contains("not an ancestor"), "{err}");
+    }
+
+    #[test]
+    fn rough_steps_remaining_handles_single_candidate() {
+        assert_eq!(rough_steps_remaining(2, 2), 1);
+        assert_eq!(rough_steps_remaining(0, 7), 3);
     }
 
     #[test]
