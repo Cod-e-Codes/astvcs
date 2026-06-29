@@ -40,10 +40,11 @@ assert!(out.status.success());
 
 ### Fixture conventions
 
-- One directory per scenario (`workflow-demo`, `merge-demo`, `identity-demo`, `same-file-demo`).
+- One directory per scenario (`workflow-demo`, `merge-demo`, `identity-demo`, `same-file-demo`, `network-demo`, `lifecycle-demo`, `shallow-demo`, `import-git-demo`, `serve-demo`).
 - Add `.gitignore` in the fixture if generated artifacts appear during manual runs.
 - Document CLI steps in [examples/README.md](../../../examples/README.md) with a table row linking fixture, test name, and what it shows.
 - Use `.\examples\reset.ps1` in docs to restore baseline files.
+- After changing fixture walkthroughs, run `.\examples\run-demos.ps1` to replay all nine fixtures (includes `identity set`, staging, `reset --mixed`, file remote sync, lifecycle commands, shallow clone, optional `import-git`, and HTTP serve).
 
 ### Assertions worth including
 
