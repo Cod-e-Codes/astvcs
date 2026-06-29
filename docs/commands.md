@@ -53,18 +53,18 @@ Global flags:
 | `bisect good [ref]` | Mark a revision as good during bisect (default: HEAD) |
 | `bisect run <script> [args...]` | Checkout midpoint revisions and run a test script (exit 0=good, 1=bad, 125=skip) |
 | `bisect reset` | End bisect and restore the original checkout |
-| `remote add <name> <url> [--token <token>]` | Register a remote (local path, `file://`, or `http://`); optional bearer token for HTTP remotes |
+| `remote add <name> <url> [--token <token>]` | Register a remote (local path, `file://`, `http://`, or `https://`); optional bearer token for HTTP remotes |
 | `remote list` | List configured remotes |
 | `remote remove <name>` | Remove a remote and its tracking refs |
-| `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs and all remote tags |
-| `pull <remote> [--branch <name>] [-m <msg>] [--force] [--no-verify] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
+| `fetch <remote> [--branch <name>] [--insecure]` | Download missing objects; update remote-tracking refs and all remote tags |
+| `pull <remote> [--branch <name>] [-m <msg>] [--force] [--no-verify] [--insecure] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
 | `stash push [-m <msg>] [-u]` | Save working-tree changes to `.astvcs/stash/` and reset disk to HEAD |
 | `stash list` | List stashes (`stash@{n}`; 0 is newest) |
 | `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
 | `stash apply [index]` | Apply stash without removing the entry |
-| `push <remote> [--branch <name>] [--force] [--no-verify]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
-| `clone <url> [path] [--token <token>]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
-| `serve [--bind <addr>] [--port <n>] [--token <token>] [--public-read]` | Serve the repository over HTTP (default `127.0.0.1:9421`); token from `--token` or `ASTVCS_SERVE_TOKEN` |
+| `push <remote> [--branch <name>] [--force] [--no-verify] [--insecure]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
+| `clone <url> [path] [--token <token>] [--insecure]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
+| `serve [--bind <addr>] [--port <n>] [--token <token>] [--public-read] [--tls-cert <path>] [--tls-key <path>]` | Serve the repository over HTTP or HTTPS (default `127.0.0.1:9421`); token from `--token` or `ASTVCS_SERVE_TOKEN` |
 | `gc [--prune] [--prune-history]` | Report unreachable blobs and history (default dry-run); `--prune` deletes blobs; `--prune-history` deletes unreachable states |
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
@@ -201,7 +201,23 @@ Paths added in the target state and modified again on HEAD before revert produce
 
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 
-Remote URLs may be a local repository path, a `file://` URL, or an `http://` base URL from `astvcs serve`. Register an HTTP bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes.
+Remote URLs may be a local repository path, a `file://` URL, an `http://` base URL, or an `https://` base URL from `astvcs serve`. Register an HTTP bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes.
+
+**HTTPS serve.** Pass `--tls-cert` and `--tls-key` together with PEM files to listen on HTTPS instead of HTTP. Both flags are required when either is set. Startup logs `https://` or `http://` accordingly.
+
+**HTTPS remotes.** The client validates TLS certificates via rustls (default). Self-signed or otherwise untrusted certificates fail closed unless you pass `--insecure` on `fetch`, `push`, `pull`, or `clone`. `--insecure` skips certificate verification and is intended for local development only.
+
+**Self-signed cert workflow (local testing).** Generate a cert and key, serve with TLS, then clone with `--insecure`:
+
+```powershell
+# OpenSSL (if installed)
+openssl req -x509 -newkey rsa:2048 -nodes -keyout serve-key.pem -out serve-cert.pem -days 365 -subj "/CN=localhost"
+
+astvcs serve --tls-cert serve-cert.pem --tls-key serve-key.pem --token dev-secret
+astvcs clone https://127.0.0.1:9421 ./clone-dir --token dev-secret --insecure
+```
+
+Bearer token auth works over both HTTP and HTTPS. File remotes ignore tokens and TLS flags.
 
 ### `gc`
 

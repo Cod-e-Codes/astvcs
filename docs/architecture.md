@@ -180,6 +180,7 @@ Supported remote URLs:
 |--------|---------|
 | Local path | `C:/repos/project` or `file:///C:/repos/project` |
 | HTTP | `http://127.0.0.1:9421` (from `astvcs serve`) |
+| HTTPS | `https://127.0.0.1:9421` (from `astvcs serve --tls-cert ... --tls-key ...`) |
 
 Sync transfers content-addressed objects only: blobs, state manifests, timeline entries, branch refs, and tags. `fetch` downloads missing history, updates remote-tracking refs, and syncs all remote tags (even when `--branch` limits which branch refs are updated). It does not change local branches or the working tree. `pull` is fetch followed by merge of the remote-tracking branch into the current branch. Use `reset` or `checkout --state` with a remote-tracking ref (for example `origin/main`) or a tag name to inspect fetched commits without merging. `push` uploads missing objects, fast-forwards the remote branch (use `--force` to override), and uploads local tags missing on the remote (tag updates are not fast-forward checked). `clone` initializes a repository, fetches branches and tags from the remote, and checks out the default branch.
 
@@ -188,6 +189,10 @@ HTTP API: `GET /v1/refs/tags` returns a JSON map of tag name to state id; `GET`/
 The HTTP API uses `/v1/` paths for blobs, states, timeline entries, branch refs, and repository config.
 
 **HTTP authentication.** `astvcs serve` accepts an optional bearer token via `--token` or the `ASTVCS_SERVE_TOKEN` environment variable (CLI wins when both are set). With no token configured, the server is open for local development. When a token is configured, the server fails closed: `PUT` on `/v1/*` always requires `Authorization: Bearer <token>`; `GET` and `HEAD` require the token unless `--public-read` is set. Wrong or missing credentials return HTTP 401 with a plain text body. Token comparison uses constant-time equality. The HTTP client transport sends the stored remote token on every request when configured. Local file remotes remain unrestricted.
+
+**TLS on serve.** Optional `--tls-cert` and `--tls-key` PEM paths enable HTTPS via tiny_http's rustls backend (`ssl-rustls` feature). Both flags must be supplied together. Without them, serve listens on plain HTTP.
+
+**HTTPS client validation.** HTTP remotes use reqwest with rustls. Certificate validation is enabled by default (fail closed on bad or self-signed certs). Pass `--insecure` on `fetch`, `push`, `pull`, or `clone` to call `danger_accept_invalid_certs(true)` for local dev with self-signed serve certs. Bearer tokens work over HTTPS the same as HTTP.
 
 ## Source layout
 

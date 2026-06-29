@@ -146,11 +146,16 @@ pub struct FetchOutcome {
     pub branches: Vec<(String, StateId)>,
 }
 
-pub fn fetch(repo: &Repo, remote_name: &str, branch: Option<&str>) -> Result<FetchOutcome, String> {
+pub fn fetch(
+    repo: &Repo,
+    remote_name: &str,
+    branch: Option<&str>,
+    insecure: bool,
+) -> Result<FetchOutcome, String> {
     let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
     let token = remote_token(repo, remote_name)?;
-    let transport = Transport::open_with_token(&url, token.as_deref())?;
+    let transport = Transport::open_with_options(&url, token.as_deref(), insecure)?;
     ensure_remote_dir(repo, remote_name)?;
 
     let refs = transport.list_refs()?;
@@ -190,11 +195,12 @@ pub fn push(
     branch: Option<&str>,
     force: bool,
     no_verify: bool,
+    insecure: bool,
 ) -> Result<PushOutcome, String> {
     let _lock = map_repo(repo.repo_lock())?;
     let url = remote_url(repo, remote_name)?;
     let token = remote_token(repo, remote_name)?;
-    let transport = Transport::open_with_token(&url, token.as_deref())?;
+    let transport = Transport::open_with_options(&url, token.as_deref(), insecure)?;
 
     let branch_name = match branch {
         Some(name) => name.to_string(),
@@ -242,8 +248,13 @@ pub fn push(
     })
 }
 
-pub fn clone_repo(url: &str, path: &Path, token: Option<&str>) -> Result<(Repo, String), String> {
-    Transport::open_with_token(url, token)?;
+pub fn clone_repo(
+    url: &str,
+    path: &Path,
+    token: Option<&str>,
+    insecure: bool,
+) -> Result<(Repo, String), String> {
+    Transport::open_with_options(url, token, insecure)?;
     if path.exists() {
         if path.read_dir().map_err(|e| e.to_string())?.next().is_some() {
             return Err(format!("destination is not empty: {}", path.display()));
@@ -255,7 +266,7 @@ pub fn clone_repo(url: &str, path: &Path, token: Option<&str>) -> Result<(Repo, 
     let repo = map_repo(Repo::init(path))?;
     crate::network::remote::add_remote(&repo, "origin", url, token)?;
 
-    let transport = Transport::open_with_token(url, token)?;
+    let transport = Transport::open_with_options(url, token, insecure)?;
     let default_branch = transport.default_branch()?;
     let refs = transport.list_refs()?;
     let tip = refs
@@ -309,7 +320,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = fetch(&downstream_repo, "origin", Some("main")).unwrap();
+        let outcome = fetch(&downstream_repo, "origin", Some("main"), false).unwrap();
         assert_eq!(outcome.branches.len(), 1);
 
         let remote_tip = downstream_repo.read_remote_ref("origin", "main").unwrap();
@@ -322,7 +333,15 @@ mod tests {
 
         fs::write(downstream.path().join("hello.txt"), "world\n").unwrap();
         downstream_repo.commit("downstream change").unwrap();
-        push(&downstream_repo, "origin", Some("main"), false, false).unwrap();
+        push(
+            &downstream_repo,
+            "origin",
+            Some("main"),
+            false,
+            false,
+            false,
+        )
+        .unwrap();
 
         assert_eq!(
             upstream_repo.head_state().unwrap(),
@@ -336,8 +355,13 @@ mod tests {
         init_with_commit(upstream.path(), "initial");
 
         let clone_dir = TempDir::new().unwrap();
-        let (repo, branch) =
-            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path(), None).unwrap();
+        let (repo, branch) = clone_repo(
+            upstream.path().to_str().unwrap(),
+            clone_dir.path(),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(branch, "main");
         assert!(repo.has_timeline(&repo.head_state().unwrap()));
         assert_eq!(
@@ -361,8 +385,13 @@ mod tests {
         fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
         let clone_dir = TempDir::new().unwrap();
-        let (repo, branch) =
-            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path(), None).unwrap();
+        let (repo, branch) = clone_repo(
+            upstream.path().to_str().unwrap(),
+            clone_dir.path(),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(branch, "develop");
         assert_eq!(repo.head_branch().unwrap(), Some("develop".into()));
         assert_eq!(

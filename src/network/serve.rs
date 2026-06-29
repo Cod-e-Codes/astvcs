@@ -1,6 +1,8 @@
 use crate::store::{Repo, RepoError, TimelineEntry};
 use std::collections::HashMap;
+use std::fs;
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use subtle::ConstantTimeEq;
 
@@ -14,13 +16,49 @@ const API_PREFIX: &str = "/v1";
 pub struct ServeOptions {
     pub token: Option<String>,
     pub public_read: bool,
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
+}
+
+pub fn validate_tls_config(
+    tls_cert: &Option<PathBuf>,
+    tls_key: &Option<PathBuf>,
+) -> Result<(), String> {
+    match (tls_cert.as_ref(), tls_key.as_ref()) {
+        (None, None) | (Some(_), Some(_)) => Ok(()),
+        _ => Err("--tls-cert and --tls-key must be provided together".into()),
+    }
 }
 
 pub fn serve_repo(repo: &Repo, bind: &str, port: u16, options: ServeOptions) -> Result<(), String> {
+    validate_tls_config(&options.tls_cert, &options.tls_key)?;
     let addr = format!("{bind}:{port}");
-    let server = tiny_http::Server::http(&addr).map_err(|e| e.to_string())?;
+    let tls_enabled = options.tls_cert.is_some();
+    let server = if tls_enabled {
+        let cert_path = options.tls_cert.as_ref().unwrap();
+        let key_path = options.tls_key.as_ref().unwrap();
+        let certificate = fs::read(cert_path).map_err(|e| {
+            format!(
+                "failed to read TLS certificate {}: {e}",
+                cert_path.display()
+            )
+        })?;
+        let private_key = fs::read(key_path)
+            .map_err(|e| format!("failed to read TLS private key {}: {e}", key_path.display()))?;
+        tiny_http::Server::https(
+            &addr,
+            tiny_http::SslConfig {
+                certificate,
+                private_key,
+            },
+        )
+        .map_err(|e| e.to_string())?
+    } else {
+        tiny_http::Server::http(&addr).map_err(|e| e.to_string())?
+    };
     let repo = Arc::new(Mutex::new(map_repo(Repo::open(repo.root_path()))?));
-    eprintln!("astvcs serve listening on http://{addr}/");
+    let scheme = if tls_enabled { "https" } else { "http" };
+    eprintln!("astvcs serve listening on {scheme}://{addr}/");
 
     for mut request in server.incoming_requests() {
         let response = match dispatch(&repo, &mut request, &options) {
@@ -462,6 +500,26 @@ mod tests {
     }
 
     #[test]
+    fn validate_tls_config_requires_both_or_neither() {
+        assert!(validate_tls_config(&None, &None).is_ok());
+        assert!(
+            validate_tls_config(
+                &Some(PathBuf::from("cert.pem")),
+                &Some(PathBuf::from("key.pem")),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_tls_config(&Some(PathBuf::from("cert.pem")), &None).unwrap_err(),
+            "--tls-cert and --tls-key must be provided together"
+        );
+        assert_eq!(
+            validate_tls_config(&None, &Some(PathBuf::from("key.pem"))).unwrap_err(),
+            "--tls-cert and --tls-key must be provided together"
+        );
+    }
+
+    #[test]
     fn serve_requires_token_for_mutations() {
         let (_dir, repo) = init_repo();
         let state_id = repo.head_state().unwrap();
@@ -470,6 +528,7 @@ mod tests {
             ServeOptions {
                 token: Some("secret-token".into()),
                 public_read: false,
+                ..Default::default()
             },
         );
 
@@ -495,6 +554,7 @@ mod tests {
             ServeOptions {
                 token: Some("read-secret".into()),
                 public_read: false,
+                ..Default::default()
             },
         );
 
@@ -515,6 +575,7 @@ mod tests {
             ServeOptions {
                 token: Some("pub-secret".into()),
                 public_read: true,
+                ..Default::default()
             },
         );
 

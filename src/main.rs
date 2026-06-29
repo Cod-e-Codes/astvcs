@@ -135,6 +135,9 @@ enum Commands {
         remote: String,
         #[arg(long)]
         branch: Option<String>,
+        /// Skip TLS certificate verification (dangerous; local dev only).
+        #[arg(long)]
+        insecure: bool,
     },
     Push {
         remote: String,
@@ -145,6 +148,9 @@ enum Commands {
         /// Skip client hooks (pre-push).
         #[arg(long)]
         no_verify: bool,
+        /// Skip TLS certificate verification (dangerous; local dev only).
+        #[arg(long)]
+        insecure: bool,
     },
     Pull(PullArgs),
     Stash {
@@ -158,6 +164,9 @@ enum Commands {
         /// Bearer token for authenticated HTTP remotes (stored in origin remote config).
         #[arg(long)]
         token: Option<String>,
+        /// Skip TLS certificate verification (dangerous; local dev only).
+        #[arg(long)]
+        insecure: bool,
     },
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
@@ -170,6 +179,12 @@ enum Commands {
         /// Allow anonymous GET/HEAD on /v1/* when a token is configured.
         #[arg(long)]
         public_read: bool,
+        /// PEM certificate for HTTPS (requires --tls-key).
+        #[arg(long)]
+        tls_cert: Option<PathBuf>,
+        /// PEM private key for HTTPS (requires --tls-cert).
+        #[arg(long)]
+        tls_key: Option<PathBuf>,
     },
     Gc {
         /// Delete unreachable blobs (default is dry-run).
@@ -262,6 +277,9 @@ struct PullArgs {
     message: Option<String>,
     #[arg(long)]
     force: bool,
+    /// Skip TLS certificate verification (dangerous; local dev only).
+    #[arg(long)]
+    insecure: bool,
     /// Skip client hooks during the merge step.
     #[arg(long)]
     no_verify: bool,
@@ -842,10 +860,14 @@ fn run(cli: Cli) -> RepoResult<()> {
                 }
             }
         }
-        Commands::Fetch { remote, branch } => {
+        Commands::Fetch {
+            remote,
+            branch,
+            insecure,
+        } => {
             let repo = Repo::open(&root)?;
-            let outcome =
-                fetch(&repo, &remote, branch.as_deref()).map_err(RepoError::from_message)?;
+            let outcome = fetch(&repo, &remote, branch.as_deref(), insecure)
+                .map_err(RepoError::from_message)?;
             for (name, tip) in outcome.branches {
                 println!("Fetched {remote}/{name} -> {tip}");
             }
@@ -855,10 +877,18 @@ fn run(cli: Cli) -> RepoResult<()> {
             branch,
             force,
             no_verify,
+            insecure,
         } => {
             let repo = Repo::open(&root)?;
-            let outcome = push(&repo, &remote, branch.as_deref(), force, no_verify)
-                .map_err(RepoError::from_message)?;
+            let outcome = push(
+                &repo,
+                &remote,
+                branch.as_deref(),
+                force,
+                no_verify,
+                insecure,
+            )
+            .map_err(RepoError::from_message)?;
             println!(
                 "Pushed {} to {}/{} ({})",
                 outcome.branch, remote, outcome.branch, outcome.state_id
@@ -873,8 +903,8 @@ fn run(cli: Cli) -> RepoResult<()> {
                 })?,
             };
             let remote_ref = format!("{}/{}", args.remote, branch_name);
-            let outcome =
-                fetch(&repo, &args.remote, Some(&branch_name)).map_err(RepoError::from_message)?;
+            let outcome = fetch(&repo, &args.remote, Some(&branch_name), args.insecure)
+                .map_err(RepoError::from_message)?;
             for (name, tip) in outcome.branches {
                 println!("Fetched {}/{} -> {tip}", args.remote, name);
             }
@@ -930,9 +960,14 @@ fn run(cli: Cli) -> RepoResult<()> {
                 }
             }
         }
-        Commands::Clone { url, path, token } => {
-            let (_, branch) =
-                clone_repo(&url, &path, token.as_deref()).map_err(RepoError::from_message)?;
+        Commands::Clone {
+            url,
+            path,
+            token,
+            insecure,
+        } => {
+            let (_, branch) = clone_repo(&url, &path, token.as_deref(), insecure)
+                .map_err(RepoError::from_message)?;
             println!(
                 "Cloned into {} (checked out branch {branch})",
                 path.display()
@@ -943,10 +978,17 @@ fn run(cli: Cli) -> RepoResult<()> {
             port,
             token,
             public_read,
+            tls_cert,
+            tls_key,
         } => {
             let repo = Repo::open(&root)?;
             let token = token.or_else(|| std::env::var("ASTVCS_SERVE_TOKEN").ok());
-            let options = astvcs::network::ServeOptions { token, public_read };
+            let options = astvcs::network::ServeOptions {
+                token,
+                public_read,
+                tls_cert,
+                tls_key,
+            };
             serve_repo(&repo, &bind, port, options).map_err(RepoError::from_message)?;
         }
         Commands::Gc {

@@ -40,18 +40,32 @@ pub enum Transport {
     },
 }
 
+fn build_http_client(insecure: bool) -> Result<reqwest::blocking::Client, String> {
+    let mut builder =
+        reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(60));
+    if insecure {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
 impl Transport {
     pub fn open(url: &str) -> Result<Self, String> {
-        Self::open_with_token(url, None)
+        Self::open_with_options(url, None, false)
     }
 
     pub fn open_with_token(url: &str, token: Option<&str>) -> Result<Self, String> {
+        Self::open_with_options(url, token, false)
+    }
+
+    pub fn open_with_options(
+        url: &str,
+        token: Option<&str>,
+        insecure: bool,
+    ) -> Result<Self, String> {
         if url.starts_with("http://") || url.starts_with("https://") {
             let base = url.trim_end_matches('/').to_string();
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .map_err(|e| e.to_string())?;
+            let client = build_http_client(insecure)?;
             return Ok(Self::Http {
                 base,
                 client,
@@ -405,6 +419,47 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
+
+    #[test]
+    fn parse_remote_url_accepts_https() {
+        let url = "https://example.com:9443/repo";
+        let parsed = parse_remote_url(url).unwrap();
+        assert_eq!(parsed, PathBuf::from(url));
+    }
+
+    #[test]
+    fn insecure_client_accepts_self_signed_cert() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let certificate = cert.cert.pem().into_bytes();
+        let private_key = cert.signing_key.serialize_pem().into_bytes();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ssl_config = tiny_http::SslConfig {
+            certificate,
+            private_key,
+        };
+        let server = tiny_http::Server::from_listener(listener, Some(ssl_config)).unwrap();
+
+        let handle = thread::spawn(move || {
+            if let Some(request) = server.incoming_requests().next() {
+                let response = tiny_http::Response::from_string("{}").with_status_code(200);
+                let _ = request.respond(response);
+            }
+        });
+
+        let base = format!("https://127.0.0.1:{port}");
+        let strict = Transport::open_with_options(&base, None, false);
+        assert!(strict.is_ok());
+        assert!(strict.unwrap().list_refs().is_err());
+
+        let transport = Transport::open_with_options(&base, None, true).expect("open insecure");
+        transport
+            .list_refs()
+            .expect("fetch refs over self-signed https");
+
+        let _ = handle.join();
+    }
 
     #[test]
     fn http_transport_sends_bearer_token() {

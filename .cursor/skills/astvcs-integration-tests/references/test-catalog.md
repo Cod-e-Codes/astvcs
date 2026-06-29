@@ -102,3 +102,6 @@
 | `checkout_force_with_staged_changes` | Checkout `--force` with staged edits warns |
 | `reset_mixed_unstages_and_keeps_disk` | `reset --mixed` clears staging, keeps disk |
 | `cli_commit_empty_staging_errors` | Active staging with no staged paths errors on commit |
+| `parse_remote_url_accepts_https` | `https://` remotes accepted by URL parser (unit, `network/transport.rs`) |
+| `insecure_client_accepts_self_signed_cert` | HTTPS transport with `--insecure` accepts self-signed serve cert (unit, `network/transport.rs`) |
+| `validate_tls_config_requires_both_or_neither` | `--tls-cert` and `--tls-key` must be paired (unit, `network/serve.rs`) |
