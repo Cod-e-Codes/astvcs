@@ -11,6 +11,7 @@ mod manifest;
 mod merge_resolve;
 mod pack;
 mod reachability;
+mod rebase;
 mod repo;
 mod scan_cache;
 mod staging;

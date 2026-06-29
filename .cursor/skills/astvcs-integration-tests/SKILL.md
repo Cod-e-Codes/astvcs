@@ -81,6 +81,7 @@ assert!(out.status.success());
 - `stash`: `stash_before_checkout`, `stash_pop_restores_files`, `stash_pop_conflict_keeps_entry`; unit coverage in `store/stash.rs` (`stash_stack_save_load`, `stash_entry_roundtrip`).
 - Lightweight tags: `tag_create_and_list`, `checkout_tag_detached`, `tag_fetch_push_between_repos`; unit coverage in `store/tags.rs` (`tag_create_list_remove`, `resolve_tag_ref`, `tag_name_validation`).
 - Client hooks: `hook_pre_commit_aborts_commit`, `hook_commit_msg_edits_message`, `hook_nested_astvcs_status_in_pre_commit`, `hook_no_verify_skips_pre_commit`, `hook_pre_merge_aborts`; lock suspend/resume in `store/lock.rs` (`suspend_and_resume_releases_for_subprocess`).
+- Rebase: `rebase_linear_success`, `rebase_conflict_abort_restores`, `rebase_conflict_continue`; unit coverage in `store/rebase.rs` (`collect_linear_commits_orders_oldest_first`, `collect_linear_commits_rejects_merge_commit`).
 
 ### What to avoid
 

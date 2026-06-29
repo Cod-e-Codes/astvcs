@@ -16,6 +16,8 @@
 
 **Stash.** `.astvcs/stash/` stores numbered JSON entries (`{ id, message, base_state_id, created_at, manifest }`) and an optional `stack.json` listing stash ids (newest at index 0). `stash push` writes changed paths as content-addressed blobs, saves the entry, then materializes HEAD (clearing staging). `stash apply` / `stash pop` three-way merge stashed paths onto current HEAD and write results to the working tree only; conflicts abort without side effects; `pop` drops the entry on success.
 
+**Rebase.** `.astvcs/rebase-state.json` records an in-progress linear rebase (`branch`, `upstream`, `onto`, `original_tip`, `current_head`, `remaining`, `conflicted`). `rebase <upstream>` collects single-parent commits from the branch tip down to the merge base with upstream (exclusive), oldest first, and replays each onto `current_head` via the same three-way merge planner as `merge` (`plan_three_way_unlocked`). Replay conflicts materialize the partial merge to disk without conflict markers; `rebase --abort` restores `original_tip`. v1 has no interactive rebase editor.
+
 **Repository locking and atomic writes.** Every command that reads or writes refs, `HEAD`, the timeline, the blob store, `index.json`, `staging.json`, or the working tree acquires a single exclusive advisory lock on `.astvcs/repo.lock` for the duration of that logical operation. astvcs uses one coarse exclusive lock: concurrent readers against a writer materializing the tree would be unsafe, and staging writes must stay consistent with commits. The lock is OS advisory (`flock` on Unix, `LockFileEx` on Windows) via `std::fs::File::try_lock`, not a marker file; when a process exits or is killed the kernel releases the lock, so a stale lock cannot permanently deadlock the repository. If another process holds the lock, astvcs fails fast with `repository is locked by another process; cannot acquire <path>` rather than waiting, because local CLI contention is rare and a clear immediate error is better UX than a silent hang. Reentrant acquisition on the same thread allows nested repo calls without double-locking. Network sync entry points (`fetch`, `push`, remote config) acquire the same lock once per operation. The lock file descriptor is cached per thread and explicitly unlocked (not closed) between commands so sequential in-process repo calls on Linux do not fail reopening `repo.lock` with `WouldBlock`. Before running client hooks, mutating commands call `suspend_repo_lock` to release the OS lock while keeping the cached descriptor open, then `resume_repo_lock` to re-acquire after the hook subprocess exits. That lets hooks invoke `astvcs` again without self-deadlock.
 
 **Client hooks.** Optional executable scripts under `.astvcs/hooks/` run as child processes during mutating operations. v1 hooks: `pre-commit` and `commit-msg` (before commit persist, only when the commit would create a new state), `pre-merge` (after a clean merge plan, before `finish_merge` writes), and `pre-push` (before upload, when the push would send new objects). Missing hooks are skipped. Non-zero exit aborts the operation with `hook_failed`. Pass `--no-verify` on `commit`, `merge`, `pull` (merge step), or `push` to skip hooks. Hooks run with cwd = repository root and environment variables `ASTVCS_ROOT`, `ASTVCS_BRANCH` (empty when detached), `ASTVCS_HEAD_STATE_ID`, plus hook-specific vars (`ASTVCS_COMMIT_MSG_FILE`, `ASTVCS_MERGE_BRANCH`, `ASTVCS_REMOTE`). The commit message is written to `.astvcs/hooks/commit-msg-input` before `commit-msg`; the hook may edit that file. On Windows, `.cmd`/`.bat` hooks run via `cmd /C`, `.ps1` via `powershell -NoProfile -File`; on Unix, executable hooks run directly, otherwise `sh hookpath`.
@@ -55,6 +57,7 @@ HEAD                 branch name or state id
 index.json           last committed manifest (working-tree baseline)
 staging.json         staged paths overlay (`active` flag set on first `add`)
 stash/               numbered stash entries (`0.json`, …) plus `stack.json` index (0 = newest)
+rebase-state.json    in-progress linear rebase queue (absent when idle)
 scan-cache.json      mtime/size snapshot for incremental working-tree scans
 config.json          repository settings (`version`, `format_version`, `default_branch`, optional `author`)
 ```
@@ -201,6 +204,7 @@ src/
     lock.rs      exclusive advisory repo lock (repo.lock); suspend/resume for hooks
     hooks.rs     client hook runner (pre-commit, commit-msg, pre-merge, pre-push)
     reachability.rs ref-tip reachability walk (shared by gc/fsck)
+    rebase.rs    rebase state and linear replay
     walk.rs      gitignore-style working tree scan (full and incremental)
     scan_cache.rs scan-cache.json load/save and path stat helpers
     repo.rs      repository and CLI backend
@@ -246,6 +250,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
+| `rebase_linear_success` | Feature branch commits replayed onto updated main |
+| `rebase_conflict_abort_restores` | Replay conflict then `rebase --abort` restores tip and disk |
+| `rebase_conflict_continue` | `--resolve` on `rebase --continue` finishes replay |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | Lock held externally: CLI fails fast with lock path |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Second writer gets lock error; succeeds after release (unit, `src/store/repo.rs`) |

@@ -44,6 +44,9 @@
 | `stash_before_checkout` | `stash push` cleans tree so checkout succeeds without `--force` |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
+| `rebase_linear_success` | Feature branch commits replayed onto updated main |
+| `rebase_conflict_abort_restores` | Replay conflict then `rebase --abort` restores tip and disk |
+| `rebase_conflict_continue` | `--resolve` on `rebase --continue` finishes replay |
 | `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
 | `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
 | `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |

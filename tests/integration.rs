@@ -3170,3 +3170,142 @@ fn hook_pre_merge_aborts() {
     assert_eq!(err.kind, RepoErrorKind::HookFailed);
     assert_eq!(repo.head_state().unwrap(), main_before);
 }
+
+#[test]
+fn rebase_linear_success() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("app.txt"), "v1\n").unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feat1.txt"), "one\n").unwrap();
+    repo.commit("feature 1").unwrap();
+    fs::write(dir.path().join("feat2.txt"), "two\n").unwrap();
+    repo.commit("feature 2").unwrap();
+    let feature_tip_before = repo.head_state().unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("app.txt"), "v2-main\n").unwrap();
+    repo.commit("main advance").unwrap();
+    let main_tip = repo.head_state().unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["rebase", "main"]),
+        "rebase onto main",
+    );
+
+    assert_ne!(repo.head_state().unwrap(), feature_tip_before);
+    let disk = fs::read_to_string(dir.path().join("app.txt")).unwrap();
+    assert!(disk.contains("v2-main"), "{disk}");
+    assert!(
+        fs::read_to_string(dir.path().join("feat1.txt"))
+            .unwrap()
+            .contains("one")
+    );
+    assert!(
+        fs::read_to_string(dir.path().join("feat2.txt"))
+            .unwrap()
+            .contains("two")
+    );
+    assert!(!dir.path().join(".astvcs/rebase-state.json").exists());
+    assert_eq!(repo.merge_base_refs("feature", "main").unwrap(), main_tip);
+}
+
+#[test]
+fn rebase_conflict_abort_restores() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let z = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("z on feature").unwrap();
+    let feature_tip = repo.head_state().unwrap();
+    let feature_disk = fs::read_to_string(dir.path().join("main.rs")).unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("y on main").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    let rebase = run_astvcs(Some(dir.path()), &["rebase", "main"]);
+    assert!(!rebase.status.success(), "rebase should stop on conflict");
+    assert!(dir.path().join(".astvcs/rebase-state.json").exists());
+    assert_eq!(repo.head_state().unwrap(), feature_tip);
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["rebase", "--abort"]),
+        "rebase abort",
+    );
+    assert!(!dir.path().join(".astvcs/rebase-state.json").exists());
+    assert_eq!(repo.head_state().unwrap(), feature_tip);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("main.rs")).unwrap(),
+        feature_disk
+    );
+}
+
+#[test]
+fn rebase_conflict_continue() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let z = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("z on feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn foo() {\n    let y = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("y on main").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    let rebase = run_astvcs(Some(dir.path()), &["rebase", "main"]);
+    assert!(!rebase.status.success());
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(dir.path()),
+            &["rebase", "--continue", "--resolve", "main.rs:theirs"],
+        ),
+        "rebase continue",
+    );
+    assert!(!dir.path().join(".astvcs/rebase-state.json").exists());
+    let disk = fs::read_to_string(dir.path().join("main.rs")).unwrap();
+    assert!(
+        disk.contains("z"),
+        "expected feature side after resolve: {disk}"
+    );
+    assert!(!disk.contains("y"), "should not keep main side: {disk}");
+}

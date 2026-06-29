@@ -107,6 +107,7 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    Rebase(RebaseArgs),
     Log {
         #[arg(short = 'n', long, default_value = "20")]
         limit: usize,
@@ -257,6 +258,25 @@ struct MergeArgs {
     no_verify: bool,
 
     /// Pick ours (HEAD) or theirs (merged branch) for a conflicted path.
+    #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
+    resolve: Vec<String>,
+}
+
+#[derive(Args)]
+struct RebaseArgs {
+    upstream: Option<String>,
+
+    #[arg(long)]
+    abort: bool,
+
+    #[arg(long)]
+    r#continue: bool,
+
+    /// Allow rebase when the working tree has uncommitted changes.
+    #[arg(long)]
+    force: bool,
+
+    /// Pick ours (current replay base) or theirs (replayed commit) for a conflicted path.
     #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
     resolve: Vec<String>,
 }
@@ -618,6 +638,39 @@ fn run(cli: Cli) -> RepoResult<()> {
                 } else {
                     println!("No changes (state {} unchanged)", outcome.state_id);
                 }
+            }
+        }
+        Commands::Rebase(args) => {
+            let repo = Repo::open(&root)?;
+            if args.abort {
+                if args.r#continue || args.upstream.is_some() || !args.resolve.is_empty() {
+                    return Err(RepoError::invalid_input(
+                        "rebase --abort cannot be combined with other rebase options",
+                    ));
+                }
+                repo.rebase_abort()?;
+                println!("Rebase aborted");
+            } else if args.r#continue {
+                if args.upstream.is_some() {
+                    return Err(RepoError::invalid_input(
+                        "rebase --continue cannot take an upstream branch",
+                    ));
+                }
+                let resolutions =
+                    parse_merge_resolutions(&args.resolve).map_err(RepoError::from_message)?;
+                repo.rebase_continue(&resolutions, args.force)?;
+                println!("Rebase continued");
+            } else {
+                let upstream = args.upstream.ok_or_else(|| {
+                    RepoError::invalid_input("upstream branch required (or use --abort/--continue)")
+                })?;
+                if !args.resolve.is_empty() {
+                    return Err(RepoError::invalid_input(
+                        "--resolve is only valid with rebase --continue",
+                    ));
+                }
+                repo.rebase_start(&upstream, args.force)?;
+                println!("Rebased onto {upstream}");
             }
         }
         Commands::Log { limit } => {

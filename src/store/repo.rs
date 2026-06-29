@@ -81,7 +81,7 @@ impl<'a> MaterializeOptions<'a> {
         }
     }
 
-    fn force(mut self, force: bool) -> Self {
+    pub(crate) fn force(mut self, force: bool) -> Self {
         self.force = force;
         self
     }
@@ -770,11 +770,11 @@ impl Repo {
         self.status_unlocked(opts)
     }
 
-    fn load_staging_unlocked(&self) -> RepoResult<StagingIndex> {
+    pub(crate) fn load_staging_unlocked(&self) -> RepoResult<StagingIndex> {
         load_staging(&self.astvcs_dir()).map_err(RepoError::from_message)
     }
 
-    fn save_staging_unlocked(&self, index: &StagingIndex) -> RepoResult<()> {
+    pub(crate) fn save_staging_unlocked(&self, index: &StagingIndex) -> RepoResult<()> {
         save_staging(&self.astvcs_dir(), index).map_err(RepoError::from_message)
     }
 
@@ -929,7 +929,7 @@ impl Repo {
         Ok(targets)
     }
 
-    fn status_unlocked(&self, opts: ScanOptions) -> RepoResult<WorkingStatus> {
+    pub(crate) fn status_unlocked(&self, opts: ScanOptions) -> RepoResult<WorkingStatus> {
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
         let index: HashMap<String, IndexEntry> = read_json(&self.astvcs_dir().join(INDEX_FILE))?;
@@ -1433,9 +1433,18 @@ impl Repo {
         trace::notice(format!(
             "merge plan: base={base_id} head={head} other={other}"
         ));
-        let base_files = self.load_state_files_unlocked(&base_id)?;
-        let head_files = self.load_state_files_unlocked(&head)?;
-        let other_files = self.load_state_files_unlocked(&other)?;
+        self.plan_three_way_unlocked(&base_id, &head, &other)
+    }
+
+    pub(crate) fn plan_three_way_unlocked(
+        &self,
+        base_id: &StateId,
+        left_id: &StateId,
+        right_id: &StateId,
+    ) -> RepoResult<MergePlan> {
+        let base_files = self.load_state_files_unlocked(base_id)?;
+        let head_files = self.load_state_files_unlocked(left_id)?;
+        let other_files = self.load_state_files_unlocked(right_id)?;
 
         let head_renames = detect_path_renames(
             &tracked_content_map(&base_files),
@@ -1620,9 +1629,9 @@ impl Repo {
         }
 
         Ok(MergePlan {
-            base_id,
-            head_id: head,
-            other_id: other,
+            base_id: base_id.clone(),
+            head_id: left_id.clone(),
+            other_id: right_id.clone(),
             merged_files,
             conflicts,
         })
@@ -2187,7 +2196,10 @@ impl Repo {
             .collect())
     }
 
-    fn materialize_guard(&self, opts: &MaterializeOptions<'_>) -> RepoResult<Vec<String>> {
+    pub(crate) fn materialize_guard(
+        &self,
+        opts: &MaterializeOptions<'_>,
+    ) -> RepoResult<Vec<String>> {
         if self.working_tree_is_clean_unlocked()? {
             return Ok(Vec::new());
         }
@@ -2311,7 +2323,7 @@ impl Repo {
             .all(|s| s.is_clean()))
     }
 
-    fn persist_state(
+    pub(crate) fn persist_state(
         &self,
         files: &HashMap<String, TrackedFile>,
         message: &str,
@@ -2405,7 +2417,7 @@ impl Repo {
         Ok(())
     }
 
-    fn sync_index_to_state(
+    pub(crate) fn sync_index_to_state(
         &self,
         files: &HashMap<String, TrackedFile>,
         state_id: &StateId,
@@ -2544,7 +2556,11 @@ impl Repo {
         self.write_branch_ref_unlocked(branch, state_id)
     }
 
-    fn write_branch_ref_unlocked(&self, branch: &str, state_id: &StateId) -> RepoResult<()> {
+    pub(crate) fn write_branch_ref_unlocked(
+        &self,
+        branch: &str,
+        state_id: &StateId,
+    ) -> RepoResult<()> {
         write_atomic_text(
             &self.astvcs_dir().join("refs/heads").join(branch),
             &format!("{state_id}\n"),

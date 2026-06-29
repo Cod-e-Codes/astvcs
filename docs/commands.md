@@ -41,6 +41,9 @@ Global flags:
 | `reset <ref> [--soft] [--mixed] [--force]` | Move HEAD or the current branch tip to `<ref>` (default: hard, syncs disk) |
 | `revert <ref> -m <msg> [--dry-run]` | Create a new state that undoes `<ref>` on top of HEAD |
 | `revert <ref> -m <msg> --force` | Revert when the working tree is dirty (warns per clobbered path) |
+| `rebase <upstream> [--force]` | Replay linear commits from the current branch onto `<upstream>` |
+| `rebase --abort` | Restore the branch tip and working tree from before the rebase; delete rebase state |
+| `rebase --continue [--force] [--resolve <path>:ours\|theirs]` | After resolving a replay conflict, finish the current commit and continue the queue |
 | `log [-n N]` | Walk timeline history (default 20 entries); shows author when present |
 | `remote add <name> <url>` | Register a remote (local path, `file://`, or `http://`) |
 | `remote list` | List configured remotes |
@@ -58,7 +61,7 @@ Global flags:
 | `repack` | Pack loose blobs into compressed pack files; remove loose copies |
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### Lightweight tags
 
@@ -111,6 +114,16 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 `stash apply` and `stash pop` three-way merge each path (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write the result to the working tree only (`index.json` stays at HEAD). Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict` and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
 
 Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD state id).
+
+### `rebase`
+
+`rebase <upstream>` replays the linear commits on the checked-out branch (from the merge base with `<upstream>` up to the branch tip) onto the upstream tip. Requires a checked-out branch (not detached HEAD). Refuses when staging is non-empty or the working tree is dirty unless `--force`. Refuses when a rebase is already in progress. Errors with `already up to date` when there is nothing to replay.
+
+Progress is stored in `.astvcs/rebase-state.json` (`branch`, `upstream`, `onto`, `original_tip`, `current_head`, `remaining`, `conflicted`). Each commit is replayed with a three-way merge (`base` = original parent, `left` = current replay head, `right` = commit being replayed). Replayed states keep the original commit message and author metadata.
+
+On replay conflict, the branch tip stays at `original_tip` until the first successful replay; after partial progress the tip is the last good `current_head`. The conflicted merge result is materialized to the working tree (no conflict markers). Use `rebase --continue` with `--resolve path:ours|theirs` (ours = current replay head, theirs = replayed commit) or edit conflicted paths on disk and continue. `rebase --abort` restores `original_tip` and materializes it.
+
+v1 does not include an interactive rebase editor or commit reordering.
 
 ### Client hooks
 

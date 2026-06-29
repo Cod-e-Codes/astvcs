@@ -30,6 +30,8 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 | (CLI-only) | `cli_revert_and_dry_run`, `cli_revert_of_revert_restores_content` | Revert success, dry-run conflict, revert-of-revert |
 | (CLI-only) | `cli_merge_resolve_conflict` | `merge --resolve path:ours\|theirs` |
 | (CLI-only) | `cli_materialize_refuses_dirty_tree_and_force_overrides` | Merge, checkout, revert dirty-tree refusal and `--force` |
+| (CLI-only) | `rebase_linear_success` | Linear feature branch replayed onto updated main |
+| (CLI-only) | `rebase_conflict_abort_restores`, `rebase_conflict_continue` | Replay conflict, abort restore, and `--resolve` on continue |
 
 ## Workflow demo
 
