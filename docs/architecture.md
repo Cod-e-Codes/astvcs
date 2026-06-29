@@ -36,9 +36,14 @@ Single-file metadata writes (`HEAD`, branch and remote refs, `index.json`, state
 .astvcs/repo.lock    exclusive advisory lock (empty; OS lock on open)
 HEAD                 branch name or state id
 index.json           last committed manifest (working-tree baseline)
+scan-cache.json      mtime/size snapshot for incremental working-tree scans
 ```
 
 **Working tree scan.** Honors `.gitignore`, `.astvcsignore`, and git exclude files (ripgrep semantics). Always skips `.astvcs/` and `.git/`. Non-UTF-8 path names are not tracked; file content may be binary.
+
+**Incremental scan cache.** `status` and `commit` reuse `.astvcs/scan-cache.json` when HEAD matches the cache `head_state_id` and the cache version is current. The sidecar stores per-path `{ mtime, size, is_symlink, unix_mode }` and per-directory `{ mtime, child_count }` from the last successful scan. An incremental pass re-stats cached paths and index paths (detecting removals and edits), prunes unchanged directories only when both mtime and child count match, and skips the tracked-file load (parse and mode detection) for paths whose metadata and raw-byte digest still match the last verified snapshot against HEAD. Pass `--full-scan` on `status` or `commit`, or `-v` / `--verbose`, to force a complete walk and full tracked loads. The cache is invalidated on checkout, merge, and hard reset materialization (via `materialize_state_inner`), and rebuilt on the next scan. It is updated after every scan and its `head_state_id` is advanced after a successful commit. Updates run under the repository lock and use atomic writes like other metadata.
+
+**Remaining limitations.** Incremental scans still read raw bytes to confirm verified paths; the win is skipping AST parsing and symlink or mode classification on unchanged files. Directory pruning depends on accurate child counts; if a filesystem reports a stale count, use `--full-scan` or `-v`.
 
 **Binary files.** Files whose bytes contain a NUL or are not valid UTF-8 are stored as `FileContent::Binary` blobs. UTF-8 text (including known text-only paths and parse-fallback sources) continues to use AST or text blobs. Binary payloads share the same content-addressed `blobs/` tree as AST and text: each blob is a JSON envelope `{"kind":"binary","bytes":"<base64>"}` hashed by the serialized bytes (same sharded layout as other kinds). A separate `blobs-bin/` tree was not added: one store keeps deduplication, `gc`, `fsck`, and network sync unified; the `kind` field distinguishes encodings on read. There is no maximum file size policy beyond available disk and memory. Materialization writes raw bytes via `atomic::write_atomic`. `status` reports binary paths as added, modified, or removed like text. `diff` and `diff --state` print path headers and `(binary file - content diff omitted)` instead of a byte-level diff. Three-way merge treats binary paths as opaque whole-file replace only (no structural or line merge); add/add with different bytes conflicts like text add/add.
 
@@ -171,7 +176,8 @@ src/
     integrity.rs gc and fsck (calls reachability)
     lock.rs      exclusive advisory repo lock (repo.lock)
     reachability.rs ref-tip reachability walk (shared by gc/fsck)
-    walk.rs      gitignore-style working tree scan
+    walk.rs      gitignore-style working tree scan (full and incremental)
+    scan_cache.rs scan-cache.json load/save and path stat helpers
     repo.rs      repository and CLI backend
   network/
     transport.rs file and HTTP remotes
@@ -239,5 +245,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `executable_mode_commit_and_checkout` | Executable manifest round-trip; Unix restores `+x` |
 | `symlink_vs_file_merge_conflict` | Merge conflict when one branch has symlink, other regular file |
 | `manifest_hash_regular_backward_compatible` | Regular-mode manifest hash matches legacy string map (unit, `store/manifest.rs`) |
+| `incremental_status_reuses_unchanged_file_reads` | Second `status` is incremental and skips tracked loads; touched file alone is re-read (unit, `store/repo.rs`) |
+| `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit, `store/walk.rs`) |
+| `incremental_scan_finds_new_file_in_changed_dir` | Incremental walk discovers new files when directory metadata changes (unit, `store/walk.rs`) |
+| `verified_detects_content_change_with_unchanged_stat` | Byte digest catches content edits when metadata is stale (unit, `store/scan_cache.rs`) |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

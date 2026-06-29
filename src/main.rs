@@ -2,8 +2,8 @@ use astvcs::network::{
     add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 use astvcs::store::{
-    FileStatus, Repo, RepoError, RepoResult, configured_identity, parse_merge_resolutions,
-    set_identity,
+    FileStatus, Repo, RepoError, RepoResult, ScanOptions, configured_identity,
+    parse_merge_resolutions, set_identity,
 };
 use astvcs::trace;
 use clap::{Args, Parser, Subcommand};
@@ -37,11 +37,18 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    Status,
+    Status {
+        /// Walk every tracked directory instead of using the scan cache.
+        #[arg(long)]
+        full_scan: bool,
+    },
     Diff(DiffArgs),
     Commit {
         #[arg(short, long)]
         message: String,
+        /// Walk every tracked directory instead of using the scan cache.
+        #[arg(long)]
+        full_scan: bool,
     },
     Branch {
         #[command(subcommand)]
@@ -238,9 +245,9 @@ fn run(cli: Cli) -> RepoResult<()> {
             Repo::init(&path)?;
             println!("Initialized astvcs repository in {}", path.display());
         }
-        Commands::Status => {
+        Commands::Status { full_scan } => {
             let repo = Repo::open(&root)?;
-            let status = repo.status()?;
+            let status = repo.status_with_options(ScanOptions { full_scan })?;
             let branch = repo.head_branch()?;
             let head = repo.head_state()?;
             match branch {
@@ -319,9 +326,9 @@ fn run(cli: Cli) -> RepoResult<()> {
             };
             print!("{output}");
         }
-        Commands::Commit { message } => {
+        Commands::Commit { message, full_scan } => {
             let repo = Repo::open(&root)?;
-            let outcome = repo.commit(&message)?;
+            let outcome = repo.commit_with_options(&message, ScanOptions { full_scan })?;
             if outcome.created {
                 println!("Committed state {}", outcome.state_id);
             } else {

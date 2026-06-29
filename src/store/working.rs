@@ -1,14 +1,32 @@
 use crate::frontend::{FileContent, SymlinkBlob, load_working_content};
 use crate::store::manifest::FileMode;
 use crate::store::tracked::TrackedFile;
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+thread_local! {
+    static LOAD_COUNT: RefCell<usize> = const { RefCell::new(0) };
+}
+
+/// Number of [`load_working_tracked`] calls on this thread since the last reset.
+#[cfg(test)]
+pub fn load_working_count() -> usize {
+    LOAD_COUNT.with(|c| *c.borrow())
+}
+
+/// Reset the [`load_working_tracked`] counter (for tests).
+#[cfg(test)]
+pub fn reset_load_working_count() {
+    LOAD_COUNT.with(|c| *c.borrow_mut() = 0);
+}
+
 /// Load a tracked path from the working tree (regular file, executable, or symlink).
 pub fn load_working_tracked(root: &Path, rel: &str) -> Result<TrackedFile, String> {
+    LOAD_COUNT.with(|c| *c.borrow_mut() += 1);
     let full = root.join(rel);
     if full.is_symlink() {
         let target = fs::read_link(&full).map_err(|e| format!("read symlink {rel}: {e}"))?;

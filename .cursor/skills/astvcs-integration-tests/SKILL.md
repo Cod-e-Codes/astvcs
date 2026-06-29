@@ -72,6 +72,7 @@ assert!(out.status.success());
 - Binary tests: `binary_commit_status_and_diff`, `binary_roundtrip_checkout_on_branch`, `binary_merge_add_add_conflict`, `binary_fsck_clean_after_commit`, `binary_push_clone_roundtrip`, `binary_reset_hard_roundtrip`, `binary_diff_state`.
 - Symlink/mode tests: `symlink_commit_and_checkout`, `executable_mode_commit_and_checkout`, `symlink_vs_file_merge_conflict` (all platforms; CI enables Windows symlinks); unit coverage in `store/manifest.rs`, `store/working.rs`, `merge::tracked_symlink_vs_regular_file_conflicts`.
 - Parse fallback visibility: `parse_fallback_status_annotation`, `parse_fallback_diff_annotation`, `parse_fallback_md_commit_stays_silent`, `parse_fallback_broken_rs_stderr_warning`, `parse_fallback_verbose_notice_detail`; unit coverage in `frontend/textblob.rs` (`syntax_error_emits_warning`, `syntax_error_verbose_emits_notice`).
+- Incremental scan cache: `incremental_status_reuses_unchanged_file_reads` (unit, `store/repo.rs`); `incremental_scan_reuses_unchanged_paths`, `incremental_scan_finds_new_file_in_changed_dir` (unit, `store/walk.rs`); `verified_detects_content_change_with_unchanged_stat` (unit, `store/scan_cache.rs`); `--full-scan` on `status` and `commit`; `-v` forces full scan.
 
 ### What to avoid
 

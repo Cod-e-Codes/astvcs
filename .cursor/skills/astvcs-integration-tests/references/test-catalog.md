@@ -62,3 +62,5 @@
 | `identity_recorded_on_commit_merge_and_revert` | Author metadata on commit, merge, and revert states |
 | `identity_does_not_change_content_addressed_state_id` | Manifest-only state ids unchanged by identity |
 | `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind`, `--json` stderr, plain string parity |
+| `incremental_status_reuses_unchanged_file_reads` | Incremental scan skips unchanged content reads; touched file alone re-read (unit) |
+| `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit) |

@@ -9,6 +9,7 @@ mod manifest;
 mod merge_resolve;
 mod reachability;
 mod repo;
+mod scan_cache;
 mod tracked;
 mod walk;
 mod working;
@@ -30,7 +31,8 @@ pub use merge_resolve::{
 };
 pub use repo::{
     BranchInfo, CommitOutcome, FileStatus, MergePlan, Repo, RepoConfig, RevertOutcome, RevertPlan,
-    StateEntry, StateId, TimelineEntry, WorkingStatus,
+    ScanOptions, StateEntry, StateId, TimelineEntry, WorkingStatus,
 };
+pub use scan_cache::ScanCache;
 pub use tracked::{TrackedFile, tracked_eq};
-pub use walk::{ASTVCS_DIR, ScanReport, SkippedPath};
+pub use walk::{ASTVCS_DIR, ScanMetrics, ScanMode, ScanReport, SkippedPath, last_scan_metrics};

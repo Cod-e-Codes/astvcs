@@ -5,7 +5,7 @@ Global flags:
 | Flag | Description |
 |------|-------------|
 | `--repo <path>` | Repository root (default: current directory) |
-| `-v`, `--verbose` | Print operational `notice:` detail to stderr |
+| `-v`, `--verbose` | Print operational `notice:` detail to stderr (also forces a full working-tree scan) |
 | `--json` | On failure, print a structured JSON error object on stderr instead of `error: …` |
 
 ## Subcommands
@@ -15,11 +15,11 @@ Global flags:
 | `init [path]` | Create a new repository (default path: `.`) |
 | `identity get [--global]` | Show configured author name and email (repository or global config) |
 | `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
-| `status` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. |
+| `status [--full-scan]` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. Incremental scan is used by default; pass `--full-scan` to walk every directory. |
 | `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
-| `commit -m <msg>` | Commit working tree as a new state (prints when unchanged). Requires configured author identity. |
+| `commit -m <msg> [--full-scan]` | Commit working tree as a new state (prints when unchanged). Requires configured author identity. Pass `--full-scan` to bypass the scan cache. |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |

@@ -13,6 +13,7 @@ use crate::store::identity::{AuthorIdentity, resolve_author_identity};
 use crate::store::lock::{self, RepoLockGuard};
 use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_manifest};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
+use crate::store::scan_cache::{self, ScanCache};
 use crate::store::tracked::{TrackedFile, tracked_eq};
 use crate::store::working::load_working_tracked;
 use crate::trace;
@@ -29,6 +30,19 @@ const HEAD_FILE: &str = "HEAD";
 const INDEX_FILE: &str = "index.json";
 const CONFIG_FILE: &str = "config.json";
 const STATE_ID_LEN: usize = 64;
+
+/// Options for working-tree scan used by `status` and `commit`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScanOptions {
+    /// Force a complete directory walk instead of an incremental scan.
+    pub full_scan: bool,
+}
+
+impl ScanOptions {
+    fn effective_full_scan(self) -> bool {
+        self.full_scan || trace::is_verbose()
+    }
+}
 
 const WORKING_TREE_DIRTY_ERR: &str = "working tree has uncommitted changes; commit or pass --force";
 
@@ -333,17 +347,56 @@ impl Repo {
         Ok(Self { root })
     }
 
-    fn scan_working(&self) -> RepoResult<HashSet<String>> {
-        let report = walk::scan_working_files(&self.root)?;
+    fn scan_working(
+        &self,
+        head: &StateId,
+        opts: ScanOptions,
+    ) -> RepoResult<(HashSet<String>, ScanCache, walk::ScanMetrics)> {
+        let full_scan = opts.effective_full_scan();
+        let prior = scan_cache::load_scan_cache(&self.astvcs_dir())
+            .map_err(RepoError::from_message)?
+            .filter(|c| c.is_valid_for(head));
+
+        let index: HashMap<String, IndexEntry> = read_json(&self.astvcs_dir().join(INDEX_FILE))?;
+        let index_paths: HashSet<String> = index.keys().cloned().collect();
+
+        let (mut report, mut cache) =
+            walk::scan_working_with_cache(&self.root, prior.as_ref(), full_scan, head)
+                .map_err(RepoError::from_message)?;
+
+        if let Some(prior_cache) = prior {
+            cache.verified = prior_cache.verified;
+        }
+
+        let mut metrics = walk::last_scan_metrics();
+        walk::merge_index_paths_into_scan(
+            &self.root,
+            &index_paths,
+            &mut report,
+            &mut cache,
+            &mut metrics,
+        )
+        .map_err(RepoError::from_message)?;
+
         for skip in &report.skipped {
             trace::warn(format!("scan: skipped {} ({})", skip.path, skip.reason));
         }
+        let mode = match metrics.mode {
+            Some(walk::ScanMode::Full) => "full",
+            Some(walk::ScanMode::Incremental) => "incremental",
+            None => "unknown",
+        };
         trace::notice(format!(
-            "scan: {} tracked, {} skipped",
+            "scan: {} tracked, {} skipped ({mode}; stat {} reused {})",
             report.files.len(),
-            report.skipped.len()
+            report.skipped.len(),
+            metrics.paths_statted,
+            metrics.paths_reused,
         ));
-        Ok(report.files)
+
+        scan_cache::save_scan_cache(&self.astvcs_dir(), &cache).map_err(RepoError::from_message)?;
+
+        Ok((report.files, cache, metrics))
     }
 
     fn check_index_consistency(
@@ -573,11 +626,15 @@ impl Repo {
     }
 
     pub fn status(&self) -> RepoResult<WorkingStatus> {
-        let _lock = self.repo_lock()?;
-        self.status_unlocked()
+        self.status_with_options(ScanOptions::default())
     }
 
-    fn status_unlocked(&self) -> RepoResult<WorkingStatus> {
+    pub fn status_with_options(&self, opts: ScanOptions) -> RepoResult<WorkingStatus> {
+        let _lock = self.repo_lock()?;
+        self.status_unlocked(opts)
+    }
+
+    fn status_unlocked(&self, opts: ScanOptions) -> RepoResult<WorkingStatus> {
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
         let index: HashMap<String, IndexEntry> = read_json(&self.astvcs_dir().join(INDEX_FILE))?;
@@ -585,9 +642,20 @@ impl Repo {
 
         let mut entries = HashMap::new();
         let mut text_fallback_paths = HashSet::new();
-        let working_files = self.scan_working()?;
+        let (working_files, mut scan_cache, scan_metrics) = self.scan_working(&head, opts)?;
         let mut working_map = HashMap::new();
+        let skip_content_reads =
+            !opts.full_scan && scan_metrics.mode == Some(walk::ScanMode::Incremental);
         for path in &working_files {
+            if skip_content_reads
+                && head_files.contains_key(path)
+                && scan_cache.verified.get(path).is_some_and(|entry| {
+                    scan_cache::path_verified_unchanged(&self.root, path, entry)
+                })
+            {
+                entries.insert(path.clone(), FileStatus::Unchanged);
+                continue;
+            }
             let current = load_working_tracked(&self.root, path)?;
             working_map.insert(path.clone(), current.clone());
             let head_content = head_files.get(path).map(|stored| &stored.content);
@@ -599,11 +667,21 @@ impl Repo {
                 Some(stored) if !tracked_eq(stored, &current) => FileStatus::Modified,
                 Some(_) => FileStatus::Unchanged,
             };
+            if matches!(status, FileStatus::Unchanged) {
+                if let Ok(entry) = scan_cache::verify_entry_for_path(&self.root, path) {
+                    scan_cache.verified.insert(path.clone(), entry);
+                }
+            } else {
+                scan_cache.verified.remove(path);
+            }
             if !matches!(status, FileStatus::Unchanged) {
                 trace::notice(format!("status: {path} {status}"));
             }
             entries.insert(path.clone(), status);
         }
+
+        scan_cache::save_scan_cache(&self.astvcs_dir(), &scan_cache)
+            .map_err(RepoError::from_message)?;
 
         for path in head_files.keys() {
             if !working_files.contains(path) {
@@ -651,7 +729,7 @@ impl Repo {
         let working = load_working_tracked(&self.root, path)?;
         let mut working_map = HashMap::new();
         working_map.insert(path.to_string(), working.clone());
-        for p in self.scan_working()? {
+        for p in self.scan_working(&head, ScanOptions::default())?.0 {
             if p != path {
                 working_map.insert(p.clone(), load_working_tracked(&self.root, &p)?);
             }
@@ -1307,27 +1385,49 @@ impl Repo {
     }
 
     pub fn commit(&self, message: &str) -> RepoResult<CommitOutcome> {
+        self.commit_with_options(message, ScanOptions::default())
+    }
+
+    pub fn commit_with_options(
+        &self,
+        message: &str,
+        opts: ScanOptions,
+    ) -> RepoResult<CommitOutcome> {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
-        let working_files = self.scan_working()?;
+        let (working_files, mut scan_cache, _) = self.scan_working(&head, opts)?;
 
         let mut new_files = head_files.clone();
         for path in &working_files {
             let tracked = load_working_tracked(&self.root, path)?;
             match head_files.get(path) {
-                Some(old) if tracked_eq(old, &tracked) => {}
-                Some(_) => trace::notice(format!("commit: {path} modified")),
-                None => trace::notice(format!("commit: {path} added")),
+                Some(old) if tracked_eq(old, &tracked) => {
+                    if let Ok(entry) = scan_cache::verify_entry_for_path(&self.root, path) {
+                        scan_cache.verified.insert(path.clone(), entry);
+                    }
+                }
+                Some(_) => {
+                    scan_cache.verified.remove(path);
+                    trace::notice(format!("commit: {path} modified"));
+                }
+                None => {
+                    scan_cache.verified.remove(path);
+                    trace::notice(format!("commit: {path} added"));
+                }
             }
             new_files.insert(path.clone(), tracked);
         }
         for path in head_files.keys().cloned().collect::<Vec<_>>() {
             if !working_files.contains(&path) {
+                scan_cache.verified.remove(&path);
                 trace::notice(format!("commit: {path} removed"));
                 new_files.remove(&path);
             }
         }
+
+        scan_cache::save_scan_cache(&self.astvcs_dir(), &scan_cache)
+            .map_err(RepoError::from_message)?;
 
         if manifest_unchanged(&head_files, &new_files) {
             trace::notice(format!("commit: no changes; state {head} unchanged"));
@@ -1341,6 +1441,13 @@ impl Repo {
         let state_id =
             self.persist_state(&new_files, message, &author, Some(head.clone()), vec![head])?;
         self.sync_index_to_state(&new_files, &state_id)?;
+        if let Some(mut cache) =
+            scan_cache::load_scan_cache(&self.astvcs_dir()).map_err(RepoError::from_message)?
+        {
+            cache.head_state_id = state_id.clone();
+            scan_cache::save_scan_cache(&self.astvcs_dir(), &cache)
+                .map_err(RepoError::from_message)?;
+        }
         match self.read_head_target()? {
             HeadTarget::Branch(branch) => {
                 self.write_branch_ref_unlocked(&branch, &state_id)?;
@@ -1440,7 +1547,7 @@ impl Repo {
 
     fn clobbered_paths(&self) -> RepoResult<Vec<String>> {
         Ok(self
-            .status_unlocked()?
+            .status_unlocked(ScanOptions::default())?
             .entries
             .iter()
             .filter(|(_, status)| !matches!(status, FileStatus::Unchanged))
@@ -1524,6 +1631,7 @@ impl Repo {
         }
 
         self.sync_index_to_state(&files, state_id)?;
+        scan_cache::invalidate_scan_cache(&self.astvcs_dir()).map_err(RepoError::from_message)?;
         trace::notice(format!(
             "materialize: state {state_id} -> {} paths on disk",
             files.len()
@@ -1558,7 +1666,7 @@ impl Repo {
 
     fn working_tree_is_clean_unlocked(&self) -> RepoResult<bool> {
         Ok(self
-            .status_unlocked()?
+            .status_unlocked(ScanOptions::default())?
             .entries
             .values()
             .all(|s| matches!(s, FileStatus::Unchanged)))
@@ -3649,5 +3757,48 @@ mod tests {
         };
         assert_eq!(text, "other content\n");
         assert!(!files.contains_key("src.txt"));
+    }
+
+    #[test]
+    fn incremental_status_reuses_unchanged_file_reads() {
+        use crate::store::walk::{ScanMode, last_scan_metrics};
+        use crate::store::working::{load_working_count, reset_load_working_count};
+        use std::thread;
+        use std::time::Duration;
+
+        let (dir, repo) = sample_repo();
+        for i in 0..30 {
+            fs::write(
+                dir.path().join(format!("file{i}.rs")),
+                format!("fn f{i}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        repo.commit("many files").unwrap();
+
+        reset_load_working_count();
+        repo.status_with_options(ScanOptions::default()).unwrap();
+        let first_reads = load_working_count();
+        assert!(first_reads >= 30, "first_reads={first_reads}");
+
+        reset_load_working_count();
+        repo.status_with_options(ScanOptions::default()).unwrap();
+        assert_eq!(last_scan_metrics().mode, Some(ScanMode::Incremental));
+        assert_eq!(
+            load_working_count(),
+            0,
+            "unchanged tree should skip content reads"
+        );
+
+        fs::write(dir.path().join("file0.rs"), "fn f0() { let x = 1; }\n").unwrap();
+        thread::sleep(Duration::from_millis(10));
+        reset_load_working_count();
+        repo.status_with_options(ScanOptions::default()).unwrap();
+        assert_eq!(last_scan_metrics().mode, Some(ScanMode::Incremental));
+        assert_eq!(
+            load_working_count(),
+            1,
+            "only the touched file should be read"
+        );
     }
 }
