@@ -15,11 +15,13 @@ Global flags:
 | `init [path]` | Create a new repository (default path: `.`) |
 | `identity get [--global]` | Show configured author name and email (repository or global config) |
 | `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
-| `status [--full-scan]` | Show changed files vs the checked-out state (clean tree: one summary line). Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. Incremental scan is used by default; pass `--full-scan` to walk every directory. |
-| `diff [path]` | Diff working tree, or a single file. Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
+| `status [--full-scan]` | Git-style two-column status: staged vs HEAD (`M `, `A `, `D `, `R `) and unstaged vs effective index (` M`, ` A`, ` D`, `??`). Combined `MM` when both. Clean tree: `nothing to commit, working tree clean`. Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. Incremental scan is used by default; pass `--full-scan` to walk every directory. |
+| `add [-u\|--update] [-A\|--all] <paths...>` | Stage paths for commit. `-u`: tracked modifications and deletions only. `-A`: all changes including untracked. Directory paths recurse. |
+| `diff [path]` | Unstaged diff (working tree vs staging overlay or HEAD). Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
+| `diff --staged` / `--cached [path]` | Staged diff vs HEAD |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
-| `commit -m <msg> [--full-scan]` | Commit working tree as a new state (prints when unchanged). Requires configured author identity. Pass `--full-scan` to bypass the scan cache. |
+| `commit -m <msg> [--full-scan]` | Commit staged changes when staging is active (after first `add`); otherwise legacy whole-tree commit. Errors when staging is active but empty while the working tree has changes. Requires configured author identity. Pass `--full-scan` to bypass the scan cache. |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |
@@ -32,7 +34,7 @@ Global flags:
 | `checkout --branch <name> --force` | Switch branch when the working tree is dirty (warns per clobbered path) |
 | `checkout --state <ref>` | Detached checkout: materialize a state and move HEAD to it |
 | `checkout --state <ref> --force` | Detached checkout when the working tree is dirty (warns per clobbered path) |
-| `reset <ref> [--soft] [--force]` | Move HEAD or the current branch tip to `<ref>` (default: hard, syncs disk) |
+| `reset <ref> [--soft] [--mixed] [--force]` | Move HEAD or the current branch tip to `<ref>` (default: hard, syncs disk) |
 | `revert <ref> -m <msg> [--dry-run]` | Create a new state that undoes `<ref>` on top of HEAD |
 | `revert <ref> -m <msg> --force` | Revert when the working tree is dirty (warns per clobbered path) |
 | `log [-n N]` | Walk timeline history (default 20 entries); shows author when present |
@@ -62,12 +64,13 @@ Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs remain unti
 
 ### `reset`
 
-Default mode is **hard**: move the branch tip or detached HEAD to the target and materialize the state to disk (sync working tree and `index.json`). This differs from git's default (`--mixed`): astvcs has no staging index, so the meaningful modes are **hard** (move pointer and sync disk) and **soft** (move pointer only).
+Default mode is **hard**: move the branch tip or detached HEAD to the target and materialize the state to disk (sync working tree and `index.json`, clear staging). **Mixed** (`--mixed`) moves the ref and syncs `index.json` to the target manifest while clearing staging and leaving the working tree unchanged (git-like default). **Soft** (`--soft`) moves the ref only; disk, `index.json`, and staging stay as-is.
 
 | Flag | Behavior |
 |------|----------|
-| (none) | Hard reset: refuse when the working tree has uncommitted changes |
-| `--soft` | Move the ref only; disk and `index.json` stay as-is (`status` shows diffs against the new HEAD) |
+| (none) | Hard reset: refuse when the working tree is dirty (unstaged changes or non-empty staging) |
+| `--mixed` | Move ref, sync `index.json` to target, clear staging; disk unchanged |
+| `--soft` | Move the ref only; disk, index, and staging unchanged |
 | `--force` | With hard reset, proceed when the working tree is dirty; emit `warning: reset --force: discarded uncommitted changes in <path>` per clobbered path |
 
 Hard reset to the current tip still materializes (repairs drift between disk and HEAD). Resetting to the root empty state (`0` repeated 64 times) is allowed.
@@ -78,7 +81,7 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 | Default | `--force` |
 |---------|-----------|
-| Refuse when `status` reports any path other than unchanged | Proceed; emit `warning: <command> --force: discarded uncommitted changes in <path>` for each clobbered path |
+| Refuse when `status` reports unstaged changes or staging is non-empty | Proceed; emit `warning: <command> --force: discarded uncommitted changes in <path>` for each clobbered path |
 
 `reset --soft` skips materialization entirely, so it never clobbers uncommitted work (same as before). Hard reset to the current tip, and checkout of the branch or state already at HEAD, may materialize without `--force` to repair drift between disk and HEAD without moving to a different snapshot.
 

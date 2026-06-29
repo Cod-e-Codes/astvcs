@@ -70,3 +70,9 @@
 | `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind`, `--json` stderr, plain string parity |
 | `incremental_status_reuses_unchanged_file_reads` | Incremental scan skips unchanged content reads; touched file alone re-read (unit) |
 | `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit) |
+| `partial_commit_only_stages_paths` | Staged commit snapshots only added paths |
+| `status_shows_staged_and_unstaged_columns` | Git-style `MM` / `M ` status columns |
+| `merge_refuses_with_staged_changes` | Merge blocked when staging non-empty |
+| `checkout_force_with_staged_changes` | Checkout `--force` with staged edits warns |
+| `reset_mixed_unstages_and_keeps_disk` | `reset --mixed` clears staging, keeps disk |
+| `cli_commit_empty_staging_errors` | Active staging with no staged paths errors on commit |

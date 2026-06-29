@@ -2,8 +2,8 @@ use astvcs::network::{
     add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
 use astvcs::store::{
-    FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions, configured_identity,
-    parse_merge_resolutions, set_identity,
+    ChangeColumn, FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions,
+    configured_identity, parse_merge_resolutions, set_identity,
 };
 use astvcs::trace;
 use clap::{Args, Parser, Subcommand};
@@ -42,6 +42,15 @@ enum Commands {
         #[arg(long)]
         full_scan: bool,
     },
+    Add {
+        /// Stage modifications and deletions to tracked paths only (no new untracked files).
+        #[arg(short = 'u', long = "update")]
+        update: bool,
+        /// Stage all changes (tracked modifications, deletions, and untracked files).
+        #[arg(short = 'A', long = "all")]
+        all: bool,
+        paths: Vec<String>,
+    },
     Diff(DiffArgs),
     Commit {
         #[arg(short, long)]
@@ -70,9 +79,12 @@ enum Commands {
     },
     Reset {
         reference: String,
-        /// Move the ref only; leave the working tree and index unchanged.
+        /// Move the ref only; leave the working tree and staging unchanged.
         #[arg(long)]
         soft: bool,
+        /// Move the ref and sync index.json to the target; clear staging; leave disk unchanged.
+        #[arg(long)]
+        mixed: bool,
         /// Allow hard reset when the working tree has uncommitted changes.
         #[arg(long)]
         force: bool,
@@ -171,6 +183,10 @@ enum RemoteAction {
 
 #[derive(Args)]
 struct DiffArgs {
+    /// Diff staged changes vs HEAD (--cached).
+    #[arg(long = "staged", alias = "cached", conflicts_with_all = ["state", "base", "left", "right"])]
+    staged: bool,
+
     /// Diff current HEAD against this state id.
     #[arg(long, conflicts_with_all = ["base", "left", "right"])]
     state: Option<String>,
@@ -248,6 +264,57 @@ fn print_cli_error(json: bool, err: &RepoError) {
     }
 }
 
+fn format_status_column(col: ChangeColumn) -> &'static str {
+    match col {
+        ChangeColumn::Clean => " ",
+        ChangeColumn::Modified => "M",
+        ChangeColumn::Added => "A",
+        ChangeColumn::Deleted => "D",
+    }
+}
+
+fn print_file_status(path: &str, status: &FileStatus, text_fallback: bool) {
+    if status.untracked {
+        let suffix = if text_fallback {
+            " (text fallback)"
+        } else {
+            ""
+        };
+        println!("?? {path}{suffix}");
+        return;
+    }
+    if let Some(from) = &status.staged_rename_from {
+        let suffix = if text_fallback {
+            " (text fallback)"
+        } else {
+            ""
+        };
+        println!("R  {from} -> {path}{suffix}");
+        return;
+    }
+    if let Some(from) = &status.unstaged_rename_from {
+        let suffix = if text_fallback {
+            " (text fallback)"
+        } else {
+            ""
+        };
+        let staged = format_status_column(status.staged);
+        println!("{staged}R {from} -> {path}{suffix}");
+        return;
+    }
+    let label = format!(
+        "{}{}",
+        format_status_column(status.staged),
+        format_status_column(status.unstaged)
+    );
+    let suffix = if text_fallback {
+        " (text fallback)"
+    } else {
+        ""
+    };
+    println!("{label} {path}{suffix}");
+}
+
 fn run(cli: Cli) -> RepoResult<()> {
     trace::set_verbose(cli.verbose);
     let root = repo_root(&cli);
@@ -270,34 +337,29 @@ fn run(cli: Cli) -> RepoResult<()> {
             paths.sort();
             let mut any = false;
             for path in paths {
-                let label = match status.entries.get(&path).unwrap() {
-                    FileStatus::Unchanged => continue,
-                    FileStatus::Modified => " M",
-                    FileStatus::Added => " A",
-                    FileStatus::Removed => " D",
-                    FileStatus::Renamed { from } => {
-                        any = true;
-                        let suffix = if status.text_fallback_paths.contains(&path) {
-                            " (text fallback)"
-                        } else {
-                            ""
-                        };
-                        println!(" R {from} -> {path}{suffix}");
-                        continue;
-                    }
-                    FileStatus::Untracked => "??",
-                };
+                let file_status = status.entries.get(&path).unwrap();
+                if file_status.is_clean() {
+                    continue;
+                }
                 any = true;
-                let suffix = if status.text_fallback_paths.contains(&path) {
-                    " (text fallback)"
-                } else {
-                    ""
-                };
-                println!("{label} {path}{suffix}");
+                print_file_status(
+                    &path,
+                    file_status,
+                    status.text_fallback_paths.contains(&path),
+                );
             }
             if !any {
                 println!("nothing to commit, working tree clean");
             }
+        }
+        Commands::Add { update, all, paths } => {
+            if update && all {
+                return Err(RepoError::invalid_input(
+                    "cannot use -u/--update and -A/--all together",
+                ));
+            }
+            let repo = Repo::open(&root)?;
+            repo.add(&paths, update, all)?;
         }
         Commands::Diff(args) => {
             let repo = Repo::open(&root)?;
@@ -315,25 +377,15 @@ fn run(cli: Cli) -> RepoResult<()> {
                     Some(p) => repo.diff_state_path(&from, &to_id, &p)?,
                     None => repo.diff_states(&from, &to_id)?,
                 }
-            } else if let Some(p) = args.path {
-                repo.diff_working(&p)?
+            } else if args.staged {
+                match args.path.as_deref() {
+                    Some(p) => repo.diff_staged(p)?,
+                    None => repo.diff_staged_tree()?,
+                }
+            } else if let Some(p) = args.path.as_deref() {
+                repo.diff_working(p)?
             } else {
-                let head = repo.head_state()?;
-                let status = repo.status()?;
-                let mut out = String::new();
-                for (path, st) in &status.entries {
-                    if matches!(
-                        st,
-                        FileStatus::Modified | FileStatus::Added | FileStatus::Renamed { .. }
-                    ) {
-                        out.push_str(&repo.diff_working(path)?);
-                    }
-                }
-                if out.is_empty() {
-                    repo.diff_states(&head, &head)?
-                } else {
-                    out
-                }
+                repo.diff_working_tree()?
             };
             print!("{output}");
         }
@@ -422,16 +474,29 @@ fn run(cli: Cli) -> RepoResult<()> {
         Commands::Reset {
             reference,
             soft,
+            mixed,
             force,
         } => {
+            if soft && mixed {
+                return Err(RepoError::invalid_input(
+                    "cannot use --soft and --mixed together",
+                ));
+            }
             let repo = Repo::open(&root)?;
-            let target = repo.reset(&reference, soft, force)?;
+            let target = repo.reset(&reference, soft, mixed, force)?;
             if soft {
                 match repo.head_branch()? {
                     Some(name) => {
                         println!("Reset branch {name} to state {target} (soft)");
                     }
                     None => println!("Reset HEAD to state {target} (soft)"),
+                }
+            } else if mixed {
+                match repo.head_branch()? {
+                    Some(name) => {
+                        println!("Reset branch {name} to state {target} (mixed)");
+                    }
+                    None => println!("Reset HEAD to state {target} (mixed)"),
                 }
             } else {
                 println!("Reset to state {target}");

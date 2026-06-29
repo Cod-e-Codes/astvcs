@@ -1161,7 +1161,7 @@ fn cli_revert_and_dry_run() {
     assert_eq!(repo.head_state().unwrap(), tip);
 
     fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-    repo.reset(&target, true, false).unwrap();
+    repo.reset(&target, true, false, false).unwrap();
     assert_eq!(repo.head_state().unwrap(), target);
     let out = run_astvcs(Some(dir.path()), &["revert", &target, "-m", "revert add"]);
     assert!(
@@ -1885,9 +1885,7 @@ fn path_rename_status_and_diff_integration() {
     let status = repo.status().unwrap();
     assert_eq!(
         status.entries.get("new.rs"),
-        Some(&FileStatus::Renamed {
-            from: "old.rs".into()
-        })
+        Some(&FileStatus::unstaged_renamed("old.rs".into()))
     );
     assert!(!status.entries.contains_key("old.rs"));
 
@@ -2021,7 +2019,7 @@ fn binary_commit_status_and_diff() {
     repo.commit("add png").unwrap();
 
     let status = repo.status().unwrap();
-    assert_eq!(status.entries.get("logo.png"), Some(&FileStatus::Unchanged));
+    assert!(status.entries.is_empty());
 
     fs::write(
         dir.path().join("logo.png"),
@@ -2029,7 +2027,10 @@ fn binary_commit_status_and_diff() {
     )
     .unwrap();
     let status = repo.status().unwrap();
-    assert_eq!(status.entries.get("logo.png"), Some(&FileStatus::Modified));
+    assert_eq!(
+        status.entries.get("logo.png"),
+        Some(&FileStatus::unstaged_modified())
+    );
 
     let diff = repo.diff_working("logo.png").unwrap();
     assert!(diff.contains("binary file"), "{diff}");
@@ -2135,7 +2136,7 @@ fn binary_reset_hard_roundtrip() {
 
     fs::write(dir.path().join("data.bin"), b"dirty bytes").unwrap();
     let head = repo.head_state().unwrap();
-    repo.reset(&head, false, false).unwrap();
+    repo.reset(&head, false, false, false).unwrap();
 
     assert_eq!(fs::read(dir.path().join("data.bin")).unwrap(), payload);
     assert!(repo.working_tree_is_clean().unwrap());
@@ -2228,10 +2229,7 @@ fn executable_mode_commit_and_checkout() {
         );
         let files = repo.load_state_files(&repo.head_state().unwrap()).unwrap();
         assert_eq!(files.get("run.sh").unwrap().mode, FileMode::Executable);
-        assert_eq!(
-            repo.status().unwrap().entries.get("run.sh"),
-            Some(&FileStatus::Unchanged)
-        );
+        assert!(repo.status().unwrap().entries.is_empty());
     }
 }
 
@@ -2267,7 +2265,10 @@ fn parse_fallback_status_annotation() {
 
     fs::write(dir.path().join("main.rs"), "fn {{{\n").unwrap();
     let status = repo.status().unwrap();
-    assert_eq!(status.entries.get("main.rs"), Some(&FileStatus::Modified));
+    assert_eq!(
+        status.entries.get("main.rs"),
+        Some(&FileStatus::unstaged_modified())
+    );
     assert!(status.text_fallback_paths.contains("main.rs"));
 
     let out = run_astvcs(Some(dir.path()), &["status"]);
@@ -2529,4 +2530,175 @@ fn cli_fsck_warns_on_unknown_format_version() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("unknown format version"), "{stdout}");
     assert!(stdout.contains("format_version 99"), "{stdout}");
+}
+
+#[test]
+fn partial_commit_only_stages_paths() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("a.txt"), "a v1\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "b v1\n").unwrap();
+    repo.commit("baseline").unwrap();
+
+    fs::write(dir.path().join("a.txt"), "a v2\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "b v2\n").unwrap();
+    repo.add(&["a.txt".into()], false, false).unwrap();
+    let outcome = repo.commit("only a").unwrap();
+    assert!(outcome.created);
+
+    let files = repo.load_state_files(&outcome.state_id).unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "a v2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+        "b v2\n"
+    );
+    let head_before = repo.history(2).unwrap();
+    let prior = head_before
+        .into_iter()
+        .find(|e| e.message == "baseline")
+        .unwrap();
+    let prior_files = repo.load_state_files(&prior.id).unwrap();
+    assert_eq!(
+        files.get("b.txt").unwrap().content_hash().unwrap(),
+        prior_files.get("b.txt").unwrap().content_hash().unwrap(),
+        "b.txt should remain at committed v1 in new state"
+    );
+    assert_ne!(
+        files.get("a.txt").unwrap().content_hash().unwrap(),
+        prior_files.get("a.txt").unwrap().content_hash().unwrap(),
+        "a.txt should reflect staged v2 in new state"
+    );
+}
+
+#[test]
+fn status_shows_staged_and_unstaged_columns() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("both.txt"), "v1\n").unwrap();
+    fs::write(dir.path().join("staged.txt"), "v1\n").unwrap();
+    repo.commit("baseline").unwrap();
+
+    fs::write(dir.path().join("both.txt"), "v2\n").unwrap();
+    repo.add(&["both.txt".into()], false, false).unwrap();
+    fs::write(dir.path().join("both.txt"), "v3\n").unwrap();
+    fs::write(dir.path().join("staged.txt"), "v2\n").unwrap();
+    repo.add(&["staged.txt".into()], false, false).unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["status"]);
+    assert_astvcs_ok(&out, "status");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("MM both.txt"),
+        "expected staged+unstaged modification column: {stdout}"
+    );
+    assert!(
+        stdout.contains("M  staged.txt"),
+        "expected staged-only line: {stdout}"
+    );
+}
+
+#[test]
+fn merge_refuses_with_staged_changes() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feature.txt"), "feature\n").unwrap();
+    repo.commit("feature file").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("dirty.txt"), "local edit\n").unwrap();
+    repo.add(&["dirty.txt".into()], false, false).unwrap();
+
+    let err = repo.merge_branch("feature", "merge feature").unwrap_err();
+    assert!(
+        err.contains("staged changes"),
+        "expected staged merge refusal: {err}"
+    );
+}
+
+#[test]
+fn checkout_force_with_staged_changes() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("feature.txt"), "on feature\n").unwrap();
+    repo.commit("feature").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("note.txt"), "staged edit\n").unwrap();
+    repo.add(&["note.txt".into()], false, false).unwrap();
+
+    let checkout = run_astvcs(
+        Some(dir.path()),
+        &["checkout", "--branch", "feature", "--force"],
+    );
+    assert_astvcs_ok(&checkout, "checkout --force with staged changes");
+    let stderr = String::from_utf8_lossy(&checkout.stderr);
+    assert!(
+        stderr.contains("warning: checkout --force: discarded uncommitted changes in note.txt"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("feature.txt")).unwrap(),
+        "on feature\n"
+    );
+}
+
+#[test]
+fn reset_mixed_unstages_and_keeps_disk() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("keep.txt"), "v1\n").unwrap();
+    let v1 = repo.commit("v1").unwrap().state_id;
+    fs::write(dir.path().join("keep.txt"), "v2 on disk\n").unwrap();
+    repo.add(&["keep.txt".into()], false, false).unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["reset", "--mixed", &v1]);
+    assert_astvcs_ok(&out, "reset --mixed");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("keep.txt")).unwrap(),
+        "v2 on disk\n"
+    );
+    let staging: astvcs::store::StagingIndex =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".astvcs/staging.json")).unwrap())
+            .unwrap();
+    assert!(staging.entries.is_empty(), "staging should be cleared");
+    assert_eq!(repo.head_state().unwrap(), v1);
+}
+
+#[test]
+fn cli_commit_empty_staging_errors() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("a.txt"), "v1\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "baseline"]),
+        "baseline",
+    );
+    fs::write(dir.path().join("a.txt"), "v2\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["add", "a.txt"]),
+        "add to activate staging",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "staged only"]),
+        "commit staged",
+    );
+    fs::write(dir.path().join("a.txt"), "v3\n").unwrap();
+    let out = run_astvcs(Some(dir.path()), &["commit", "-m", "nothing staged"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("nothing staged"),
+        "expected empty-staging commit error: {stderr}"
+    );
 }

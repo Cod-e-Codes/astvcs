@@ -2,7 +2,7 @@
 
 Version control for a working tree of source files. Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges structural edits. Everything else is stored as UTF-8 text with a line-oriented diff.
 
-The CLI follows familiar names (`init`, `status`, `commit`, `branch`, `merge`, `checkout`, `reset`, `revert`, `log`, `fetch`, `push`, `clone`). astvcs is a local-first tool with optional network sync over file paths or HTTP. There is no index staging area and no conflict markers written into files.
+The CLI follows familiar names (`init`, `status`, `add`, `commit`, `branch`, `merge`, `checkout`, `reset`, `revert`, `log`, `fetch`, `push`, `clone`). astvcs is a local-first tool with optional network sync over file paths or HTTP. There is no Git interoperability and no conflict markers written into files.
 
 ## Why structure matters
 
@@ -52,7 +52,7 @@ Binary: `target\release\astvcs.exe`
 
 | In scope | Out of scope (today) |
 |----------|----------------------|
-| Content-addressed states and branches | Git interoperability |
+| Content-addressed states, branches, and staging index (`add`, `diff --staged`) | Git interoperability |
 | AST diff and three-way merge for supported languages | Interactive conflict resolution in the working tree |
 | Network sync (`fetch`, `push`, `clone`, `serve`) over file or HTTP | Hosting service or authentication |
 | Per-path merge resolution (`--resolve path:ours\|theirs`) | Conflict markers in files |

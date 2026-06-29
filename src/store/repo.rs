@@ -14,6 +14,10 @@ use crate::store::lock::{self, RepoLockGuard};
 use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_manifest};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
 use crate::store::scan_cache::{self, ScanCache};
+use crate::store::staging::{
+    STAGING_FILE, StagedEntry, StagingIndex, clear_staging_entries, load_staging, save_staging,
+    staged_to_tracked,
+};
 use crate::store::tracked::{TrackedFile, tracked_eq};
 use crate::store::working::load_working_tracked;
 use crate::trace;
@@ -139,25 +143,97 @@ pub struct BranchInfo {
     pub state_id: StateId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FileStatus {
-    Unchanged,
+/// One column of git-style status (`M`, `A`, `D`, or clean).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ChangeColumn {
+    #[default]
+    Clean,
     Modified,
     Added,
-    Removed,
-    Renamed { from: String },
-    Untracked,
+    Deleted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileStatus {
+    pub staged: ChangeColumn,
+    pub unstaged: ChangeColumn,
+    pub staged_rename_from: Option<String>,
+    pub unstaged_rename_from: Option<String>,
+    pub untracked: bool,
+}
+
+impl FileStatus {
+    pub fn is_clean(&self) -> bool {
+        matches!(self.staged, ChangeColumn::Clean)
+            && matches!(self.unstaged, ChangeColumn::Clean)
+            && !self.untracked
+    }
+
+    pub fn unstaged_modified() -> Self {
+        Self {
+            staged: ChangeColumn::Clean,
+            unstaged: ChangeColumn::Modified,
+            staged_rename_from: None,
+            unstaged_rename_from: None,
+            untracked: false,
+        }
+    }
+
+    pub fn unstaged_added() -> Self {
+        Self {
+            staged: ChangeColumn::Clean,
+            unstaged: ChangeColumn::Added,
+            staged_rename_from: None,
+            unstaged_rename_from: None,
+            untracked: false,
+        }
+    }
+
+    pub fn unstaged_removed() -> Self {
+        Self {
+            staged: ChangeColumn::Clean,
+            unstaged: ChangeColumn::Deleted,
+            staged_rename_from: None,
+            unstaged_rename_from: None,
+            untracked: false,
+        }
+    }
+
+    pub fn unstaged_renamed(from: String) -> Self {
+        Self {
+            staged: ChangeColumn::Clean,
+            unstaged: ChangeColumn::Added,
+            staged_rename_from: None,
+            unstaged_rename_from: Some(from),
+            untracked: false,
+        }
+    }
+
+    pub fn untracked() -> Self {
+        Self {
+            staged: ChangeColumn::Clean,
+            unstaged: ChangeColumn::Clean,
+            staged_rename_from: None,
+            unstaged_rename_from: None,
+            untracked: true,
+        }
+    }
 }
 
 impl std::fmt::Display for FileStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unchanged => write!(f, "unchanged"),
-            Self::Modified => write!(f, "modified"),
-            Self::Added => write!(f, "added"),
-            Self::Removed => write!(f, "removed"),
-            Self::Renamed { from } => write!(f, "renamed from {from}"),
-            Self::Untracked => write!(f, "untracked"),
+        if self.untracked {
+            return write!(f, "untracked");
+        }
+        if let Some(from) = &self.staged_rename_from {
+            return write!(f, "staged rename from {from}");
+        }
+        if let Some(from) = &self.unstaged_rename_from {
+            return write!(f, "renamed from {from}");
+        }
+        match (self.staged, self.unstaged) {
+            (ChangeColumn::Clean, ChangeColumn::Clean) => write!(f, "unchanged"),
+            (s, u) => write!(f, "staged={s:?} unstaged={u:?}"),
         }
     }
 }
@@ -325,6 +401,7 @@ impl Repo {
             &astvcs.join(INDEX_FILE),
             &HashMap::<String, IndexEntry>::new(),
         )?;
+        write_atomic_json(&astvcs.join(STAGING_FILE), &StagingIndex::default())?;
 
         let entry = TimelineEntry {
             id: empty_state.clone(),
@@ -682,11 +759,172 @@ impl Repo {
         self.status_unlocked(opts)
     }
 
+    fn load_staging_unlocked(&self) -> RepoResult<StagingIndex> {
+        load_staging(&self.astvcs_dir()).map_err(RepoError::from_message)
+    }
+
+    fn save_staging_unlocked(&self, index: &StagingIndex) -> RepoResult<()> {
+        save_staging(&self.astvcs_dir(), index).map_err(RepoError::from_message)
+    }
+
+    fn build_effective_files(
+        &self,
+        head_files: &HashMap<String, TrackedFile>,
+        staging: &StagingIndex,
+    ) -> RepoResult<HashMap<String, TrackedFile>> {
+        let store = self.blobs();
+        let mut effective = head_files.clone();
+        for (path, entry) in &staging.entries {
+            if entry.deleted {
+                effective.remove(path);
+            } else if let Some(tracked) =
+                staged_to_tracked(&store, entry).map_err(RepoError::from_message)?
+            {
+                effective.insert(path.clone(), tracked);
+            }
+        }
+        Ok(effective)
+    }
+
+    fn staged_tracked_map(
+        &self,
+        staging: &StagingIndex,
+    ) -> RepoResult<HashMap<String, TrackedFile>> {
+        let store = self.blobs();
+        let mut map = HashMap::new();
+        for (path, entry) in &staging.entries {
+            if entry.deleted {
+                continue;
+            }
+            if let Some(tracked) =
+                staged_to_tracked(&store, entry).map_err(RepoError::from_message)?
+            {
+                map.insert(path.clone(), tracked);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Stage paths into `staging.json`. Use `update_only` for tracked changes only; `all` for every change.
+    pub fn add(&self, paths: &[String], update_only: bool, all: bool) -> RepoResult<()> {
+        let _lock = self.repo_lock()?;
+        let head = self.head_state_unlocked()?;
+        let head_files = self.load_state_files_unlocked(&head)?;
+        let (working_files, _, _) = self.scan_working(&head, ScanOptions::default())?;
+        let targets =
+            self.collect_add_targets(paths, &head_files, &working_files, update_only, all)?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        let mut staging = self.load_staging_unlocked()?;
+        staging.active = true;
+        let store = self.blobs();
+
+        for path in &targets {
+            if working_files.contains(path) {
+                let tracked = load_working_tracked(&self.root, path)?;
+                let blob_id = store.write(&tracked.content)?;
+                staging.entries.insert(
+                    path.clone(),
+                    StagedEntry::from_tracked(blob_id, index_content_kind(&tracked), tracked.mode),
+                );
+                trace::notice(format!("add: staged {path}"));
+            } else if head_files.contains_key(path) {
+                staging
+                    .entries
+                    .insert(path.clone(), StagedEntry::deletion());
+                trace::notice(format!("add: staged deletion {path}"));
+            }
+        }
+
+        self.save_staging_unlocked(&staging)?;
+        Ok(())
+    }
+
+    fn collect_add_targets(
+        &self,
+        paths: &[String],
+        head_files: &HashMap<String, TrackedFile>,
+        working_files: &HashSet<String>,
+        update_only: bool,
+        all: bool,
+    ) -> RepoResult<HashSet<String>> {
+        if paths.is_empty() && !update_only && !all {
+            return Err(RepoError::invalid_input(
+                "specify paths to stage, or use -u/--update or -A/--all",
+            ));
+        }
+
+        let mut candidates: HashSet<String> = HashSet::new();
+        if paths.is_empty() {
+            if all {
+                candidates.extend(working_files.iter().cloned());
+                candidates.extend(head_files.keys().cloned());
+            } else if update_only {
+                candidates.extend(head_files.keys().cloned());
+            }
+        } else {
+            for raw in paths {
+                let rel = normalize_repo_path(raw)?;
+                if self.root.join(&rel).is_dir() {
+                    let prefix = format!("{rel}/");
+                    for p in working_files {
+                        if p == &rel || p.starts_with(&prefix) {
+                            candidates.insert(p.clone());
+                        }
+                    }
+                    for p in head_files.keys() {
+                        if p == &rel || p.starts_with(&prefix) {
+                            candidates.insert(p.clone());
+                        }
+                    }
+                } else {
+                    candidates.insert(rel);
+                }
+            }
+        }
+
+        let mut targets = HashSet::new();
+        for path in candidates {
+            let on_disk = working_files.contains(&path);
+            let tracked = head_files.contains_key(&path);
+            if all {
+                if on_disk || tracked {
+                    targets.insert(path);
+                }
+                continue;
+            }
+            if update_only {
+                if !tracked {
+                    continue;
+                }
+                if !on_disk {
+                    targets.insert(path);
+                    continue;
+                }
+                let current = load_working_tracked(&self.root, &path)?;
+                let head_entry = head_files.get(&path).unwrap();
+                if !tracked_eq(head_entry, &current) {
+                    targets.insert(path);
+                }
+                continue;
+            }
+            // explicit paths: stage if exists on disk or is tracked deletion
+            if on_disk || tracked {
+                targets.insert(path);
+            }
+        }
+        Ok(targets)
+    }
+
     fn status_unlocked(&self, opts: ScanOptions) -> RepoResult<WorkingStatus> {
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
         let index: HashMap<String, IndexEntry> = read_json(&self.astvcs_dir().join(INDEX_FILE))?;
         self.check_index_consistency(&head, &head_files, &index);
+        let staging = self.load_staging_unlocked()?;
+        let effective_files = self.build_effective_files(&head_files, &staging)?;
 
         let mut entries = HashMap::new();
         let mut text_fallback_paths = HashSet::new();
@@ -694,48 +932,190 @@ impl Repo {
         let mut working_map = HashMap::new();
         let skip_content_reads =
             !opts.full_scan && scan_metrics.mode == Some(walk::ScanMode::Incremental);
+
+        // Staged vs HEAD
+        if staging.active {
+            let staged_map = self.staged_tracked_map(&staging)?;
+            let staged_renames = detect_path_renames(
+                &tracked_content_map(&head_files),
+                &tracked_content_map(&staged_map),
+            );
+            let staged_renamed_from: HashSet<String> =
+                staged_renames.iter().map(|r| r.from.clone()).collect();
+            let staged_renamed_to: HashSet<String> =
+                staged_renames.iter().map(|r| r.to.clone()).collect();
+
+            for rename in &staged_renames {
+                if let Some(head_stored) = head_files.get(&rename.from)
+                    && path_has_text_fallback(
+                        &rename.to,
+                        Some(&head_stored.content),
+                        &staged_map[&rename.to].content,
+                    )
+                {
+                    text_fallback_paths.insert(rename.to.clone());
+                }
+                entries.insert(
+                    rename.to.clone(),
+                    FileStatus {
+                        staged: ChangeColumn::Added,
+                        unstaged: ChangeColumn::Clean,
+                        staged_rename_from: Some(rename.from.clone()),
+                        unstaged_rename_from: None,
+                        untracked: false,
+                    },
+                );
+            }
+
+            for (path, entry) in &staging.entries {
+                if staged_renamed_from.contains(path) || staged_renamed_to.contains(path) {
+                    continue;
+                }
+                let staged_col = if entry.deleted {
+                    if head_files.contains_key(path) {
+                        ChangeColumn::Deleted
+                    } else {
+                        continue;
+                    }
+                } else if head_files.contains_key(path) {
+                    let staged_tracked = staged_map.get(path).unwrap();
+                    let head_tracked = head_files.get(path).unwrap();
+                    if tracked_eq(head_tracked, staged_tracked) {
+                        continue;
+                    }
+                    ChangeColumn::Modified
+                } else {
+                    ChangeColumn::Added
+                };
+                if let Some(tracked) = staged_map.get(path) {
+                    let head_content = head_files.get(path).map(|s| &s.content);
+                    if path_has_text_fallback(path, head_content, &tracked.content) {
+                        text_fallback_paths.insert(path.clone());
+                    }
+                } else if let Some(head_stored) = head_files.get(path)
+                    && head_stored.content.is_text_fallback_at_path(path)
+                {
+                    text_fallback_paths.insert(path.clone());
+                }
+                entries.insert(
+                    path.clone(),
+                    FileStatus {
+                        staged: staged_col,
+                        unstaged: ChangeColumn::Clean,
+                        staged_rename_from: None,
+                        unstaged_rename_from: None,
+                        untracked: false,
+                    },
+                );
+            }
+        }
+
+        // Unstaged vs effective index (or HEAD when staging inactive)
+        let compare_base = if staging.active {
+            &effective_files
+        } else {
+            &head_files
+        };
+
         for path in &working_files {
             if skip_content_reads
-                && head_files.contains_key(path)
+                && compare_base.contains_key(path)
                 && scan_cache.verified.get(path).is_some_and(|entry| {
                     scan_cache::path_verified_unchanged(&self.root, path, entry)
                 })
             {
-                entries.insert(path.clone(), FileStatus::Unchanged);
+                if !entries.contains_key(path) {
+                    entries.insert(
+                        path.clone(),
+                        FileStatus {
+                            staged: ChangeColumn::Clean,
+                            unstaged: ChangeColumn::Clean,
+                            staged_rename_from: None,
+                            unstaged_rename_from: None,
+                            untracked: false,
+                        },
+                    );
+                }
                 continue;
             }
             let current = load_working_tracked(&self.root, path)?;
             working_map.insert(path.clone(), current.clone());
-            let head_content = head_files.get(path).map(|stored| &stored.content);
-            if path_has_text_fallback(path, head_content, &current.content) {
+            let base_content = compare_base.get(path).map(|stored| &stored.content);
+            if path_has_text_fallback(path, base_content, &current.content) {
                 text_fallback_paths.insert(path.clone());
             }
-            let status = match head_files.get(path) {
-                None => FileStatus::Added,
-                Some(stored) if !tracked_eq(stored, &current) => FileStatus::Modified,
-                Some(_) => FileStatus::Unchanged,
+            let unstaged_col = match compare_base.get(path) {
+                None => {
+                    if head_files.contains_key(path) {
+                        ChangeColumn::Added
+                    } else {
+                        entries.insert(path.clone(), FileStatus::untracked());
+                        continue;
+                    }
+                }
+                Some(stored) if !tracked_eq(stored, &current) => ChangeColumn::Modified,
+                Some(_) => ChangeColumn::Clean,
             };
-            if matches!(status, FileStatus::Unchanged) {
+            if matches!(unstaged_col, ChangeColumn::Clean) {
                 if let Ok(entry) = scan_cache::verify_entry_for_path(&self.root, path) {
                     scan_cache.verified.insert(path.clone(), entry);
                 }
             } else {
                 scan_cache.verified.remove(path);
+                trace::notice(format!("status: {path} unstaged {unstaged_col:?}"));
             }
-            if !matches!(status, FileStatus::Unchanged) {
-                trace::notice(format!("status: {path} {status}"));
+            if unstaged_col != ChangeColumn::Clean {
+                match entries.get_mut(path) {
+                    Some(existing) => existing.unstaged = unstaged_col,
+                    None => {
+                        entries.insert(
+                            path.clone(),
+                            FileStatus {
+                                staged: ChangeColumn::Clean,
+                                unstaged: unstaged_col,
+                                staged_rename_from: None,
+                                unstaged_rename_from: None,
+                                untracked: false,
+                            },
+                        );
+                    }
+                }
+            } else if !entries.contains_key(path) {
+                entries.insert(
+                    path.clone(),
+                    FileStatus {
+                        staged: ChangeColumn::Clean,
+                        unstaged: ChangeColumn::Clean,
+                        staged_rename_from: None,
+                        unstaged_rename_from: None,
+                        untracked: false,
+                    },
+                );
             }
-            entries.insert(path.clone(), status);
         }
 
         scan_cache::save_scan_cache(&self.astvcs_dir(), &scan_cache)
             .map_err(RepoError::from_message)?;
 
-        for path in head_files.keys() {
+        for path in compare_base.keys() {
             if !working_files.contains(path) {
-                trace::notice(format!("status: {path} Removed"));
-                entries.insert(path.clone(), FileStatus::Removed);
-                if let Some(stored) = head_files.get(path)
+                trace::notice(format!("status: {path} unstaged Deleted"));
+                match entries.get_mut(path) {
+                    Some(existing) => existing.unstaged = ChangeColumn::Deleted,
+                    None => {
+                        entries.insert(
+                            path.clone(),
+                            FileStatus {
+                                staged: ChangeColumn::Clean,
+                                unstaged: ChangeColumn::Deleted,
+                                staged_rename_from: None,
+                                unstaged_rename_from: None,
+                                untracked: false,
+                            },
+                        );
+                    }
+                }
+                if let Some(stored) = compare_base.get(path)
                     && stored.content.is_text_fallback_at_path(path)
                 {
                     text_fallback_paths.insert(path.clone());
@@ -744,25 +1124,32 @@ impl Repo {
         }
 
         let renames = detect_path_renames(
-            &tracked_content_map(&head_files),
+            &tracked_content_map(compare_base),
             &tracked_content_map(&working_map),
         );
         for rename in &renames {
             entries.remove(&rename.from);
-            entries.insert(
-                rename.to.clone(),
-                FileStatus::Renamed {
-                    from: rename.from.clone(),
-                },
-            );
+            let mut status = entries.remove(&rename.to).unwrap_or(FileStatus {
+                staged: ChangeColumn::Clean,
+                unstaged: ChangeColumn::Clean,
+                staged_rename_from: None,
+                unstaged_rename_from: None,
+                untracked: false,
+            });
+            status.unstaged = ChangeColumn::Added;
+            status.unstaged_rename_from = Some(rename.from.clone());
+            status.untracked = false;
             if path_has_text_fallback(
                 &rename.to,
-                head_files.get(&rename.from).map(|stored| &stored.content),
+                compare_base.get(&rename.from).map(|s| &s.content),
                 &working_map[&rename.to].content,
             ) {
                 text_fallback_paths.insert(rename.to.clone());
             }
+            entries.insert(rename.to.clone(), status);
         }
+
+        entries.retain(|_, status| !status.is_clean());
 
         Ok(WorkingStatus {
             entries,
@@ -771,29 +1158,127 @@ impl Repo {
     }
 
     pub fn diff_working(&self, path: &str) -> RepoResult<String> {
+        self.diff_working_inner(path, false)
+    }
+
+    pub fn diff_staged(&self, path: &str) -> RepoResult<String> {
+        self.diff_working_inner(path, true)
+    }
+
+    fn diff_working_inner(&self, path: &str, staged: bool) -> RepoResult<String> {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
-        let working = load_working_tracked(&self.root, path)?;
-        let mut working_map = HashMap::new();
-        working_map.insert(path.to_string(), working.clone());
-        for p in self.scan_working(&head, ScanOptions::default())?.0 {
-            if p != path {
-                working_map.insert(p.clone(), load_working_tracked(&self.root, &p)?);
+        let staging = self.load_staging_unlocked()?;
+        let effective_files = if staging.active && !staged {
+            self.build_effective_files(&head_files, &staging)?
+        } else {
+            head_files.clone()
+        };
+        let base_files = if staged {
+            &head_files
+        } else {
+            &effective_files
+        };
+        let compare_files = if staged {
+            &self.staged_tracked_map(&staging)?
+        } else {
+            &HashMap::new()
+        };
+
+        if staged {
+            if let Some(rename) = detect_path_renames(
+                &tracked_content_map(base_files),
+                &tracked_content_map(compare_files),
+            )
+            .into_iter()
+            .find(|r| r.from == path || r.to == path)
+            {
+                let old = base_files.get(&rename.from).unwrap();
+                let new = compare_files.get(&rename.to).unwrap();
+                return Ok(format_path_rename(&rename, &old.content, &new.content));
+            }
+            match (base_files.get(path), compare_files.get(path)) {
+                (None, Some(new)) => {
+                    let mut out = format!("--- /dev/null\n+++ {path}\n(new file)\n");
+                    out.push_str(&content_preview(&new.content));
+                    Ok(out)
+                }
+                (Some(_old), None) => Ok(format!("--- {path}\n+++ /dev/null\n(deleted)\n")),
+                (Some(old), Some(new)) if !tracked_eq(old, new) => {
+                    format_diff(path, &old.content, &new.content)
+                }
+                _ => Ok(format!("--- {path}\n+++ {path}\n(no changes)\n")),
+            }
+        } else {
+            let working = load_working_tracked(&self.root, path)?;
+            let mut working_map = HashMap::new();
+            working_map.insert(path.to_string(), working.clone());
+            for p in self.scan_working(&head, ScanOptions::default())?.0 {
+                if p != path {
+                    working_map.insert(p.clone(), load_working_tracked(&self.root, &p)?);
+                }
+            }
+            let renames = detect_path_renames(
+                &tracked_content_map(base_files),
+                &tracked_content_map(&working_map),
+            );
+            if let Some(rename) = renames.iter().find(|r| r.to == path) {
+                let old = base_files.get(&rename.from).unwrap();
+                return Ok(format_path_rename(rename, &old.content, &working.content));
+            }
+            match base_files.get(path) {
+                None => Ok(format!("--- /dev/null\n+++ {path}\n(new file)\n")),
+                Some(base) => format_diff(path, &base.content, &working.content),
             }
         }
+    }
+
+    pub fn diff_working_tree(&self) -> RepoResult<String> {
+        let _lock = self.repo_lock()?;
+        let status = self.status_unlocked(ScanOptions::default())?;
+        let mut out = String::new();
+        for (path, st) in &status.entries {
+            if st.untracked
+                || matches!(st.unstaged, ChangeColumn::Modified | ChangeColumn::Added)
+                || st.unstaged_rename_from.is_some()
+            {
+                out.push_str(&self.diff_working_inner(path, false)?);
+            } else if matches!(st.unstaged, ChangeColumn::Deleted) {
+                out.push_str(&format!("--- {path}\n+++ /dev/null\n(deleted)\n"));
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn diff_staged_tree(&self) -> RepoResult<String> {
+        let _lock = self.repo_lock()?;
+        let staging = self.load_staging_unlocked()?;
+        if !staging.active || staging.entries.is_empty() {
+            return Ok(String::new());
+        }
+        let head = self.head_state_unlocked()?;
+        let head_files = self.load_state_files_unlocked(&head)?;
+        let staged_map = self.staged_tracked_map(&staging)?;
         let renames = detect_path_renames(
             &tracked_content_map(&head_files),
-            &tracked_content_map(&working_map),
+            &tracked_content_map(&staged_map),
         );
-        if let Some(rename) = renames.iter().find(|r| r.to == path) {
+        let renamed_from: HashSet<String> = renames.iter().map(|r| r.from.clone()).collect();
+        let renamed_to: HashSet<String> = renames.iter().map(|r| r.to.clone()).collect();
+        let mut out = String::new();
+        for rename in &renames {
             let old = head_files.get(&rename.from).unwrap();
-            return Ok(format_path_rename(rename, &old.content, &working.content));
+            let new = staged_map.get(&rename.to).unwrap();
+            out.push_str(&format_path_rename(rename, &old.content, &new.content));
         }
-        match head_files.get(path) {
-            None => Ok(format!("--- /dev/null\n+++ {path}\n(new file)\n")),
-            Some(base) => format_diff(path, &base.content, &working.content),
+        for path in staging.entries.keys() {
+            if renamed_from.contains(path) || renamed_to.contains(path) {
+                continue;
+            }
+            out.push_str(&self.diff_staged(path)?);
         }
+        Ok(out)
     }
 
     /// Resolve a branch name, remote-tracking ref, or 64-character state id.
@@ -1321,11 +1806,17 @@ impl Repo {
         })
     }
 
-    pub fn reset(&self, reference: &str, soft: bool, force: bool) -> RepoResult<StateId> {
+    pub fn reset(
+        &self,
+        reference: &str,
+        soft: bool,
+        mixed: bool,
+        force: bool,
+    ) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
         let target = self.resolve_state_ref_unlocked(reference)?;
         let prior_head = self.head_state_unlocked()?;
-        let materialize_opts = if soft {
+        let materialize_opts = if soft || mixed {
             None
         } else {
             Some(
@@ -1341,22 +1832,42 @@ impl Repo {
             Vec::new()
         };
 
-        if !soft {
+        if !soft && !mixed {
             let opts = materialize_opts.expect("hard reset materialize options");
             self.materialize_state_inner(&target, clobbered, &opts)?;
+        } else if mixed {
+            let files = self.load_state_files_unlocked(&target)?;
+            self.sync_index_to_state(&files, &target)?;
+            let mut staging = self.load_staging_unlocked()?;
+            clear_staging_entries(&mut staging);
+            self.save_staging_unlocked(&staging)?;
+            scan_cache::invalidate_scan_cache(&self.astvcs_dir())
+                .map_err(RepoError::from_message)?;
         }
 
         match self.read_head_target()? {
             HeadTarget::Branch(ref branch) => {
                 self.write_branch_ref_unlocked(branch, &target)?;
-                let mode = if soft { "soft" } else { "hard" };
+                let mode = if soft {
+                    "soft"
+                } else if mixed {
+                    "mixed"
+                } else {
+                    "hard"
+                };
                 trace::notice(format!(
                     "reset {mode}: branch {branch} {prior_head} -> {target}"
                 ));
             }
             HeadTarget::Detached(_) => {
                 self.write_head_target(&HeadTarget::Detached(target.clone()))?;
-                let mode = if soft { "soft" } else { "hard" };
+                let mode = if soft {
+                    "soft"
+                } else if mixed {
+                    "mixed"
+                } else {
+                    "hard"
+                };
                 trace::notice(format!("reset {mode}: detached {prior_head} -> {target}"));
             }
         }
@@ -1444,38 +1955,76 @@ impl Repo {
         let _lock = self.repo_lock()?;
         let head = self.head_state_unlocked()?;
         let head_files = self.load_state_files_unlocked(&head)?;
-        let (working_files, mut scan_cache, _) = self.scan_working(&head, opts)?;
+        let mut staging = self.load_staging_unlocked()?;
 
-        let mut new_files = head_files.clone();
-        for path in &working_files {
-            let tracked = load_working_tracked(&self.root, path)?;
-            match head_files.get(path) {
-                Some(old) if tracked_eq(old, &tracked) => {
-                    if let Ok(entry) = scan_cache::verify_entry_for_path(&self.root, path) {
-                        scan_cache.verified.insert(path.clone(), entry);
+        let new_files = if staging.active {
+            if staging.entries.is_empty() {
+                let status = self.status_unlocked(opts)?;
+                if !status.entries.is_empty() {
+                    return Err(RepoError::invalid_input(
+                        "nothing staged; use `astvcs add` to stage changes before commit",
+                    ));
+                }
+                trace::notice(format!("commit: no changes; state {head} unchanged"));
+                return Ok(CommitOutcome {
+                    state_id: head,
+                    created: false,
+                });
+            }
+            let mut new_files = head_files.clone();
+            let store = self.blobs();
+            for (path, entry) in &staging.entries {
+                if entry.deleted {
+                    new_files.remove(path);
+                    trace::notice(format!("commit: {path} removed (staged)"));
+                } else if let Some(tracked) =
+                    staged_to_tracked(&store, entry).map_err(RepoError::from_message)?
+                {
+                    let action = if head_files.contains_key(path) {
+                        "modified (staged)"
+                    } else {
+                        "added (staged)"
+                    };
+                    trace::notice(format!("commit: {path} {action}"));
+                    new_files.insert(path.clone(), tracked);
+                }
+            }
+            new_files
+        } else {
+            let (working_files, mut scan_cache, _) = self.scan_working(&head, opts)?;
+
+            let mut new_files = head_files.clone();
+            for path in &working_files {
+                let tracked = load_working_tracked(&self.root, path)?;
+                match head_files.get(path) {
+                    Some(old) if tracked_eq(old, &tracked) => {
+                        if let Ok(entry) = scan_cache::verify_entry_for_path(&self.root, path) {
+                            scan_cache.verified.insert(path.clone(), entry);
+                        }
+                    }
+                    Some(_) => {
+                        scan_cache.verified.remove(path);
+                        trace::notice(format!("commit: {path} modified"));
+                    }
+                    None => {
+                        scan_cache.verified.remove(path);
+                        trace::notice(format!("commit: {path} added"));
                     }
                 }
-                Some(_) => {
-                    scan_cache.verified.remove(path);
-                    trace::notice(format!("commit: {path} modified"));
-                }
-                None => {
-                    scan_cache.verified.remove(path);
-                    trace::notice(format!("commit: {path} added"));
+                new_files.insert(path.clone(), tracked);
+            }
+            for path in head_files.keys().cloned().collect::<Vec<_>>() {
+                if !working_files.contains(&path) {
+                    scan_cache.verified.remove(&path);
+                    trace::notice(format!("commit: {path} removed"));
+                    new_files.remove(&path);
                 }
             }
-            new_files.insert(path.clone(), tracked);
-        }
-        for path in head_files.keys().cloned().collect::<Vec<_>>() {
-            if !working_files.contains(&path) {
-                scan_cache.verified.remove(&path);
-                trace::notice(format!("commit: {path} removed"));
-                new_files.remove(&path);
-            }
-        }
 
-        scan_cache::save_scan_cache(&self.astvcs_dir(), &scan_cache)
-            .map_err(RepoError::from_message)?;
+            scan_cache::save_scan_cache(&self.astvcs_dir(), &scan_cache)
+                .map_err(RepoError::from_message)?;
+            new_files
+        };
 
         if manifest_unchanged(&head_files, &new_files) {
             trace::notice(format!("commit: no changes; state {head} unchanged"));
@@ -1489,6 +2038,8 @@ impl Repo {
         let state_id =
             self.persist_state(&new_files, message, &author, Some(head.clone()), vec![head])?;
         self.sync_index_to_state(&new_files, &state_id)?;
+        clear_staging_entries(&mut staging);
+        self.save_staging_unlocked(&staging)?;
         if let Some(mut cache) =
             scan_cache::load_scan_cache(&self.astvcs_dir()).map_err(RepoError::from_message)?
         {
@@ -1566,6 +2117,12 @@ impl Repo {
     }
 
     fn finish_merge(&self, plan: &MergePlan, message: &str, force: bool) -> RepoResult<StateId> {
+        let staging = self.load_staging_unlocked()?;
+        if staging.staging_in_use() {
+            return Err(RepoError::invalid_input(
+                "cannot merge with staged changes; commit or reset --mixed to unstage",
+            ));
+        }
         let head = plan.head_id.clone();
         let other = plan.other_id.clone();
         let merged_files = plan.merged_files.clone();
@@ -1598,7 +2155,7 @@ impl Repo {
             .status_unlocked(ScanOptions::default())?
             .entries
             .iter()
-            .filter(|(_, status)| !matches!(status, FileStatus::Unchanged))
+            .filter(|(_, status)| !status.is_clean())
             .map(|(path, _)| path.clone())
             .collect())
     }
@@ -1679,6 +2236,9 @@ impl Repo {
         }
 
         self.sync_index_to_state(&files, state_id)?;
+        let mut staging = self.load_staging_unlocked()?;
+        clear_staging_entries(&mut staging);
+        self.save_staging_unlocked(&staging)?;
         scan_cache::invalidate_scan_cache(&self.astvcs_dir()).map_err(RepoError::from_message)?;
         trace::notice(format!(
             "materialize: state {state_id} -> {} paths on disk",
@@ -1713,11 +2273,15 @@ impl Repo {
     }
 
     fn working_tree_is_clean_unlocked(&self) -> RepoResult<bool> {
+        let staging = self.load_staging_unlocked()?;
+        if staging.staging_in_use() {
+            return Ok(false);
+        }
         Ok(self
             .status_unlocked(ScanOptions::default())?
             .entries
             .values()
-            .all(|s| matches!(s, FileStatus::Unchanged)))
+            .all(|s| s.is_clean()))
     }
 
     fn persist_state(
@@ -2024,6 +2588,14 @@ impl Repo {
         .map_err(RepoError::from_message)?;
         Ok(anc.contains(ancestor))
     }
+}
+
+fn normalize_repo_path(raw: &str) -> RepoResult<String> {
+    let path = raw.replace('\\', "/");
+    if path.is_empty() || path.contains("..") {
+        return Err(RepoError::invalid_input(format!("invalid path: {raw}")));
+    }
+    Ok(path.trim_start_matches("./").to_string())
 }
 
 fn manifest_unchanged(
@@ -2883,7 +3455,7 @@ mod tests {
         fs::write(dir.path().join("note.txt"), "v2\n").unwrap();
         repo.commit("v2").unwrap();
 
-        repo.reset(&v1, false, false).unwrap();
+        repo.reset(&v1, false, false, false).unwrap();
         assert_eq!(repo.head_state().unwrap(), v1);
         assert_eq!(
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
@@ -2899,7 +3471,7 @@ mod tests {
         let v1 = repo.commit("v1").unwrap().state_id;
         fs::write(dir.path().join("note.txt"), "drifted\n").unwrap();
 
-        repo.reset(&v1, false, false).unwrap();
+        repo.reset(&v1, false, false, false).unwrap();
         assert_eq!(
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
             "v1\n"
@@ -2915,14 +3487,17 @@ mod tests {
         repo.commit("v2").unwrap();
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
 
-        repo.reset(&v1, true, false).unwrap();
+        repo.reset(&v1, true, false, false).unwrap();
         assert_eq!(repo.head_state().unwrap(), v1);
         assert_eq!(
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
             "dirty\n"
         );
         let status = repo.status().unwrap();
-        assert_eq!(status.entries.get("note.txt"), Some(&FileStatus::Modified));
+        assert_eq!(
+            status.entries.get("note.txt"),
+            Some(&FileStatus::unstaged_modified())
+        );
     }
 
     #[test]
@@ -2935,7 +3510,7 @@ mod tests {
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
         let tip_before = repo.head_state().unwrap();
 
-        let err = repo.reset(&v1, false, false).unwrap_err();
+        let err = repo.reset(&v1, false, false, false).unwrap_err();
         assert!(err.contains("uncommitted changes"), "{err}");
         assert_eq!(repo.head_state().unwrap(), tip_before);
         assert_eq!(
@@ -2954,7 +3529,7 @@ mod tests {
         repo.commit("v2").unwrap();
         fs::write(dir.path().join("note.txt"), "dirty\n").unwrap();
 
-        repo.reset(&v1, false, true).unwrap();
+        repo.reset(&v1, false, false, true).unwrap();
         assert_eq!(
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
             "v1\n"
@@ -2977,7 +3552,7 @@ mod tests {
         let v2 = repo.commit("v2").unwrap().state_id;
         repo.checkout_state(&v2).unwrap();
 
-        repo.reset(&v1, true, false).unwrap();
+        repo.reset(&v1, true, false, false).unwrap();
         assert!(repo.is_detached().unwrap());
         assert_eq!(repo.head_state().unwrap(), v1);
         assert_eq!(
@@ -2985,7 +3560,7 @@ mod tests {
             "v2\n"
         );
 
-        repo.reset(&v2, false, true).unwrap();
+        repo.reset(&v2, false, false, true).unwrap();
         assert_eq!(repo.head_state().unwrap(), v2);
         assert!(repo.working_tree_is_clean().unwrap());
     }
@@ -2997,7 +3572,7 @@ mod tests {
         repo.commit("v1").unwrap();
         let root = StateId::from("0".repeat(64));
 
-        repo.reset(&root, false, false).unwrap();
+        repo.reset(&root, false, false, false).unwrap();
         assert_eq!(repo.head_state().unwrap(), root);
         assert!(!dir.path().join("note.txt").exists());
     }
@@ -3008,7 +3583,9 @@ mod tests {
         fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
         let v1 = repo.commit("v1").unwrap().state_id;
 
-        let err = repo.reset("missing-branch", false, false).unwrap_err();
+        let err = repo
+            .reset("missing-branch", false, false, false)
+            .unwrap_err();
         assert!(err.contains("unknown"), "{err}");
         assert_eq!(repo.head_state().unwrap(), v1);
         assert_eq!(
@@ -3263,7 +3840,7 @@ mod tests {
         fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
         repo.commit("modify notes").unwrap();
         fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
-        repo.reset(&target, true, false).unwrap();
+        repo.reset(&target, true, false, false).unwrap();
 
         repo.revert_state(&target, "revert add").unwrap();
         assert!(!dir.path().join("notes.txt").exists());
