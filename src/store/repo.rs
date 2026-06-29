@@ -28,7 +28,7 @@ use crate::store::walk::{self, ASTVCS_DIR};
 
 const HEAD_FILE: &str = "HEAD";
 const INDEX_FILE: &str = "index.json";
-const CONFIG_FILE: &str = "config.json";
+pub(crate) const CONFIG_FILE: &str = "config.json";
 const STATE_ID_LEN: usize = 64;
 
 /// Options for working-tree scan used by `status` and `commit`.
@@ -93,8 +93,12 @@ pub(crate) enum HeadTarget {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RepoConfig {
+    /// Legacy `config.json` schema revision (currently `2` on init).
     pub version: u32,
     pub default_branch: String,
+    /// On-disk repository layout version; absent or `0` means pre-format-versioning.
+    #[serde(default)]
+    pub format_version: u32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -271,6 +275,7 @@ impl Repo {
         let guard = RepoLockGuard::acquire(&self.astvcs_dir())?;
         if outer {
             atomic::cleanup_stray_temp_files(&self.root)?;
+            super::format::ensure_format_current(self)?;
         }
         Ok(guard)
     }
@@ -309,6 +314,7 @@ impl Repo {
             &RepoConfig {
                 version: 2,
                 default_branch: "main".into(),
+                format_version: super::format::CURRENT_FORMAT_VERSION,
             },
         )?;
 
@@ -2199,6 +2205,10 @@ fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> RepoResult<S
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> RepoResult<T> {
+    read_json_unlocked(path)
+}
+
+pub(crate) fn read_json_unlocked<T: serde::de::DeserializeOwned>(path: &Path) -> RepoResult<T> {
     let text = fs::read_to_string(path)
         .map_err(|e| RepoError::from_io(&format!("read {}", path.display()), e))?;
     serde_json::from_str(&text)

@@ -167,6 +167,7 @@ Integrity check. By default report-only: never modifies refs, HEAD, timeline, bl
 | `index.json` `state_id` or paths disagree with HEAD, or index present while HEAD is invalid | `index inconsistent` |
 | Pack index entry fails to decompress or hash does not match blob id | `pack corrupt` |
 | `.astvcs-tmp` file with no canonical target (not cleaned by normal commands) | `orphan temp file` |
+| `config.json` `format_version` newer than this binary supports | `unknown format version` |
 
 **`--repair`** (conservative, under repo lock): when HEAD resolves to a state with timeline and manifest, rewrite `index.json` from the HEAD manifest if the index is inconsistent (wrong `state_id`, stale paths, or paths absent from HEAD). Remove stray `.astvcs-tmp` files when the canonical target already exists. Refuses when HEAD names a missing branch while other local branches exist (update HEAD manually). Never repairs missing blobs, pack corruption, or missing state manifests.
 

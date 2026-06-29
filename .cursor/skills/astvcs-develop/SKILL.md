@@ -49,7 +49,7 @@ cargo build --release
 | `diff/` | structural alignment (LCS), text Myers diff |
 | `intent/` | human-readable edit intents, overlap checks |
 | `merge/` | three-way merge, conflict detection |
-| `store/` | blobs, pack storage (`pack.rs`), timeline, repo CLI backend, manifest metadata (`manifest.rs`, `tracked.rs`, `working.rs`), incremental working-tree scan (`walk.rs`, `scan_cache.rs`); `error.rs`, `identity.rs`, `lock.rs`, `atomic.rs`, `reachability.rs`, `integrity.rs` (`gc`, `fsck`, `repack`) |
+| `store/` | blobs, pack storage (`pack.rs`), timeline, repo CLI backend, manifest metadata (`manifest.rs`, `tracked.rs`, `working.rs`), incremental working-tree scan (`walk.rs`, `scan_cache.rs`); `error.rs`, `identity.rs`, `lock.rs`, `atomic.rs`, `format.rs`, `reachability.rs`, `integrity.rs` (`gc`, `fsck`, `repack`) |
 | `network/` | remotes, fetch/push/clone, HTTP serve |
 | `unparser.rs` | AST back to source text (leading trivia between siblings) |
 
@@ -57,6 +57,6 @@ cargo build --release
 
 - All tests pass (`cargo test`).
 - Clippy is clean with `-D warnings`.
-- If CLI behavior changed (including `identity`, `--json`, `reset`, `revert`, `merge`, `checkout`, `branch remove`, `gc` (`--prune`, `--prune-history`), `fsck` (`--repair`, `--prune-refs`), `repack`, binary file tracking, symlink and executable file modes, materialize dirty-tree guard, remote ref resolution, parse fallback visibility in `status`/`diff`, incremental scan cache / `--full-scan`, or repository lock errors), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network, locking, atomicity, reachability, gc/fsck/repack (including two-tier history retention and fsck repair), author identity, structured errors, binary blobs, symlink/mode metadata, parse fallback policy, incremental scan cache, or repository model semantics change.
+- If CLI behavior changed (including `identity`, `--json`, `reset`, `revert`, `merge`, `checkout`, `branch remove`, `gc` (`--prune`, `--prune-history`), `fsck` (`--repair`, `--prune-refs`), `repack`, binary file tracking, symlink and executable file modes, materialize dirty-tree guard, remote ref resolution, parse fallback visibility in `status`/`diff`, incremental scan cache / `--full-scan`, on-disk format versioning / migrations, or repository lock errors), update [docs/commands.md](../../../docs/commands.md) and add or extend a test in `tests/integration.rs`; update [docs/architecture.md](../../../docs/architecture.md) when network, locking, atomicity, reachability, gc/fsck/repack (including two-tier history retention and fsck repair), author identity, structured errors, binary blobs, symlink/mode metadata, parse fallback policy, incremental scan cache, on-disk format versioning, or repository model semantics change.
 - If merge, revert, or diff semantics changed, update the matching fixture under `examples/` and its row in [examples/README.md](../../../examples/README.md).
 - If network sync behavior changed, update [docs/architecture.md](../../../docs/architecture.md) network section and extend `tests/integration.rs` or `src/network/sync.rs` tests.

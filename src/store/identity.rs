@@ -99,6 +99,7 @@ fn save_repo_identity_config(repo: &Repo, config: &IdentityConfig) -> RepoResult
         serde_json::json!({
             "version": 2,
             "default_branch": "main",
+            "format_version": crate::store::format::CURRENT_FORMAT_VERSION,
         })
     };
     if let Some(author) = &config.author {

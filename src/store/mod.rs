@@ -1,6 +1,7 @@
 pub(crate) mod atomic;
 mod blobs;
 pub mod error;
+mod format;
 mod history;
 mod identity;
 mod integrity;

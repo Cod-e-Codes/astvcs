@@ -1,5 +1,6 @@
 use crate::store::atomic;
 use crate::store::error::{RepoError, RepoResult};
+use crate::store::format::CURRENT_FORMAT_VERSION;
 use crate::store::manifest::ManifestMap;
 use crate::store::pack::PackStore;
 use crate::store::reachability::{ROOT_STATE_ID, Reachability, reachable_from_tips};
@@ -92,6 +93,7 @@ pub enum FsckKind {
     MissingStateManifest,
     OrphanedStateManifest,
     PackCorrupt,
+    UnknownFormatVersion,
 }
 
 impl FsckKind {
@@ -105,6 +107,7 @@ impl FsckKind {
             Self::MissingStateManifest => "missing state manifest",
             Self::OrphanedStateManifest => "orphaned state manifest",
             Self::PackCorrupt => "pack corrupt",
+            Self::UnknownFormatVersion => "unknown format version",
         }
     }
 }
@@ -319,6 +322,7 @@ fn collect_fsck_findings(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     let mut findings = Vec::new();
 
     findings.extend(check_head_branch(repo)?);
+    findings.extend(check_format_version(repo)?);
     findings.extend(check_refs(repo)?);
     findings.extend(check_timeline_and_blobs(repo)?);
     findings.extend(check_orphaned_state_manifests(repo)?);
@@ -516,6 +520,22 @@ fn read_index(repo: &Repo) -> RepoResult<HashMap<String, IndexEntry>> {
     }
     let text = fs::read_to_string(&path).map_err(|e| RepoError::from_io("read index", e))?;
     serde_json::from_str(&text).map_err(|e| RepoError::other(format!("parse index: {e}")))
+}
+
+fn check_format_version(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
+    let path = repo.astvcs_dir().join(crate::store::repo::CONFIG_FILE);
+    let config: crate::store::repo::RepoConfig = crate::store::repo::read_json_unlocked(&path)?;
+    if config.format_version > CURRENT_FORMAT_VERSION {
+        Ok(vec![FsckFinding {
+            kind: FsckKind::UnknownFormatVersion,
+            detail: format!(
+                "config.json format_version {} is newer than supported version {}",
+                config.format_version, CURRENT_FORMAT_VERSION
+            ),
+        }])
+    } else {
+        Ok(vec![])
+    }
 }
 
 fn check_head_branch(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
@@ -1132,5 +1152,26 @@ mod tests {
             })
             .unwrap();
         assert!(report.is_clean(), "{}", report.format_output());
+    }
+
+    #[test]
+    fn fsck_warns_on_unknown_format_version() {
+        let (dir, repo) = sample_repo();
+        let config_path = dir.path().join(".astvcs").join("config.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        value["format_version"] = serde_json::json!(99);
+        fs::write(&config_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        let report = repo.fsck(FsckOptions::default()).unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| matches!(f.kind, FsckKind::UnknownFormatVersion)),
+            "{}",
+            report.format_output()
+        );
+        assert!(!report.is_clean());
     }
 }

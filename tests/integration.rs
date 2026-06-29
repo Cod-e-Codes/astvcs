@@ -2452,3 +2452,42 @@ fn repack_fetch_push_roundtrip() {
         "fsck clone after push from repacked upstream",
     );
 }
+
+#[test]
+fn format_version_migrates_on_open_and_lock() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    let config_path = dir.path().join(".astvcs").join("config.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    value["format_version"] = serde_json::json!(0);
+    fs::write(&config_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["status"]),
+        "status triggers migration",
+    );
+    let migrated: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(migrated["format_version"], 1);
+}
+
+#[test]
+fn cli_fsck_warns_on_unknown_format_version() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    let config_path = dir.path().join(".astvcs").join("config.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    value["format_version"] = serde_json::json!(99);
+    fs::write(&config_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+    let out = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert!(
+        !out.status.success(),
+        "fsck should report unknown format version"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("unknown format version"), "{stdout}");
+    assert!(stdout.contains("format_version 99"), "{stdout}");
+}
