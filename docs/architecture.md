@@ -14,6 +14,8 @@
 
 **Staging index.** `.astvcs/staging.json` holds staged path entries (`blob_id`, `content_kind`, `mode`, or `deleted: true`). `index.json` remains the HEAD baseline (last committed manifest). After the first `add`, `commit` snapshots staged paths only; empty staging with pending working-tree changes errors with `nothing staged; use astvcs add`. Repositories that never run `add` keep legacy whole-tree `commit` behavior. `status` uses git-style two-column labels (staged vs HEAD, unstaged vs effective index). `diff` without flags shows unstaged changes; `diff --staged` shows staged vs HEAD. `merge` refuses when staging is non-empty.
 
+**Stash.** `.astvcs/stash/` stores numbered JSON entries (`{ id, message, base_state_id, created_at, manifest }`) and an optional `stack.json` listing stash ids (newest at index 0). `stash push` writes changed paths as content-addressed blobs, saves the entry, then materializes HEAD (clearing staging). `stash apply` / `stash pop` three-way merge stashed paths onto current HEAD and write results to the working tree only; conflicts abort without side effects; `pop` drops the entry on success.
+
 **Repository locking and atomic writes.** Every command that reads or writes refs, `HEAD`, the timeline, the blob store, `index.json`, `staging.json`, or the working tree acquires a single exclusive advisory lock on `.astvcs/repo.lock` for the duration of that logical operation. astvcs uses one coarse exclusive lock: concurrent readers against a writer materializing the tree would be unsafe, and staging writes must stay consistent with commits. The lock is OS advisory (`flock` on Unix, `LockFileEx` on Windows) via `std::fs::File::try_lock`, not a marker file; when a process exits or is killed the kernel releases the lock, so a stale lock cannot permanently deadlock the repository. If another process holds the lock, astvcs fails fast with `repository is locked by another process; cannot acquire <path>` rather than waiting, because local CLI contention is rare and a clear immediate error is better UX than a silent hang. Reentrant acquisition on the same thread allows nested repo calls without double-locking. Network sync entry points (`fetch`, `push`, remote config) acquire the same lock once per operation. The lock file descriptor is cached per thread and explicitly unlocked (not closed) between commands so sequential in-process repo calls on Linux do not fail reopening `repo.lock` with `WouldBlock`.
 
 **On-disk format versioning.** Layout migrations are tracked in `config.json` as `format_version` (separate from the legacy `version` field, which records the config schema revision and remains `2` on init). `format_version` absent or `0` means a pre-format-versioning repository. New repositories write `format_version: 1`. Migrations run on the first outermost `repo_lock` acquisition (alongside stray temp cleanup), in order from the stored version to the current version, each step using `write_atomic_json` on `config.json` or other metadata as needed. Rules: each migration must be idempotent; each step is atomic; refs and `HEAD` are never advanced before on-disk data is consistent. Optional new JSON fields with `serde(default)` do not require a format bump. `fsck` reports `unknown format version` when `format_version` is greater than the binary supports (warning in the report; does not auto-migrate down).
@@ -48,6 +50,7 @@ By default `gc` is a dry-run for both tiers and reports unreachable blob count, 
 HEAD                 branch name or state id
 index.json           last committed manifest (working-tree baseline)
 staging.json         staged paths overlay (`active` flag set on first `add`)
+stash/               numbered stash entries (`0.json`, …) plus `stack.json` index (0 = newest)
 scan-cache.json      mtime/size snapshot for incremental working-tree scans
 config.json          repository settings (`version`, `format_version`, `default_branch`, optional `author`)
 ```
@@ -230,6 +233,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `pull_merges_upstream_changes` | `pull` fetches and merges upstream commits |
 | `pull_detached_head_requires_branch` | `pull` on detached HEAD requires `--branch` |
 | `pull_merge_conflict_after_fetch` | Fetch succeeds; merge conflict leaves local branch unchanged |
+| `stash_before_checkout` | `stash push` cleans tree so checkout succeeds without `--force` |
+| `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
+| `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | Lock held externally: CLI fails fast with lock path |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Second writer gets lock error; succeeds after release (unit, `src/store/repo.rs`) |

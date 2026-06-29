@@ -121,6 +121,10 @@ enum Commands {
         force: bool,
     },
     Pull(PullArgs),
+    Stash {
+        #[command(subcommand)]
+        action: StashAction,
+    },
     Clone {
         url: String,
         #[arg(default_value = ".")]
@@ -238,6 +242,25 @@ struct MergeArgs {
     /// Pick ours (HEAD) or theirs (merged branch) for a conflicted path.
     #[arg(long = "resolve", value_name = "PATH:OURS|THEIRS")]
     resolve: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum StashAction {
+    Push {
+        #[arg(short, long)]
+        message: Option<String>,
+        #[arg(short = 'u', long)]
+        include_untracked: bool,
+    },
+    List,
+    Pop {
+        #[arg(default_value = "0")]
+        index: usize,
+    },
+    Apply {
+        #[arg(default_value = "0")]
+        index: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -660,6 +683,34 @@ fn run(cli: Cli) -> RepoResult<()> {
                 Err(e) => {
                     trace::warn("pull: merge failed after successful fetch");
                     return Err(e);
+                }
+            }
+        }
+        Commands::Stash { action } => {
+            let repo = Repo::open(&root)?;
+            match action {
+                StashAction::Push {
+                    message,
+                    include_untracked,
+                } => {
+                    let id = repo.stash_push(message, include_untracked)?;
+                    println!("Saved stash@{{0}} (id {id})");
+                }
+                StashAction::List => {
+                    for info in repo.stash_list()? {
+                        println!(
+                            "stash@{{{}}}: {} (base {})",
+                            info.index, info.message, info.base_state_id
+                        );
+                    }
+                }
+                StashAction::Pop { index } => {
+                    repo.stash_pop(index)?;
+                    println!("Dropped stash@{{{index}}}");
+                }
+                StashAction::Apply { index } => {
+                    repo.stash_apply(index)?;
+                    println!("Applied stash@{{{index}}}");
                 }
             }
         }

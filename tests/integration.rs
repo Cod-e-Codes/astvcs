@@ -2842,3 +2842,80 @@ fn cli_commit_empty_staging_errors() {
         "expected empty-staging commit error: {stderr}"
     );
 }
+
+#[test]
+fn stash_before_checkout() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "base\n").unwrap();
+    repo.commit("base").unwrap();
+
+    fs::write(dir.path().join("note.txt"), "wip\n").unwrap();
+    let push = run_astvcs(Some(dir.path()), &["stash", "push"]);
+    assert_astvcs_ok(&push, "stash push");
+    assert!(repo.working_tree_is_clean().unwrap());
+
+    repo.create_branch("feature", None).unwrap();
+    let checkout = run_astvcs(Some(dir.path()), &["checkout", "--branch", "feature"]);
+    assert_astvcs_ok(&checkout, "checkout feature after stash");
+}
+
+#[test]
+fn stash_pop_restores_files() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "base\n").unwrap();
+    repo.commit("base").unwrap();
+
+    fs::write(dir.path().join("note.txt"), "stashed\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "push"]),
+        "stash push",
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "base\n"
+    );
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "pop"]),
+        "stash pop",
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "stashed\n"
+    );
+    assert!(!repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn stash_pop_conflict_keeps_entry() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+    repo.commit("v1").unwrap();
+
+    fs::write(dir.path().join("note.txt"), "stashed\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "push"]),
+        "stash push",
+    );
+
+    fs::write(dir.path().join("note.txt"), "conflict\n").unwrap();
+    repo.commit("conflict edit").unwrap();
+    assert!(repo.working_tree_is_clean().unwrap());
+
+    let pop = run_astvcs(Some(dir.path()), &["stash", "pop"]);
+    assert!(!pop.status.success());
+    let stderr = String::from_utf8_lossy(&pop.stderr);
+    assert!(stderr.contains("merge would conflict"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "conflict\n"
+    );
+
+    let list = run_astvcs(Some(dir.path()), &["stash", "list"]);
+    assert_astvcs_ok(&list, "stash list");
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(stdout.contains("stash@{0}:"), "{stdout}");
+}

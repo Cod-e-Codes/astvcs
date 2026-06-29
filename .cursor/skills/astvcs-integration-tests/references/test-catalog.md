@@ -41,6 +41,9 @@
 | `pull_merges_upstream_changes` | `pull` fetches and merges upstream commits |
 | `pull_detached_head_requires_branch` | `pull` on detached HEAD requires `--branch` |
 | `pull_merge_conflict_after_fetch` | Fetch succeeds; merge conflict leaves local branch unchanged |
+| `stash_before_checkout` | `stash push` cleans tree so checkout succeeds without `--force` |
+| `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
+| `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
 | `cli_reports_repository_lock_contention` | External lock held: CLI fails fast naming `repo.lock` |
 | `concurrent_repo_lock_fails_fast_with_actionable_error` | Concurrent commit blocked; succeeds after lock release (unit, `src/store/repo.rs`) |

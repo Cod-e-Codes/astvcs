@@ -48,13 +48,14 @@ impl ScanOptions {
     }
 }
 
-const WORKING_TREE_DIRTY_ERR: &str = "working tree has uncommitted changes; commit or pass --force";
+pub(crate) const WORKING_TREE_DIRTY_ERR: &str =
+    "working tree has uncommitted changes; commit or pass --force";
 
 const RESET_WORKING_TREE_DIRTY_ERR: &str =
     "working tree has uncommitted changes; commit, soft reset, or pass --force";
 
 /// Dirty-tree policy applied before writing a state manifest to disk.
-struct MaterializeOptions<'a> {
+pub(crate) struct MaterializeOptions<'a> {
     force: bool,
     command: &'a str,
     /// Overwrite disk when HEAD already matches `state_id` (repair drift without `--force`).
@@ -63,7 +64,7 @@ struct MaterializeOptions<'a> {
 }
 
 impl<'a> MaterializeOptions<'a> {
-    fn new(command: &'a str) -> Self {
+    pub(crate) fn new(command: &'a str) -> Self {
         Self {
             force: false,
             command,
@@ -430,7 +431,7 @@ impl Repo {
         Ok(Self { root })
     }
 
-    fn scan_working(
+    pub(crate) fn scan_working(
         &self,
         head: &StateId,
         opts: ScanOptions,
@@ -514,7 +515,7 @@ impl Repo {
         self.root.join(ASTVCS_DIR)
     }
 
-    fn blobs(&self) -> BlobStore {
+    pub(crate) fn blobs(&self) -> BlobStore {
         BlobStore::new(self.astvcs_dir())
     }
 
@@ -710,7 +711,7 @@ impl Repo {
         self.load_state_files_unlocked(state_id)
     }
 
-    fn load_state_files_unlocked(
+    pub(crate) fn load_state_files_unlocked(
         &self,
         state_id: &StateId,
     ) -> RepoResult<HashMap<String, TrackedFile>> {
@@ -2181,7 +2182,7 @@ impl Repo {
         }
     }
 
-    fn materialize_state_inner(
+    pub(crate) fn materialize_state_inner(
         &self,
         state_id: &StateId,
         clobbered: Vec<String>,
@@ -2272,7 +2273,7 @@ impl Repo {
         self.working_tree_is_clean_unlocked()
     }
 
-    fn working_tree_is_clean_unlocked(&self) -> RepoResult<bool> {
+    pub(crate) fn working_tree_is_clean_unlocked(&self) -> RepoResult<bool> {
         let staging = self.load_staging_unlocked()?;
         if staging.staging_in_use() {
             return Ok(false);

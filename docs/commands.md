@@ -43,6 +43,10 @@ Global flags:
 | `remote remove <name>` | Remove a remote and its tracking refs |
 | `fetch <remote> [--branch <name>]` | Download missing objects; update remote-tracking refs |
 | `pull <remote> [--branch <name>] [-m <msg>] [--force] [--resolve <path>:ours\|theirs]` | Fetch then merge remote-tracking branch into current branch |
+| `stash push [-m <msg>] [-u]` | Save working-tree changes to `.astvcs/stash/` and reset disk to HEAD |
+| `stash list` | List stashes (`stash@{n}`; 0 is newest) |
+| `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
+| `stash apply [index]` | Apply stash without removing the entry |
 | `push <remote> [--branch <name>] [--force]` | Upload missing objects; fast-forward remote branch |
 | `clone <url> [path]` | Clone a remote repository (default path: `.`) |
 | `serve [--bind <addr>] [--port <n>]` | Serve the repository over HTTP (default `127.0.0.1:9421`) |
@@ -91,6 +95,14 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 `revert` applies the guard only when it would materialize (no-op reverts that leave HEAD unchanged skip the check). `merge --dry-run` and `revert --dry-run` never touch the working tree.
 
 **Merge planning and the working tree.** `plan_merge` and `prepare_merge` load file content only from committed states (merge base, HEAD, and the branch tip being merged). They do not read the working tree, so uncommitted edits are invisible to conflict detection and to the merged manifest. With `--force`, dirty paths are discarded during materialization *after* the plan is computed; uncommitted content on a path that the merge itself changes cannot leak into the planner or alter the three-way result - the final on-disk file is the committed merge outcome for that path.
+
+### `stash`
+
+`stash push` captures the working-tree diff against HEAD (disk is source of truth; staged content already on disk is included). By default only tracked paths (HEAD manifest entries and tracked deletions) are stashed; pass `-u` / `--include-untracked` to include untracked files from the working-tree scan. Errors with `no local changes to stash` when nothing differs. After saving, astvcs materializes HEAD to disk (clears staging) so the tree is clean for checkout.
+
+`stash apply` and `stash pop` three-way merge each path (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write the result to the working tree only (`index.json` stays at HEAD). Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict` and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
+
+Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD state id).
 
 ### `revert`
 
