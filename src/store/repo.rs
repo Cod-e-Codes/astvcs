@@ -500,6 +500,36 @@ impl Repo {
         Ok(branches)
     }
 
+    fn branch_ref_exists_unlocked(&self, name: &str) -> bool {
+        self.astvcs_dir().join("refs/heads").join(name).is_file()
+    }
+
+    pub(crate) fn update_config_unlocked<F>(&self, f: F) -> RepoResult<()>
+    where
+        F: FnOnce(&mut RepoConfig) -> RepoResult<()>,
+    {
+        let path = self.astvcs_dir().join(CONFIG_FILE);
+        let mut config = read_json_unlocked(&path)?;
+        f(&mut config)?;
+        write_atomic_json(&path, &config)?;
+        Ok(())
+    }
+
+    fn sync_default_branch_config_unlocked(&self) -> RepoResult<()> {
+        let config: RepoConfig = read_json_unlocked(&self.astvcs_dir().join(CONFIG_FILE))?;
+        if self.branch_ref_exists_unlocked(&config.default_branch) {
+            return Ok(());
+        }
+        let branches = self.list_branches_unlocked()?;
+        if let Some(name) = pick_default_branch(&branches) {
+            self.update_config_unlocked(|c| {
+                c.default_branch = name;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
     pub fn create_branch(&self, name: &str, from: Option<&str>) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
         let ref_path = self.astvcs_dir().join("refs/heads").join(name);
@@ -508,11 +538,22 @@ impl Repo {
                 "branch already exists: {name}"
             )));
         }
+        let default_stale = {
+            let config: RepoConfig = read_json_unlocked(&self.astvcs_dir().join(CONFIG_FILE))?;
+            !self.branch_ref_exists_unlocked(&config.default_branch)
+        };
         let state = match from {
             Some(b) => self.read_branch_ref(b)?,
             None => self.head_state_unlocked()?,
         };
         write_atomic_text(&ref_path, &format!("{state}\n"))?;
+        if default_stale {
+            let new_default = name.to_string();
+            self.update_config_unlocked(|c| {
+                c.default_branch = new_default;
+                Ok(())
+            })?;
+        }
         trace::notice(format!("branch: created {name} at state {state}"));
         Ok(())
     }
@@ -533,6 +574,7 @@ impl Repo {
             return Err(RepoError::branch_guard("cannot remove the last branch"));
         }
         fs::remove_file(ref_path).map_err(|e| e.to_string())?;
+        self.sync_default_branch_config_unlocked()?;
         trace::notice(format!("branch: removed {name}"));
         Ok(())
     }
@@ -2204,6 +2246,16 @@ fn format_diff(path: &str, old: &FileContent, new: &FileContent) -> RepoResult<S
     Ok(out)
 }
 
+fn pick_default_branch(branches: &[BranchInfo]) -> Option<String> {
+    if branches.is_empty() {
+        return None;
+    }
+    if branches.iter().any(|b| b.name == "main") {
+        return Some("main".into());
+    }
+    Some(branches[0].name.clone())
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> RepoResult<T> {
     read_json_unlocked(path)
 }
@@ -3243,6 +3295,39 @@ mod tests {
             fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
             "added later\n"
         );
+    }
+
+    #[test]
+    fn remove_default_branch_updates_config() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("baseline").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        repo.create_branch("develop", None).unwrap();
+        repo.checkout_branch("feature").unwrap();
+        assert_eq!(repo.load_config().unwrap().default_branch, "main");
+        repo.remove_branch("main").unwrap();
+        assert_eq!(repo.load_config().unwrap().default_branch, "develop");
+    }
+
+    #[test]
+    fn create_branch_fixes_dangling_default() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        repo.commit("baseline").unwrap();
+        repo.create_branch("feature", None).unwrap();
+        repo.checkout_branch("feature").unwrap();
+        repo.remove_branch("main").unwrap();
+        assert_eq!(repo.load_config().unwrap().default_branch, "feature");
+
+        let config_path = dir.path().join(".astvcs/config.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        value["default_branch"] = "stale".into();
+        fs::write(&config_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        repo.create_branch("recovery", None).unwrap();
+        assert_eq!(repo.load_config().unwrap().default_branch, "recovery");
     }
 
     #[test]

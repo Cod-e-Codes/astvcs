@@ -1468,6 +1468,45 @@ fn cli_branch_remove_guardrails() {
 }
 
 #[test]
+fn remove_default_branch_updates_config() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    Repo::init_with_identity(root).unwrap();
+    fs::write(root.join("note.txt"), "v1\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["commit", "-m", "baseline"]),
+        "baseline",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["branch", "create", "feature"]),
+        "create feature",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["branch", "create", "develop"]),
+        "create develop",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["checkout", "--branch", "feature"]),
+        "checkout feature",
+    );
+
+    let config_before: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".astvcs/config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config_before["default_branch"], "main");
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["branch", "remove", "main"]),
+        "remove main",
+    );
+
+    let config_after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".astvcs/config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config_after["default_branch"], "develop");
+}
+
+#[test]
 fn cli_materialize_refuses_dirty_tree_and_force_overrides() {
     let dir = TempDir::new().unwrap();
     let repo = Repo::init_with_identity(dir.path()).unwrap();

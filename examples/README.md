@@ -25,6 +25,7 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. Rese
 | (CLI-only) | `trailing_comment_and_literal_edit_merge` | Trailing comment text merges with sibling literal edit |
 | (CLI-only) | `cli_trivia_only_commit` | Whitespace-only formatting commit |
 | (CLI-only) | `cli_branch_remove_guardrails` | `branch remove` guardrails and recreate |
+| (CLI-only) | `remove_default_branch_updates_config` | Removing default branch updates `config.json` |
 | (CLI-only) | `cli_reset_hard_soft_and_force` | Hard/soft reset and `--force` clobber warnings |
 | (CLI-only) | `cli_revert_and_dry_run`, `cli_revert_of_revert_restores_content` | Revert success, dry-run conflict, revert-of-revert |
 | (CLI-only) | `cli_merge_resolve_conflict` | `merge --resolve path:ours\|theirs` |

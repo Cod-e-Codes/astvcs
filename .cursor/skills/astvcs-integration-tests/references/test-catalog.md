@@ -18,6 +18,7 @@
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
 | `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |
+| `remove_default_branch_updates_config` | Removing default branch promotes `develop` over `feature` in config |
 | `merge_demo_add_add_and_deletion` | Add/add and deletion cases |
 | `merge_demo_deletion_when_other_branch_unchanged` | Modify vs delete |
 | `checkout_state_and_empty_commit` | Detached HEAD, no-op commit |
@@ -27,6 +28,7 @@
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync |
+| `clone_uses_remote_default_branch` | Clone checks out upstream `default_branch` (unit, `network/sync.rs`) |
 | `cli_reset_hard_soft_and_force` | Reset modes, force clobber warnings |
 | `cli_materialize_refuses_dirty_tree_and_force_overrides` | Merge, checkout, revert refuse dirty tree; `--force` clobber warnings |
 | `merge_force_on_dirty_overlapping_path_applies_committed_plan` | Merge `--force` on dirty path in merge plan uses committed three-way result (unit, `src/store/repo.rs`) |

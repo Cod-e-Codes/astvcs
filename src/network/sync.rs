@@ -291,4 +291,29 @@ mod tests {
             "hello\n"
         );
     }
+
+    #[test]
+    fn clone_uses_remote_default_branch() {
+        use crate::store::RepoConfig;
+
+        let upstream = TempDir::new().unwrap();
+        let upstream_repo = init_with_commit(upstream.path(), "initial");
+        upstream_repo.create_branch("develop", None).unwrap();
+
+        let config_path = upstream.path().join(".astvcs/config.json");
+        let mut config: RepoConfig =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        config.default_branch = "develop".into();
+        fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let clone_dir = TempDir::new().unwrap();
+        let (repo, branch) =
+            clone_repo(upstream.path().to_str().unwrap(), clone_dir.path()).unwrap();
+        assert_eq!(branch, "develop");
+        assert_eq!(repo.head_branch().unwrap(), Some("develop".into()));
+        assert_eq!(
+            fs::read_to_string(clone_dir.path().join("hello.txt")).unwrap(),
+            "hello\n"
+        );
+    }
 }

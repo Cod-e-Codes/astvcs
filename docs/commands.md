@@ -58,7 +58,7 @@ Deletes `.astvcs/refs/heads/<name>` only. Timeline entries and blobs remain unti
 | Checked-out branch | Error: `cannot remove the checked-out branch` |
 | Last remaining branch | Error: `cannot remove the last branch` |
 | Unmerged commits on the branch | Allowed. Removing a ref does not delete content-addressed states; history stays in the store and can still be checked out by state id. |
-| `config.json` `default_branch` | Unchanged when a branch is removed (the field is informational only today). |
+| `config.json` `default_branch` | Updated when the default branch ref is removed (promote `main` if present, else lexicographically first remaining branch) or when `branch create` runs while the configured default ref is missing (set to the new branch). Used by `clone` and push default branch resolution. |
 
 ### `reset`
 
