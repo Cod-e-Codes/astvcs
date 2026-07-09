@@ -9,8 +9,10 @@ pub mod trace;
 pub mod unparser;
 
 pub use diff::{
-    DiffResult, PathRename, PathRenameKind, TextEdit, build_rename_map, detect_path_renames,
-    diff_graphs, diff_text, rename_targets_conflict, side_path_for_base,
+    DiffResult, DiffViewDocument, DiffViewFile, DiffViewGroup, DiffViewMode, IntentView,
+    PathRename, PathRenameKind, TextEdit, build_rename_map, detect_path_renames, diff_graphs,
+    diff_text, file_from_contents, file_from_rename, open_in_browser, rename_targets_conflict,
+    render_diff_view_html, side_path_for_base, write_diff_view_html,
 };
 pub use frontend::{
     BinaryBlob, FileContent, SourceLanguage, SymlinkBlob, TextBlob, is_ast_capable_path,

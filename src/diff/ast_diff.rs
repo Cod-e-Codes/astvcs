@@ -3,6 +3,44 @@ use crate::diff::lcs::lcs_pairs;
 use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
 use crate::trace;
 
+/// How a sibling pair is aligned across old and new graphs.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AlignKind {
+    Match,
+    Insert,
+    Delete,
+}
+
+/// Which algorithm produced a sibling match.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AlignMethod {
+    Id,
+    Key,
+    Role,
+    Lcs,
+    Fingerprint,
+    StructuralFallback,
+    LeafFallback,
+}
+
+/// A single alignment edge between an old sibling and a new sibling.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AlignEdge {
+    pub old_id: Option<NodeId>,
+    pub new_id: Option<NodeId>,
+    pub kind: AlignKind,
+    pub method: Option<AlignMethod>,
+    pub parent_old: Option<NodeId>,
+    pub parent_new: Option<NodeId>,
+}
+
+/// Result of diffing two AST graphs, including sibling alignment edges.
+#[derive(Clone, Debug)]
+pub struct DetailedDiffResult {
+    pub mutations: Vec<Mutation>,
+    pub alignment: Vec<AlignEdge>,
+}
+
 /// Result of diffing two AST graphs.
 #[derive(Clone, Debug)]
 pub struct DiffResult {
@@ -11,14 +49,33 @@ pub struct DiffResult {
 
 /// Compute structural mutations transforming `old` into `new`.
 pub fn diff_graphs(old: &AstGraph, new: &AstGraph) -> DiffResult {
+    DiffResult {
+        mutations: diff_graphs_detailed(old, new).mutations,
+    }
+}
+
+/// Compute structural mutations and sibling alignment transforming `old` into `new`.
+pub fn diff_graphs_detailed(old: &AstGraph, new: &AstGraph) -> DetailedDiffResult {
     let mut mutations = Vec::new();
-    diff_subtree(old, new, old.root, new.root, &mut mutations);
+    let mut alignment = Vec::new();
+    alignment.push(AlignEdge {
+        old_id: Some(old.root),
+        new_id: Some(new.root),
+        kind: AlignKind::Match,
+        method: None,
+        parent_old: None,
+        parent_new: None,
+    });
+    diff_subtree(old, new, old.root, new.root, &mut mutations, &mut alignment);
     if old.root_trailing_trivia != new.root_trailing_trivia {
         mutations.push(Mutation::SetRootTrailingTrivia {
             trailing: new.root_trailing_trivia.clone(),
         });
     }
-    DiffResult { mutations }
+    DetailedDiffResult {
+        mutations,
+        alignment,
+    }
 }
 
 fn diff_child_trivia(
@@ -209,6 +266,8 @@ fn apply_role_match(
     matched_old: &mut [bool],
     matched_new: &mut [bool],
     out: &mut Vec<Mutation>,
+    method: AlignMethod,
+    alignment: &mut Vec<AlignEdge>,
 ) {
     let oc = old.get(&old_children[oi]).unwrap();
     let nc = new.get(&new_children[ni]).unwrap();
@@ -217,6 +276,14 @@ fn apply_role_match(
     }
     matched_old[oi] = true;
     matched_new[ni] = true;
+    alignment.push(AlignEdge {
+        old_id: Some(old_children[oi]),
+        new_id: Some(new_children[ni]),
+        kind: AlignKind::Match,
+        method: Some(method),
+        parent_old: Some(old_node_id),
+        parent_new: Some(new_node_id),
+    });
     if old_children[oi] != new_children[ni] && oi != ni {
         out.push(Mutation::MoveNode {
             node_id: old_children[oi],
@@ -224,7 +291,7 @@ fn apply_role_match(
             before: insert_anchor(new_children, ni),
         });
     }
-    diff_subtree(old, new, old_children[oi], new_children[ni], out);
+    diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
     diff_child_trivia(
         old,
         new,
@@ -249,12 +316,22 @@ fn apply_key_match(
     matched_old: &mut [bool],
     matched_new: &mut [bool],
     out: &mut Vec<Mutation>,
+    method: AlignMethod,
+    alignment: &mut Vec<AlignEdge>,
 ) {
     let oc = old.get(&old_children[oi]).unwrap();
     let nc = new.get(&new_children[ni]).unwrap();
     if oc.kind == nc.kind && !oc.is_leaf() {
         matched_old[oi] = true;
         matched_new[ni] = true;
+        alignment.push(AlignEdge {
+            old_id: Some(old_children[oi]),
+            new_id: Some(new_children[ni]),
+            kind: AlignKind::Match,
+            method: Some(method),
+            parent_old: Some(old_node_id),
+            parent_new: Some(new_node_id),
+        });
         if old_children[oi] != new_children[ni] && oi != ni {
             out.push(Mutation::MoveNode {
                 node_id: old_children[oi],
@@ -262,7 +339,7 @@ fn apply_key_match(
                 before: insert_anchor(new_children, ni),
             });
         }
-        diff_subtree(old, new, old_children[oi], new_children[ni], out);
+        diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
         diff_child_trivia(
             old,
             new,
@@ -309,13 +386,14 @@ fn diff_subtree(
     old_id: NodeId,
     new_id: NodeId,
     out: &mut Vec<Mutation>,
+    alignment: &mut Vec<AlignEdge>,
 ) {
     let old_node = old.get(&old_id).unwrap();
     let new_node = new.get(&new_id).unwrap();
 
     if old_id == new_id {
         if old_node.kind == new_node.kind && !(old_node.is_leaf() && new_node.is_leaf()) {
-            diff_children(old, new, old_id, new_id, out);
+            diff_children(old, new, old_id, new_id, out, alignment);
         }
         return;
     }
@@ -340,7 +418,7 @@ fn diff_subtree(
     }
 
     if old_node.kind == new_node.kind && !(old_node.is_leaf() && new_node.is_leaf()) {
-        diff_children(old, new, old_id, new_id, out);
+        diff_children(old, new, old_id, new_id, out, alignment);
         return;
     }
 
@@ -411,6 +489,7 @@ fn diff_children(
     old_node_id: NodeId,
     new_node_id: NodeId,
     out: &mut Vec<Mutation>,
+    alignment: &mut Vec<AlignEdge>,
 ) {
     let old_children = old.get(&old_node_id).unwrap().children.clone();
     let new_children = new.get(&new_node_id).unwrap().children.clone();
@@ -421,7 +500,15 @@ fn diff_children(
             new_order: new_children.clone(),
         });
         for id in &old_children {
-            diff_subtree(old, new, *id, *id, out);
+            alignment.push(AlignEdge {
+                old_id: Some(*id),
+                new_id: Some(*id),
+                kind: AlignKind::Match,
+                method: Some(AlignMethod::Id),
+                parent_old: Some(old_node_id),
+                parent_new: Some(new_node_id),
+            });
+            diff_subtree(old, new, *id, *id, out, alignment);
             if new_children.contains(id) {
                 diff_child_trivia(old, new, old_node_id, new_node_id, *id, *id, out);
             }
@@ -451,7 +538,15 @@ fn diff_children(
         for (oi, ni) in pair_equal_node_ids(&old_children, &new_children) {
             matched_old[oi] = true;
             matched_new[ni] = true;
-            diff_subtree(old, new, old_children[oi], new_children[ni], out);
+            alignment.push(AlignEdge {
+                old_id: Some(old_children[oi]),
+                new_id: Some(new_children[ni]),
+                kind: AlignKind::Match,
+                method: Some(AlignMethod::Id),
+                parent_old: Some(old_node_id),
+                parent_new: Some(new_node_id),
+            });
+            diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
             diff_child_trivia(
                 old,
                 new,
@@ -479,6 +574,8 @@ fn diff_children(
                 &mut matched_old,
                 &mut matched_new,
                 out,
+                AlignMethod::Key,
+                alignment,
             );
         }
 
@@ -498,6 +595,8 @@ fn diff_children(
                 &mut matched_old,
                 &mut matched_new,
                 out,
+                AlignMethod::Role,
+                alignment,
             );
         }
 
@@ -520,6 +619,8 @@ fn diff_children(
                     &mut matched_old,
                     &mut matched_new,
                     out,
+                    AlignMethod::Lcs,
+                    alignment,
                 );
             }
 
@@ -539,6 +640,8 @@ fn diff_children(
                     &mut matched_old,
                     &mut matched_new,
                     out,
+                    AlignMethod::Lcs,
+                    alignment,
                 );
             }
         }
@@ -546,7 +649,15 @@ fn diff_children(
         for (oi, ni) in lcs_pairs(&old_children, &new_children) {
             matched_old[oi] = true;
             matched_new[ni] = true;
-            diff_subtree(old, new, old_children[oi], new_children[ni], out);
+            alignment.push(AlignEdge {
+                old_id: Some(old_children[oi]),
+                new_id: Some(new_children[ni]),
+                kind: AlignKind::Match,
+                method: Some(AlignMethod::Id),
+                parent_old: Some(old_node_id),
+                parent_new: Some(new_node_id),
+            });
+            diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
             diff_child_trivia(
                 old,
                 new,
@@ -574,6 +685,8 @@ fn diff_children(
                 &mut matched_old,
                 &mut matched_new,
                 out,
+                AlignMethod::Lcs,
+                alignment,
             );
         }
 
@@ -593,6 +706,8 @@ fn diff_children(
                 &mut matched_old,
                 &mut matched_new,
                 out,
+                AlignMethod::Lcs,
+                alignment,
             );
         }
     }
@@ -607,6 +722,14 @@ fn diff_children(
     ) {
         matched_old[oi] = true;
         matched_new[ni] = true;
+        alignment.push(AlignEdge {
+            old_id: Some(old_children[oi]),
+            new_id: Some(new_children[ni]),
+            kind: AlignKind::Match,
+            method: Some(AlignMethod::Fingerprint),
+            parent_old: Some(old_node_id),
+            parent_new: Some(new_node_id),
+        });
         if oi != ni {
             out.push(Mutation::MoveSubtree {
                 node_id: old_children[oi],
@@ -614,7 +737,7 @@ fn diff_children(
                 before: insert_anchor(&new_children, ni),
             });
         }
-        diff_subtree(old, new, old_children[oi], new_children[ni], out);
+        diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
         diff_child_trivia(
             old,
             new,
@@ -638,6 +761,14 @@ fn diff_children(
         let new_child = new_children[ni];
         matched_old[oi] = true;
         matched_new[ni] = true;
+        alignment.push(AlignEdge {
+            old_id: Some(*old_child),
+            new_id: Some(new_child),
+            kind: AlignKind::Match,
+            method: Some(AlignMethod::StructuralFallback),
+            parent_old: Some(old_node_id),
+            parent_new: Some(new_node_id),
+        });
         if oi != ni {
             out.push(Mutation::MoveNode {
                 node_id: *old_child,
@@ -649,7 +780,7 @@ fn diff_children(
                 oi.abs_diff(ni)
             ));
         }
-        diff_subtree(old, new, *old_child, new_child, out);
+        diff_subtree(old, new, *old_child, new_child, out, alignment);
         diff_child_trivia(
             old,
             new,
@@ -675,6 +806,14 @@ fn diff_children(
         let nc = new.get(&new_child).unwrap();
         matched_old[oi] = true;
         matched_new[ni] = true;
+        alignment.push(AlignEdge {
+            old_id: Some(*old_child),
+            new_id: Some(new_child),
+            kind: AlignKind::Match,
+            method: Some(AlignMethod::LeafFallback),
+            parent_old: Some(old_node_id),
+            parent_new: Some(new_node_id),
+        });
         if oi != ni {
             out.push(Mutation::MoveNode {
                 node_id: *old_child,
@@ -710,6 +849,14 @@ fn diff_children(
 
     for (oi, old_child) in old_children.iter().enumerate() {
         if !matched_old[oi] {
+            alignment.push(AlignEdge {
+                old_id: Some(*old_child),
+                new_id: None,
+                kind: AlignKind::Delete,
+                method: None,
+                parent_old: Some(old_node_id),
+                parent_new: None,
+            });
             out.push(Mutation::DeleteSubtree {
                 parent: old_node_id,
                 node_id: *old_child,
@@ -719,6 +866,14 @@ fn diff_children(
 
     for (ni, new_child) in new_children.iter().enumerate() {
         if !matched_new[ni] {
+            alignment.push(AlignEdge {
+                old_id: None,
+                new_id: Some(*new_child),
+                kind: AlignKind::Insert,
+                method: None,
+                parent_old: None,
+                parent_new: Some(new_node_id),
+            });
             let descendants = new.collect_subtree(*new_child);
             let top = new.get(new_child).unwrap().clone();
             out.push(Mutation::InsertSubtree {
@@ -739,6 +894,21 @@ mod tests {
     use crate::graph::{Mutation, Node, NodeKind};
     use crate::unparser::unparse;
     use std::collections::HashMap;
+
+    fn graph_from_one_block(literals: &[&str]) -> AstGraph {
+        let mut nodes = HashMap::new();
+        let leaves: Vec<_> = literals
+            .iter()
+            .map(|s| {
+                let n = Node::leaf(NodeKind::Literal, (*s).to_string());
+                nodes.insert(n.id, n.clone());
+                n.id
+            })
+            .collect();
+        let root = Node::new(NodeKind::Block, String::new(), leaves);
+        nodes.insert(root.id, root.clone());
+        AstGraph::new(root, nodes)
+    }
 
     fn graph_from_two_blocks(first: &[&str], second: &[&str]) -> AstGraph {
         let mut nodes = HashMap::new();
@@ -1100,5 +1270,94 @@ mod tests {
             start.elapsed()
         );
         assert!(diff.mutations.is_empty());
+    }
+
+    // --- alignment tests ---
+
+    #[test]
+    fn alignment_identical_has_root_match_no_insert_delete() {
+        let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+        let old = parse_rust(src).unwrap();
+        let new = parse_rust(src).unwrap();
+        let result = diff_graphs_detailed(&old, &new);
+        assert!(
+            result.alignment.iter().any(|e| e.kind == AlignKind::Match
+                && e.old_id == Some(old.root)
+                && e.new_id == Some(new.root)),
+            "expected root match edge"
+        );
+        assert!(
+            !result.alignment.iter().any(|e| e.kind == AlignKind::Insert),
+            "unexpected insert edges: {:?}",
+            result.alignment
+        );
+        assert!(
+            !result.alignment.iter().any(|e| e.kind == AlignKind::Delete),
+            "unexpected delete edges: {:?}",
+            result.alignment
+        );
+    }
+
+    #[test]
+    fn alignment_insert_statement_has_insert_edge() {
+        let old = parse_rust("fn foo() {\n    let x = 1;\n}\n").unwrap();
+        let new = parse_rust("fn foo() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
+        let result = diff_graphs_detailed(&old, &new);
+        assert!(
+            result.alignment.iter().any(|e| e.kind == AlignKind::Insert),
+            "expected at least one Insert edge: {:?}",
+            result.alignment
+        );
+    }
+
+    #[test]
+    fn alignment_swapped_blocks_has_structural_fallback() {
+        // Old: Module[Block(a,b)[2 children], Block(c,d,e)[3 children]]
+        // New: Module[Block(c,d,e)[3 children], Block(a)[1 child]]
+        // Block(c,d,e) id-matches; Block(a,b) vs Block(a) have different child counts so
+        // role-LCS cannot pair them -- structural fallback picks them up.
+        let old = graph_from_two_blocks(&["a", "b"], &["c", "d", "e"]);
+        let new = graph_from_two_blocks(&["c", "d", "e"], &["a"]);
+        let result = diff_graphs_detailed(&old, &new);
+        assert!(
+            result
+                .alignment
+                .iter()
+                .any(|e| e.kind == AlignKind::Match
+                    && e.method == Some(AlignMethod::StructuralFallback)),
+            "expected StructuralFallback match edge: {:?}",
+            result.alignment
+        );
+    }
+
+    #[test]
+    fn alignment_swapped_leaf_literals_has_leaf_fallback() {
+        // Block([Lit("b"), Lit("a")]) vs Block([Lit("a"), Lit("c")])
+        // Lit("a") id-matches at (1,0); role-LCS pairs are all skipped because slots are
+        // taken; Lit("b") has no role-LCS candidate left, so leaf fallback pairs it with
+        // Lit("c") (same kind, different payload, closest by position).
+        let old = graph_from_one_block(&["b", "a"]);
+        let new = graph_from_one_block(&["a", "c"]);
+        let result = diff_graphs_detailed(&old, &new);
+        assert!(
+            result
+                .alignment
+                .iter()
+                .any(|e| e.kind == AlignKind::Match && e.method == Some(AlignMethod::LeafFallback)),
+            "expected LeafFallback match edge: {:?}",
+            result.alignment
+        );
+    }
+
+    #[test]
+    fn diff_graphs_and_detailed_produce_identical_mutations_for_rename() {
+        let old = parse_rust("fn foo() {\n    let x = 1;\n}\n").unwrap();
+        let new = parse_rust("fn foo() {\n    let y = 1;\n}\n").unwrap();
+        let simple = diff_graphs(&old, &new);
+        let detailed = diff_graphs_detailed(&old, &new);
+        assert_eq!(
+            simple.mutations, detailed.mutations,
+            "mutations must be identical"
+        );
     }
 }

@@ -3993,3 +3993,49 @@ fn import_git_snapshot_from_subprocess() {
         }
     );
 }
+
+#[test]
+fn cli_diff_view_writes_html_with_alignment() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    Repo::init_with_identity(root).unwrap();
+    fs::write(root.join("main.rs"), "fn foo() {\n    let x = 1;\n}\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(root), &["commit", "-m", "baseline"]),
+        "baseline",
+    );
+    fs::write(root.join("main.rs"), "fn foo() {\n    let y = 1;\n}\n").unwrap();
+
+    let out = Command::new(astvcs_bin())
+        .arg("--repo")
+        .arg(root)
+        .args(["diff", "--view", "main.rs"])
+        .env("ASTVCS_NO_BROWSER", "1")
+        .output()
+        .expect("spawn astvcs");
+    assert_astvcs_ok(&out, "diff --view");
+    let html_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(
+        html_path.ends_with(".html"),
+        "expected HTML path on stdout, got {html_path:?}"
+    );
+    let html = fs::read_to_string(&html_path).expect("read viewer HTML");
+    assert!(
+        html.contains("astvcs diff"),
+        "missing viewer chrome: {}",
+        &html[..html.len().min(200)]
+    );
+    assert!(html.contains("main.rs"), "missing path in embedded JSON");
+    assert!(
+        html.contains("rename") || html.contains("EditLiteral") || html.contains("edit literal"),
+        "expected rename/edit intent in embedded JSON"
+    );
+    assert!(
+        html.contains("\"alignment\"") || html.contains("\\\"alignment\\\""),
+        "expected alignment array in embedded JSON"
+    );
+    assert!(
+        html.contains("Match") || html.contains("match") || html.contains("\"kind\""),
+        "expected alignment kind markers in embedded JSON"
+    );
+}

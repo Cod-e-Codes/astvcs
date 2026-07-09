@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>astvcs diff</title>
+<style>
+  :root {
+    --paper: #f6f5f1;
+    --panel: #fbfaf7;
+    --ink: #1d1d1b;
+    --ink-soft: #55534d;
+    --ink-faint: #8a887f;
+    --line: #ddd9cf;
+    --line-strong: #c7c2b4;
+    --insert: #3f7d54;
+    --insert-bg: #e7f0e6;
+    --delete: #a53f38;
+    --delete-bg: #f2e3e0;
+    --match: #40607f;
+    --match-bg: #e3e9ef;
+    --select: #b9861f;
+    --select-bg: #f4ead2;
+    --mono: ui-monospace, "Cascadia Code", "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "IBM Plex Sans", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.45;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--line-strong);
+    background: var(--panel);
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header .title {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  header .labels {
+    color: var(--ink-soft);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  header .arrow { color: var(--ink-faint); padding: 0 6px; }
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    min-height: 0;
+  }
+  aside {
+    border-right: 1px solid var(--line-strong);
+    overflow-y: auto;
+    background: var(--panel);
+  }
+  .group-title {
+    padding: 8px 14px 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    border-top: 1px solid var(--line);
+  }
+  .file-item {
+    padding: 6px 14px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file-item:hover { background: var(--match-bg); }
+  .file-item.active {
+    background: var(--select-bg);
+    border-left-color: var(--select);
+  }
+  .file-item .badge {
+    display: inline-block;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+    margin-right: 6px;
+    text-transform: uppercase;
+  }
+  .file-item.m-added .badge { color: var(--insert); }
+  .file-item.m-deleted .badge { color: var(--delete); }
+  .file-item.m-rename .badge { color: var(--match); }
+  section.content {
+    overflow-y: auto;
+    padding: 16px 20px 40px;
+    min-width: 0;
+  }
+  .file-head { margin-bottom: 12px; }
+  .file-head .path {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .file-head .from {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .note {
+    margin: 10px 0;
+    padding: 8px 12px;
+    background: var(--select-bg);
+    border-left: 3px solid var(--select);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .trees {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    align-items: start;
+  }
+  .tree-col {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    min-width: 0;
+  }
+  .tree-col > h3 {
+    margin: 0;
+    padding: 6px 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--line);
+    font-weight: 600;
+  }
+  .tree {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding: 6px 4px 10px;
+    overflow-x: auto;
+  }
+  .tnode { white-space: nowrap; }
+  .trow {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 1px 6px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    border-radius: 0;
+  }
+  .trow:hover { background: rgba(0,0,0,0.04); }
+  .trow .toggle {
+    width: 12px;
+    display: inline-block;
+    color: var(--ink-faint);
+    cursor: pointer;
+    user-select: none;
+    text-align: center;
+  }
+  .trow .kind { color: var(--ink); font-weight: 600; }
+  .trow .payload { color: var(--ink-soft); }
+  .trow .nid { color: var(--ink-faint); font-size: 11px; }
+  .children { padding-left: 15px; }
+  .children.collapsed { display: none; }
+  .trow.k-match { border-left-color: var(--match); background: var(--match-bg); }
+  .trow.k-insert { border-left-color: var(--insert); background: var(--insert-bg); }
+  .trow.k-delete { border-left-color: var(--delete); background: var(--delete-bg); }
+  .trow.selected { outline: 2px solid var(--select); outline-offset: -2px; background: var(--select-bg); }
+  .trow.related { outline: 2px dashed var(--match); outline-offset: -2px; }
+  .panes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    align-items: start;
+  }
+  .pane {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    min-width: 0;
+  }
+  .pane > h3 {
+    margin: 0;
+    padding: 6px 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--line);
+    font-weight: 600;
+  }
+  pre.src {
+    margin: 0;
+    padding: 8px 10px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--ink);
+  }
+  .edits {
+    list-style: none;
+    margin: 0;
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  .edits li { padding: 2px 12px; }
+  .edits li.ins { color: var(--insert); }
+  .edits li.del { color: var(--delete); }
+  .detail {
+    margin-top: 16px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .detail > h3 {
+    margin: 0;
+    padding: 6px 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--line);
+    font-weight: 600;
+  }
+  .detail-body { padding: 8px 12px; font-family: var(--mono); font-size: 12.5px; }
+  .detail-body .row { margin-bottom: 4px; }
+  .detail-body .k { color: var(--ink-faint); display: inline-block; min-width: 92px; }
+  .detail-body .muted { color: var(--ink-faint); }
+  .detail-body pre {
+    margin: 6px 0 0;
+    padding: 6px 8px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 11.5px;
+  }
+  details {
+    margin-top: 14px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+  details > summary {
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    font-weight: 600;
+    user-select: none;
+  }
+  details .inner { padding: 8px 12px; font-family: var(--mono); font-size: 12.5px; }
+  ol.intent-list { margin: 0; padding-left: 24px; }
+  ol.intent-list li { padding: 2px 0; }
+  .pipeline-step { margin-bottom: 6px; }
+  .pipeline-step .label { color: var(--ink); font-weight: 600; }
+  .pipeline-step .detail-text { color: var(--ink-soft); }
+  .hint {
+    padding: 6px 14px;
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    border-top: 1px solid var(--line);
+  }
+  .empty { color: var(--ink-faint); padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">astvcs diff</span>
+  <span class="labels"><span id="left-label"></span><span class="arrow">-&gt;</span><span id="right-label"></span></span>
+</header>
+<main>
+  <aside id="sidebar"></aside>
+  <section class="content" id="content"></section>
+</main>
+<script>
+const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
+
+(function () {
+  "use strict";
+
+  const doc = ASTVCS_DIFF || { left_label: "", right_label: "", groups: [] };
+  const sidebar = document.getElementById("sidebar");
+  const content = document.getElementById("content");
+  document.getElementById("left-label").textContent = doc.left_label || "old";
+  document.getElementById("right-label").textContent = doc.right_label || "new";
+
+  // Flatten files for navigation while keeping group headings.
+  const flat = [];
+  (doc.groups || []).forEach((group) => {
+    (group.files || []).forEach((file) => {
+      flat.push({ groupTitle: group.title || "", file: file });
+    });
+  });
+
+  let activeIndex = flat.length ? 0 : -1;
+
+  function esc(text) {
+    return String(text == null ? "" : text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function kindStr(kind) {
+    if (kind == null) return "?";
+    if (typeof kind === "string") return kind;
+    const values = Object.values(kind);
+    return values.length ? String(values[0]) : "?";
+  }
+
+  function fullHex(id) {
+    if (id == null) return null;
+    if (typeof id === "string") return id;
+    if (Array.isArray(id)) return id.map((b) => (b & 0xff).toString(16).padStart(2, "0")).join("");
+    return String(id);
+  }
+
+  function shortHex(id) {
+    const hex = fullHex(id);
+    return hex ? hex.slice(0, 12) : "";
+  }
+
+  function shortPayload(text) {
+    if (!text) return "";
+    const oneLine = String(text).replace(/\s+/g, " ").trim();
+    if (oneLine.length <= 32) return oneLine;
+    return oneLine.slice(0, 32) + "\u2026";
+  }
+
+  function buildSidebar() {
+    sidebar.innerHTML = "";
+    let lastGroup = null;
+    let idx = 0;
+    (doc.groups || []).forEach((group) => {
+      const title = group.title || "";
+      if (title && title !== lastGroup) {
+        const gt = document.createElement("div");
+        gt.className = "group-title";
+        gt.textContent = title;
+        sidebar.appendChild(gt);
+        lastGroup = title;
+      }
+      (group.files || []).forEach((file) => {
+        const item = document.createElement("div");
+        const myIndex = idx;
+        item.className = "file-item m-" + file.mode + (myIndex === activeIndex ? " active" : "");
+        item.dataset.index = String(myIndex);
+        item.innerHTML = '<span class="badge">' + esc(modeLabel(file.mode)) + "</span>" + esc(file.path);
+        item.title = file.path;
+        item.addEventListener("click", () => select(myIndex));
+        sidebar.appendChild(item);
+        idx += 1;
+      });
+    });
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = "j / k to move between files";
+    sidebar.appendChild(hint);
+  }
+
+  function modeLabel(mode) {
+    switch (mode) {
+      case "ast": return "ast";
+      case "text": return "text";
+      case "binary": return "bin";
+      case "symlink": return "link";
+      case "kind_changed": return "kind";
+      case "rename": return "move";
+      case "added": return "new";
+      case "deleted": return "del";
+      case "unchanged": return "same";
+      default: return mode;
+    }
+  }
+
+  function select(index) {
+    if (index < 0 || index >= flat.length) return;
+    activeIndex = index;
+    Array.from(sidebar.querySelectorAll(".file-item")).forEach((el) => {
+      el.classList.toggle("active", Number(el.dataset.index) === index);
+    });
+    const active = sidebar.querySelector(".file-item.active");
+    if (active) active.scrollIntoView({ block: "nearest" });
+    renderFile(flat[index]);
+  }
+
+  function nodeIndex(snapshot) {
+    const map = new Map();
+    (snapshot.nodes || []).forEach((node) => {
+      map.set(fullHex(node.id), node);
+    });
+    return map;
+  }
+
+  // Precompute alignment color per node id on each side.
+  function alignmentColors(alignment) {
+    const oldColor = new Map();
+    const newColor = new Map();
+    (alignment || []).forEach((edge) => {
+      const oid = fullHex(edge.old_id);
+      const nid = fullHex(edge.new_id);
+      if (edge.kind === "Match") {
+        if (oid) oldColor.set(oid, "match");
+        if (nid) newColor.set(nid, "match");
+      } else if (edge.kind === "Delete") {
+        if (oid) oldColor.set(oid, "delete");
+      } else if (edge.kind === "Insert") {
+        if (nid) newColor.set(nid, "insert");
+      }
+    });
+    return { oldColor, newColor };
+  }
+
+  function edgeMaps(alignment) {
+    const byOld = new Map();
+    const byNew = new Map();
+    (alignment || []).forEach((edge) => {
+      const oid = fullHex(edge.old_id);
+      const nid = fullHex(edge.new_id);
+      if (oid) byOld.set(oid, edge);
+      if (nid) byNew.set(nid, edge);
+    });
+    return { byOld, byNew };
+  }
+
+  function renderTree(snapshot, side, colors, state) {
+    const wrap = document.createElement("div");
+    wrap.className = "tree";
+    if (!snapshot || !snapshot.nodes || !snapshot.nodes.length) {
+      wrap.innerHTML = '<span class="muted">no nodes</span>';
+      return wrap;
+    }
+    const map = nodeIndex(snapshot);
+    const rootHex = fullHex(snapshot.root);
+    const rendered = new Set();
+
+    function build(idHex, depth) {
+      const node = map.get(idHex);
+      const container = document.createElement("div");
+      container.className = "tnode";
+      if (!node) {
+        container.innerHTML = '<div class="trow"><span class="muted">missing node ' + esc(shortHex(idHex)) + "</span></div>";
+        return container;
+      }
+      const hasChildren = node.children && node.children.length;
+      const row = document.createElement("div");
+      row.className = "trow";
+      const color = colors.get(idHex);
+      if (color) row.classList.add("k-" + color);
+      row.dataset.id = idHex;
+      row.dataset.side = side;
+
+      const toggle = document.createElement("span");
+      toggle.className = "toggle";
+      toggle.textContent = hasChildren ? "\u25be" : "";
+      row.appendChild(toggle);
+
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = kindStr(node.kind);
+      row.appendChild(kind);
+
+      const payloadText = shortPayload(node.payload);
+      if (payloadText) {
+        const payload = document.createElement("span");
+        payload.className = "payload";
+        payload.textContent = payloadText;
+        row.appendChild(payload);
+      }
+
+      const nid = document.createElement("span");
+      nid.className = "nid";
+      nid.textContent = shortHex(idHex);
+      row.appendChild(nid);
+
+      row.addEventListener("click", (ev) => {
+        if (ev.target === toggle) return;
+        onNodeClick(side, idHex, state);
+      });
+      container.appendChild(row);
+
+      if (hasChildren) {
+        const kids = document.createElement("div");
+        kids.className = "children";
+        const collapsed = depth >= 2;
+        if (collapsed) {
+          kids.classList.add("collapsed");
+          toggle.textContent = "\u25b8";
+        }
+        // Guard against cycles from shared ids in a DAG snapshot.
+        node.children.forEach((childId) => {
+          const childHex = fullHex(childId);
+          if (rendered.has(childHex)) {
+            const dup = document.createElement("div");
+            dup.className = "tnode";
+            dup.innerHTML = '<div class="trow"><span class="toggle"></span><span class="muted">' +
+              esc(kindStr((map.get(childHex) || {}).kind)) + " " + esc(shortHex(childHex)) + " (shared)</span></div>";
+            kids.appendChild(dup);
+            return;
+          }
+          rendered.add(childHex);
+          kids.appendChild(build(childHex, depth + 1));
+        });
+        container.appendChild(kids);
+        toggle.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const isCollapsed = kids.classList.toggle("collapsed");
+          toggle.textContent = isCollapsed ? "\u25b8" : "\u25be";
+        });
+      }
+      return container;
+    }
+
+    rendered.add(rootHex);
+    wrap.appendChild(build(rootHex, 0));
+    return wrap;
+  }
+
+  function mutationMatchesNode(mutation, idHex) {
+    if (mutation == null || !idHex) return false;
+    // Recursively scan the mutation's serialized ids for a matching hex.
+    let found = false;
+    function walk(value, keyIsId) {
+      if (found) return;
+      if (Array.isArray(value)) {
+        if (keyIsId && value.length === 32 && value.every((n) => typeof n === "number")) {
+          if (fullHex(value) === idHex) { found = true; return; }
+        }
+        value.forEach((v) => walk(v, false));
+      } else if (value && typeof value === "object") {
+        Object.keys(value).forEach((k) => {
+          const idLike = /(node_id|parent|child|before|new_parent|root)/.test(k) || k === "id";
+          walk(value[k], idLike);
+        });
+      }
+    }
+    walk(mutation, false);
+    return found;
+  }
+
+  function relatedIntents(file, idHex) {
+    if (!idHex) return [];
+    return (file.intents || []).filter((iv) => {
+      const mutation = (file.mutations || [])[iv.index];
+      return mutationMatchesNode(mutation, idHex);
+    });
+  }
+
+  function onNodeClick(side, idHex, state) {
+    const maps = state.maps;
+    const edge = side === "old" ? maps.byOld.get(idHex) : maps.byNew.get(idHex);
+    clearHighlights(state);
+
+    const rows = state.root.querySelectorAll(".trow");
+    rows.forEach((r) => {
+      if (r.dataset.id === idHex && r.dataset.side === side) {
+        r.classList.add("selected");
+      }
+    });
+
+    let pairSide = null;
+    let pairHex = null;
+    if (edge) {
+      if (side === "old") {
+        pairSide = "new";
+        pairHex = fullHex(edge.new_id);
+      } else {
+        pairSide = "old";
+        pairHex = fullHex(edge.old_id);
+      }
+      if (pairHex) {
+        rows.forEach((r) => {
+          if (r.dataset.id === pairHex && r.dataset.side === pairSide) {
+            r.classList.add("related");
+            r.scrollIntoView({ block: "nearest" });
+          }
+        });
+      }
+    }
+    renderDetail(state, side, idHex, edge);
+  }
+
+  function clearHighlights(state) {
+    state.root.querySelectorAll(".trow.selected, .trow.related").forEach((r) => {
+      r.classList.remove("selected", "related");
+    });
+  }
+
+  function renderDetail(state, side, idHex, edge) {
+    const file = state.file;
+    const body = state.detailBody;
+    body.innerHTML = "";
+
+    const rows = [];
+    rows.push(row("node", side + " " + shortHex(idHex)));
+    if (edge) {
+      rows.push(row("edge", edge.kind + (edge.method ? " (" + edge.method + ")" : "")));
+      rows.push(row("old id", edge.old_id ? shortHex(edge.old_id) : "none"));
+      rows.push(row("new id", edge.new_id ? shortHex(edge.new_id) : "none"));
+    } else {
+      rows.push(row("edge", "no alignment edge references this node"));
+    }
+    rows.forEach((r) => body.appendChild(r));
+
+    const related = relatedIntents(file, idHex);
+    if (related.length) {
+      const h = document.createElement("div");
+      h.className = "row";
+      h.innerHTML = '<span class="k">intents</span>';
+      body.appendChild(h);
+      related.forEach((iv) => {
+        const line = document.createElement("div");
+        line.className = "row";
+        line.textContent = "[" + iv.index + "] " + iv.label;
+        body.appendChild(line);
+        const mutation = (file.mutations || [])[iv.index];
+        if (mutation) {
+          const pre = document.createElement("pre");
+          pre.textContent = JSON.stringify(mutation);
+          body.appendChild(pre);
+        }
+      });
+    } else {
+      const line = document.createElement("div");
+      line.className = "row muted";
+      line.textContent = "no intents reference this node";
+      body.appendChild(line);
+    }
+
+    function row(key, value) {
+      const el = document.createElement("div");
+      el.className = "row";
+      el.innerHTML = '<span class="k">' + esc(key) + "</span>" + esc(value);
+      return el;
+    }
+  }
+
+  function sourcePanes(file) {
+    const panes = document.createElement("div");
+    panes.className = "panes";
+    panes.appendChild(sourcePane(doc.left_label || "old", file.source_old));
+    panes.appendChild(sourcePane(doc.right_label || "new", file.source_new));
+    return panes;
+  }
+
+  function sourcePane(label, source) {
+    const pane = document.createElement("div");
+    pane.className = "pane";
+    const h = document.createElement("h3");
+    h.textContent = label;
+    pane.appendChild(h);
+    const pre = document.createElement("pre");
+    pre.className = "src";
+    pre.textContent = source == null ? "(no content)" : source;
+    pane.appendChild(pre);
+    return pane;
+  }
+
+  function textEditList(file) {
+    const list = document.createElement("ul");
+    list.className = "edits";
+    if (!file.text_edits || !file.text_edits.length) {
+      const li = document.createElement("li");
+      li.className = "muted";
+      li.textContent = "no line edits";
+      list.appendChild(li);
+      return list;
+    }
+    file.text_edits.forEach((summary) => {
+      const li = document.createElement("li");
+      if (/insert/.test(summary)) li.className = "ins";
+      else if (/delete/.test(summary)) li.className = "del";
+      li.textContent = summary;
+      list.appendChild(li);
+    });
+    return list;
+  }
+
+  function intentsSection(file) {
+    const details = document.createElement("details");
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Intents (" + (file.intents ? file.intents.length : 0) + ")";
+    details.appendChild(summary);
+    const inner = document.createElement("div");
+    inner.className = "inner";
+    if (!file.intents || !file.intents.length) {
+      inner.innerHTML = '<span class="muted">no intents</span>';
+    } else {
+      const ol = document.createElement("ol");
+      ol.className = "intent-list";
+      file.intents.forEach((iv) => {
+        const li = document.createElement("li");
+        li.textContent = iv.label;
+        ol.appendChild(li);
+      });
+      inner.appendChild(ol);
+    }
+    details.appendChild(inner);
+    return details;
+  }
+
+  function pipelineSection(file) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Pipeline";
+    details.appendChild(summary);
+    const inner = document.createElement("div");
+    inner.className = "inner";
+
+    const oldCount = file.old && file.old.nodes ? file.old.nodes.length : 0;
+    const newCount = file.new && file.new.nodes ? file.new.nodes.length : 0;
+    let matches = 0, inserts = 0, deletes = 0;
+    (file.alignment || []).forEach((e) => {
+      if (e.kind === "Match") matches += 1;
+      else if (e.kind === "Insert") inserts += 1;
+      else if (e.kind === "Delete") deletes += 1;
+    });
+
+    const steps = [
+      ["parse", "old " + oldCount + " nodes, new " + newCount + " nodes"],
+      ["align", (file.alignment ? file.alignment.length : 0) + " edges (" + matches + " match, " + inserts + " insert, " + deletes + " delete)"],
+      ["mutate", (file.mutations ? file.mutations.length : 0) + " mutations"],
+      ["classify", (file.intents ? file.intents.length : 0) + " intents"],
+    ];
+    steps.forEach(([label, text]) => {
+      const step = document.createElement("div");
+      step.className = "pipeline-step";
+      step.innerHTML = '<span class="label">' + esc(label) + "</span> <span class=\"detail-text\">" + esc(text) + "</span>";
+      inner.appendChild(step);
+    });
+    details.appendChild(inner);
+    return details;
+  }
+
+  function renderFile(entry) {
+    const file = entry.file;
+    content.innerHTML = "";
+
+    const head = document.createElement("div");
+    head.className = "file-head";
+    const path = document.createElement("div");
+    path.className = "path";
+    path.textContent = file.path;
+    head.appendChild(path);
+    if (file.path_from) {
+      const from = document.createElement("div");
+      from.className = "from";
+      from.textContent = "renamed from " + file.path_from;
+      head.appendChild(from);
+    }
+    content.appendChild(head);
+
+    if (file.note) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent = file.note;
+      content.appendChild(note);
+    }
+
+    const showTrees = file.old && file.new;
+    if (showTrees) {
+      const colors = alignmentColors(file.alignment);
+      const trees = document.createElement("div");
+      trees.className = "trees";
+
+      const state = {
+        file: file,
+        maps: edgeMaps(file.alignment),
+        root: trees,
+        detailBody: null,
+      };
+
+      const oldCol = document.createElement("div");
+      oldCol.className = "tree-col";
+      const oldH = document.createElement("h3");
+      oldH.textContent = doc.left_label || "old";
+      oldCol.appendChild(oldH);
+      oldCol.appendChild(renderTree(file.old, "old", colors.oldColor, state));
+
+      const newCol = document.createElement("div");
+      newCol.className = "tree-col";
+      const newH = document.createElement("h3");
+      newH.textContent = doc.right_label || "new";
+      newCol.appendChild(newH);
+      newCol.appendChild(renderTree(file.new, "new", colors.newColor, state));
+
+      trees.appendChild(oldCol);
+      trees.appendChild(newCol);
+      content.appendChild(trees);
+
+      const detail = document.createElement("div");
+      detail.className = "detail";
+      const dh = document.createElement("h3");
+      dh.textContent = "Selection";
+      detail.appendChild(dh);
+      const dbody = document.createElement("div");
+      dbody.className = "detail-body";
+      dbody.innerHTML = '<span class="muted">click a node to inspect its alignment edge and intents</span>';
+      detail.appendChild(dbody);
+      state.detailBody = dbody;
+      content.appendChild(detail);
+    } else if (file.mode === "text") {
+      content.appendChild(textEditList(file));
+      content.appendChild(sourcePanes(file));
+    } else {
+      content.appendChild(sourcePanes(file));
+    }
+
+    content.appendChild(intentsSection(file));
+    content.appendChild(pipelineSection(file));
+    content.scrollTop = 0;
+  }
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+    if (ev.key === "j") {
+      ev.preventDefault();
+      select(Math.min(activeIndex + 1, flat.length - 1));
+    } else if (ev.key === "k") {
+      ev.preventDefault();
+      select(Math.max(activeIndex - 1, 0));
+    }
+  });
+
+  buildSidebar();
+  if (activeIndex >= 0) {
+    renderFile(flat[activeIndex]);
+  } else {
+    content.innerHTML = '<div class="empty">no files to display</div>';
+  }
+})();
+</script>
+</body>
+</html>

@@ -34,6 +34,8 @@ Run all walkthroughs non-interactively (build, reset, log to stdout/stderr):
 
 Integration tests in `tests/integration.rs` cover the same scenarios in CI. The full catalog is in [`.cursor/skills/astvcs-integration-tests/references/test-catalog.md`](../.cursor/skills/astvcs-integration-tests/references/test-catalog.md).
 
+`astvcs diff --view` opens the shipped alignment-first HTML viewer (same binary assets as production). It is not a second demo UI. Integration coverage: `cli_diff_view_writes_html_with_alignment`.
+
 | Fixture | Integration test | What it shows |
 |---------|------------------|---------------|
 | `workflow-demo/` | `workflow_demo_prepend_and_disjoint_merge` | Staging (`add .`); prepend comment without move cascade; branch; disjoint file merge |

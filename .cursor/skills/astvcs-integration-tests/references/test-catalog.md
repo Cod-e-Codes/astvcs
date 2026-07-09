@@ -77,6 +77,7 @@
 | `go_sum_and_ps1_status_are_quiet` | Known text-only paths on scan |
 | `parse_fallback_status_annotation` | Broken `.rs` shows ` (text fallback)` in status |
 | `parse_fallback_diff_annotation` | Diff banner and `parse mode:` intent for fallback |
+| `cli_diff_view_writes_html_with_alignment` | `diff --view` writes temp HTML with path, intents, and alignment export |
 | `parse_fallback_md_commit_stays_silent` | `.md` commit emits no warnings |
 | `parse_fallback_broken_rs_stderr_warning` | Broken `.rs` commit warns on stderr |
 | `parse_fallback_verbose_notice_detail` | `-v` adds text fallback `notice:` on commit |

@@ -1,5 +1,6 @@
 use crate::diff::{
-    DiffResult, build_rename_map, detect_path_renames, diff_graphs, diff_text,
+    DiffResult, DiffViewDocument, DiffViewFile, DiffViewGroup, build_rename_map,
+    detect_path_renames, diff_graphs, diff_text, file_from_contents, file_from_rename,
     rename_targets_conflict, side_path_for_base,
 };
 use crate::frontend::{FileContent, path_has_text_fallback};
@@ -2003,6 +2004,157 @@ impl Repo {
         Ok(out)
     }
 
+    /// Alignment-first diff view of the working tree vs the index or HEAD.
+    pub fn diff_view_working(&self, path: Option<&str>) -> RepoResult<DiffViewDocument> {
+        let _lock = self.repo_lock()?;
+        let head = self.head_state_unlocked()?;
+        let head_files = self.load_state_files_unlocked(&head)?;
+        let staging = self.load_staging_unlocked()?;
+        let effective_files = if staging.active {
+            self.build_effective_files(&head_files, &staging)?
+        } else {
+            head_files.clone()
+        };
+        let base_files = if staging.active {
+            &effective_files
+        } else {
+            &head_files
+        };
+
+        let working_files = self.scan_working(&head, ScanOptions::default())?.0;
+        let mut working_map = HashMap::new();
+        for p in working_files {
+            let tracked = load_working_tracked(&self.root, &p)?;
+            working_map.insert(p, tracked);
+        }
+
+        let files = diff_view_files_between(base_files, &working_map, path);
+        let left_label = if staging.active { "index" } else { "HEAD" };
+        Ok(DiffViewDocument {
+            left_label: left_label.to_string(),
+            right_label: "working tree".to_string(),
+            groups: vec![DiffViewGroup {
+                title: String::new(),
+                files,
+            }],
+        })
+    }
+
+    /// Alignment-first diff view of the staged changes vs HEAD.
+    pub fn diff_view_staged(&self, path: Option<&str>) -> RepoResult<DiffViewDocument> {
+        let _lock = self.repo_lock()?;
+        let head = self.head_state_unlocked()?;
+        let head_files = self.load_state_files_unlocked(&head)?;
+        let staging = self.load_staging_unlocked()?;
+        let staged_map = self.staged_tracked_map(&staging)?;
+
+        let files = if path.is_none() && (!staging.active || staging.entries.is_empty()) {
+            Vec::new()
+        } else {
+            diff_view_files_between(&head_files, &staged_map, path)
+        };
+        Ok(DiffViewDocument {
+            left_label: "HEAD".to_string(),
+            right_label: "staged".to_string(),
+            groups: vec![DiffViewGroup {
+                title: String::new(),
+                files,
+            }],
+        })
+    }
+
+    /// Alignment-first diff view between two states.
+    pub fn diff_view_states(
+        &self,
+        from: &StateId,
+        to: &StateId,
+        path: Option<&str>,
+    ) -> RepoResult<DiffViewDocument> {
+        let _lock = self.repo_lock()?;
+        let from_files = self.load_state_files_unlocked(from)?;
+        let to_files = self.load_state_files_unlocked(to)?;
+        let files = diff_view_files_between(&from_files, &to_files, path);
+        Ok(DiffViewDocument {
+            left_label: short_state(from),
+            right_label: short_state(to),
+            groups: vec![DiffViewGroup {
+                title: String::new(),
+                files,
+            }],
+        })
+    }
+
+    /// Alignment-first three-way diff view: base against left and right.
+    pub fn diff_view_three_way(
+        &self,
+        base: &StateId,
+        left: &StateId,
+        right: &StateId,
+        path: Option<&str>,
+    ) -> RepoResult<DiffViewDocument> {
+        let _lock = self.repo_lock()?;
+        let base_files = self.load_state_files_unlocked(base)?;
+        let left_files = self.load_state_files_unlocked(left)?;
+        let right_files = self.load_state_files_unlocked(right)?;
+
+        let paths: Vec<String> = match path {
+            Some(p) => {
+                if !base_files.contains_key(p)
+                    && !left_files.contains_key(p)
+                    && !right_files.contains_key(p)
+                {
+                    return Err(format!("path not tracked in base, left, or right: {p}").into());
+                }
+                vec![p.to_string()]
+            }
+            None => {
+                let mut all: HashSet<String> = base_files.keys().cloned().collect();
+                all.extend(left_files.keys().cloned());
+                all.extend(right_files.keys().cloned());
+                let mut sorted: Vec<_> = all.into_iter().collect();
+                sorted.sort();
+                sorted
+            }
+        };
+
+        let mut left_group = Vec::new();
+        let mut right_group = Vec::new();
+        for p in &paths {
+            let b = base_files.get(p);
+            let l = left_files.get(p);
+            let r = right_files.get(p);
+            if side_differs(b, l) {
+                left_group.push(file_from_contents(
+                    p,
+                    b.map(|t| &t.content),
+                    l.map(|t| &t.content),
+                ));
+            }
+            if side_differs(b, r) {
+                right_group.push(file_from_contents(
+                    p,
+                    b.map(|t| &t.content),
+                    r.map(|t| &t.content),
+                ));
+            }
+        }
+
+        Ok(DiffViewDocument {
+            left_label: "base".to_string(),
+            right_label: "left | right".to_string(),
+            groups: vec![
+                DiffViewGroup {
+                    title: "base -> left".to_string(),
+                    files: left_group,
+                },
+                DiffViewGroup {
+                    title: "base -> right".to_string(),
+                    files: right_group,
+                },
+            ],
+        })
+    }
+
     pub fn commit(&self, message: &str) -> RepoResult<CommitOutcome> {
         self.commit_with_options(message, CommitOptions::default())
     }
@@ -2695,6 +2847,89 @@ fn tracked_content_map(files: &HashMap<String, TrackedFile>) -> HashMap<String, 
         .iter()
         .map(|(k, v)| (k.clone(), v.content.clone()))
         .collect()
+}
+
+/// Shorten a full state id to a stable 12-hex-character prefix for display.
+fn short_state(id: &StateId) -> String {
+    if id.len() > 12 {
+        id[..12].to_string()
+    } else {
+        id.clone()
+    }
+}
+
+/// Whether one side of a three-way comparison differs from base.
+fn side_differs(base: Option<&TrackedFile>, side: Option<&TrackedFile>) -> bool {
+    match (base, side) {
+        (None, None) => false,
+        (Some(a), Some(b)) => !tracked_eq(a, b),
+        _ => true,
+    }
+}
+
+/// Build alignment-first diff view files between two tracked maps, mirroring the
+/// rename-aware, pairwise resolution used by the text diff paths.
+fn diff_view_files_between(
+    from: &HashMap<String, TrackedFile>,
+    to: &HashMap<String, TrackedFile>,
+    path: Option<&str>,
+) -> Vec<DiffViewFile> {
+    let renames = detect_path_renames(&tracked_content_map(from), &tracked_content_map(to));
+    let mut files = Vec::new();
+
+    if let Some(p) = path {
+        if let Some(rename) = renames.iter().find(|r| r.from == p || r.to == p) {
+            let old = from.get(&rename.from).unwrap();
+            let new = to.get(&rename.to).unwrap();
+            files.push(file_from_rename(rename, &old.content, &new.content));
+            return files;
+        }
+        let old = from.get(p);
+        let new = to.get(p);
+        if old.is_some() || new.is_some() {
+            files.push(file_from_contents(
+                p,
+                old.map(|t| &t.content),
+                new.map(|t| &t.content),
+            ));
+        }
+        return files;
+    }
+
+    let renamed_from: HashSet<String> = renames.iter().map(|r| r.from.clone()).collect();
+    let renamed_to: HashSet<String> = renames.iter().map(|r| r.to.clone()).collect();
+    for rename in &renames {
+        let old = from.get(&rename.from).unwrap();
+        let new = to.get(&rename.to).unwrap();
+        files.push(file_from_rename(rename, &old.content, &new.content));
+    }
+
+    let mut paths: HashSet<String> = from.keys().cloned().collect();
+    paths.extend(to.keys().cloned());
+    let mut sorted: Vec<_> = paths.into_iter().collect();
+    sorted.sort();
+    for p in sorted {
+        if renamed_from.contains(&p) || renamed_to.contains(&p) {
+            continue;
+        }
+        match (from.get(&p), to.get(&p)) {
+            (None, Some(new)) => {
+                files.push(file_from_contents(&p, None, Some(&new.content)));
+            }
+            (Some(old), None) => {
+                files.push(file_from_contents(&p, Some(&old.content), None));
+            }
+            (Some(old), Some(new)) if !tracked_eq(old, new) => {
+                files.push(file_from_contents(
+                    &p,
+                    Some(&old.content),
+                    Some(&new.content),
+                ));
+            }
+            _ => {}
+        }
+    }
+    files
 }
 
 fn index_content_kind(tracked: &TrackedFile) -> String {

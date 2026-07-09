@@ -1,3 +1,4 @@
+use astvcs::diff::{open_in_browser, write_diff_view_html};
 use astvcs::network::{
     add_remote, clone_repo, fetch, list_remotes, push, remove_remote, serve_repo,
 };
@@ -289,6 +290,10 @@ struct DiffArgs {
     #[arg(long, requires = "base", requires = "left")]
     right: Option<String>,
 
+    /// Open an alignment-first HTML diff viewer in the default browser.
+    #[arg(long)]
+    view: bool,
+
     path: Option<String>,
 }
 
@@ -541,31 +546,53 @@ fn run(cli: Cli) -> RepoResult<()> {
         }
         Commands::Diff(args) => {
             let repo = Repo::open(&root)?;
-            let output = if let (Some(base), Some(left), Some(right)) =
-                (&args.base, &args.left, &args.right)
-            {
-                let base_id = repo.resolve_state_ref(base)?;
-                let left_id = repo.resolve_state_ref(left)?;
-                let right_id = repo.resolve_state_ref(right)?;
-                repo.diff_three_way(&base_id, &left_id, &right_id, args.path.as_deref())?
-            } else if let Some(to) = args.state {
-                let from = repo.head_state()?;
-                let to_id = repo.resolve_state_ref(&to)?;
-                match args.path {
-                    Some(p) => repo.diff_state_path(&from, &to_id, &p)?,
-                    None => repo.diff_states(&from, &to_id)?,
-                }
-            } else if args.staged {
-                match args.path.as_deref() {
-                    Some(p) => repo.diff_staged(p)?,
-                    None => repo.diff_staged_tree()?,
-                }
-            } else if let Some(p) = args.path.as_deref() {
-                repo.diff_working(p)?
+            if args.view {
+                let doc = if let (Some(base), Some(left), Some(right)) =
+                    (&args.base, &args.left, &args.right)
+                {
+                    let base_id = repo.resolve_state_ref(base)?;
+                    let left_id = repo.resolve_state_ref(left)?;
+                    let right_id = repo.resolve_state_ref(right)?;
+                    repo.diff_view_three_way(&base_id, &left_id, &right_id, args.path.as_deref())?
+                } else if let Some(to) = args.state {
+                    let from = repo.head_state()?;
+                    let to_id = repo.resolve_state_ref(&to)?;
+                    repo.diff_view_states(&from, &to_id, args.path.as_deref())?
+                } else if args.staged {
+                    repo.diff_view_staged(args.path.as_deref())?
+                } else {
+                    repo.diff_view_working(args.path.as_deref())?
+                };
+                let path = write_diff_view_html(&doc).map_err(RepoError::from_message)?;
+                open_in_browser(&path).map_err(RepoError::from_message)?;
+                println!("{}", path.display());
             } else {
-                repo.diff_working_tree()?
-            };
-            print!("{output}");
+                let output = if let (Some(base), Some(left), Some(right)) =
+                    (&args.base, &args.left, &args.right)
+                {
+                    let base_id = repo.resolve_state_ref(base)?;
+                    let left_id = repo.resolve_state_ref(left)?;
+                    let right_id = repo.resolve_state_ref(right)?;
+                    repo.diff_three_way(&base_id, &left_id, &right_id, args.path.as_deref())?
+                } else if let Some(to) = args.state {
+                    let from = repo.head_state()?;
+                    let to_id = repo.resolve_state_ref(&to)?;
+                    match args.path {
+                        Some(p) => repo.diff_state_path(&from, &to_id, &p)?,
+                        None => repo.diff_states(&from, &to_id)?,
+                    }
+                } else if args.staged {
+                    match args.path.as_deref() {
+                        Some(p) => repo.diff_staged(p)?,
+                        None => repo.diff_staged_tree()?,
+                    }
+                } else if let Some(p) = args.path.as_deref() {
+                    repo.diff_working(p)?
+                } else {
+                    repo.diff_working_tree()?
+                };
+                print!("{output}");
+            }
         }
         Commands::Commit {
             message,

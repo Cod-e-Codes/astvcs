@@ -171,6 +171,8 @@ Alignment is heuristic. Wrong sibling pairing can still produce delete+insert in
 
 **Edit intents.** Raw mutations are classified for human-readable output (`EditLiteral`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, `PrependComment`, `InsertStatement`, etc.). `diff` prints intents by default; pass `-v` to also print raw mutations.
 
+**Alignment export and graphical viewer.** `diff_graphs` remains mutation-only for merge and existing callers. `diff_graphs_detailed` shares the same recursion and also records `AlignEdge` values: each sibling pair as `Match` with an `AlignMethod` (`Id`, `Key`, `Role`, `Lcs`, `Fingerprint`, `StructuralFallback`, `LeafFallback`), plus `Insert`/`Delete` for unmatched children. `diff --view` builds a `DiffViewDocument` (graph snapshots, alignment, mutations, classified intents, optional unparsed source) and writes a self-contained HTML page that visualizes paired trees. The viewer consumes real edges only; it does not invent confidence scores or persistent cross-commit node ids.
+
 **Text diff.** Fallback files use Myers line diff via the `similar` crate.
 
 Mutations locate children by `node_id`, not stored indices.
@@ -236,8 +238,12 @@ src/
   unparser.rs
   diff/
     lcs.rs       longest common subsequence matching
-    ast_diff.rs  structural diff; sibling alignment heuristics
+    align.rs     hash-anchor sibling pairing helpers
+    ast_diff.rs  structural diff; sibling alignment; `diff_graphs_detailed` / `AlignEdge`
     text_diff.rs Myers line diff
+    path_rename.rs path-level rename detection
+    view.rs      `DiffViewDocument` and self-contained HTML for `diff --view`
+    view/viewer.html alignment-first viewer assets (inlined via `include_str!`)
   intent/
     mod.rs       edit intent classification and overlap reasoning
   merge/
@@ -302,6 +308,7 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `rust_unparse_roundtrip_via_repo` | Commit and reload preserves Rust source bytes |
 | `go_unparse_roundtrip_via_repo` | Commit, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
+| `cli_diff_view_writes_html_with_alignment` | `diff --view` writes temp HTML embedding path, intents, and alignment export |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Sibling literal merge and rename conflicts |
 | `trailing_comment_and_literal_edit_merge` | Trailing comment text survives merge when a sibling literal is edited on the other branch |
 | `cli_trivia_only_commit` | Whitespace-only formatting commit round-trips through the CLI |

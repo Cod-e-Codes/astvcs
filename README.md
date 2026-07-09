@@ -31,6 +31,8 @@ intents:
 
 Three-way merge applies both sides when alignment finds disjoint structural edits. Overlapping edits on the same node (for example, two renames of one identifier) are structural conflicts; the repository stays unchanged until you pass `merge --resolve path:ours|theirs` for each conflicted path.
 
+To inspect how nodes were paired, run `astvcs diff --view` (optionally with a path, `--staged`, `--state`, or three-way flags). It opens a local HTML page built from the real alignment export, not a mock overlay.
+
 ## Documentation
 
 | Document | Use it for |
@@ -93,7 +95,7 @@ CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push t
 
 **In scope today**
 
-- AST diff and three-way merge for supported languages; text and binary fallback for everything else
+- AST diff and three-way merge for supported languages; text and binary fallback for everything else; `diff --view` alignment-first HTML viewer
 - Staging index (`add`, `diff --staged`), branches, lightweight tags, author identity
 - `reset` (soft, mixed, hard), `revert`, `rebase`, `cherry-pick`, `stash`, `blame`, `bisect` on linear first-parent history
 - Remotes over local path, HTTP, HTTPS, or SSH; optional bearer auth; TLS on `serve`; shallow `clone` / `fetch` with `--depth`

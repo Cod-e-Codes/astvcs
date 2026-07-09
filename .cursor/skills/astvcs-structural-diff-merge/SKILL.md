@@ -29,7 +29,8 @@ metadata:
 - After LCS, unmatched structural siblings pair by kind with a child-count + index-distance score (not first-match scan order); editable leaves use index-distance only.
 - Trivia-only edits use `SetTrivia` / `SetRootTrailingTrivia`. Same-id nodes still recurse into children; the reorder path diffs child trivia after `ReorderChildren`.
 - Trailing comment text often lives in leading trivia before the next sibling token, not in the comment node payload.
-- After alignment changes, run `workflow_demo_prepend_and_disjoint_merge`, `identity_demo_payload_edit_disjoint_merge_and_conflict`, and `trailing_comment_and_literal_edit_merge`.
+- `diff_graphs` stays mutation-only for merge. `diff_graphs_detailed` shares the same recursion and records `AlignEdge` / `AlignMethod` for the HTML viewer (`src/diff/view.rs`, `diff --view`). Do not invent confidence scores; label the pass that produced each match.
+- After alignment changes, run `workflow_demo_prepend_and_disjoint_merge`, `identity_demo_payload_edit_disjoint_merge_and_conflict`, `trailing_comment_and_literal_edit_merge`, and `cli_diff_view_writes_html_with_alignment`.
 
 ### Intent changes
 
@@ -58,6 +59,12 @@ Use `diff -v` on fixtures to see raw mutations alongside intents:
 ```powershell
 cargo build --release
 .\target\release\astvcs.exe --repo examples\identity-demo diff -v conflict.rs
+```
+
+Open the alignment-first HTML viewer (skips the browser when `CI` is set; still prints the temp HTML path):
+
+```powershell
+.\target\release\astvcs.exe --repo examples\identity-demo diff --view conflict.rs
 ```
 
 Three-way inspection:

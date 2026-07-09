@@ -28,6 +28,7 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `diff --staged` / `--cached [path]` | Staged diff vs HEAD |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
+| `diff --view [...]` | Same comparison modes as text `diff` (`[path]`, `--staged`, `--state`, or `--base`/`--left`/`--right`). Writes a self-contained HTML file under the system temp directory, opens it in the default browser (skipped when `CI` or `ASTVCS_NO_BROWSER` is set), and prints the file path. The viewer is alignment-first: paired old/new AST trees with match method labels, plus intents and mutations for the selected edge. Text and binary paths show honest summaries without fake trees. |
 | `commit -m <msg> [--full-scan] [--no-verify]` | Commit staged changes when staging is active (after first `add`); otherwise legacy whole-tree commit. Errors when staging is active but empty while the working tree has changes. Requires configured author identity. Pass `--full-scan` to bypass the scan cache. Runs `pre-commit` and `commit-msg` hooks unless `--no-verify`. |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
