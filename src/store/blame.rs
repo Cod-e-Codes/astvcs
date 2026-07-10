@@ -86,17 +86,49 @@ pub(crate) fn child_to_parent_line_map(parent: &str, child: &str) -> HashMap<usi
             }
         }
     }
+
+    let parent_lines: Vec<&str> = parent.lines().collect();
+    let child_lines: Vec<&str> = child.lines().collect();
+    let mut used_parent: HashSet<usize> = map.values().copied().collect();
+    for (new_idx, text) in child_lines.iter().enumerate() {
+        if map.contains_key(&new_idx) {
+            continue;
+        }
+        let mut best_parent: Option<usize> = None;
+        let mut best_dist = usize::MAX;
+        for (old_idx, parent_text) in parent_lines.iter().enumerate() {
+            if parent_text != text || used_parent.contains(&old_idx) {
+                continue;
+            }
+            let dist = old_idx.abs_diff(new_idx);
+            if dist < best_dist {
+                best_dist = dist;
+                best_parent = Some(old_idx);
+            }
+        }
+        if let Some(old_idx) = best_parent {
+            map.insert(new_idx, old_idx);
+            used_parent.insert(old_idx);
+        }
+    }
     map
 }
 
 /// Line indices in `child` that were inserted or modified relative to `parent`.
 pub(crate) fn lines_changed_in_child(parent: &str, child: &str) -> HashSet<usize> {
+    let parent_lines: Vec<&str> = parent.lines().collect();
+    let child_lines: Vec<&str> = child.lines().collect();
     diff_text(parent, child)
         .into_iter()
         .filter_map(|edit| match edit {
             TextEdit::InsertLine { line, .. } => Some(line),
             TextEdit::ReplaceLine { line, .. } => Some(line),
             TextEdit::DeleteLine { .. } => None,
+        })
+        .filter(|&line| {
+            child_lines
+                .get(line)
+                .is_none_or(|text| !parent_lines.contains(text))
         })
         .collect()
 }
@@ -254,5 +286,16 @@ mod tests {
         assert!(changed.contains(&3));
         assert!(!changed.contains(&0));
         assert!(!changed.contains(&2));
+    }
+
+    #[test]
+    fn reorder_does_not_mark_moved_lines_as_changed() {
+        let parent = "func a() {\n}\nfunc b() {\n}\n";
+        let child = "func b() {\n}\nfunc a() {\n}\n";
+        let changed = lines_changed_in_child(parent, child);
+        assert!(changed.is_empty(), "moved lines: {changed:?}");
+        let map = child_to_parent_line_map(parent, child);
+        assert_eq!(map.get(&0), Some(&2));
+        assert_eq!(map.get(&2), Some(&0));
     }
 }

@@ -3631,6 +3631,31 @@ fn blame_linear_two_commits() {
     assert_eq!(blame_lines[2].message, "edit and append");
 }
 
+#[test]
+fn blame_reorder_preserves_attribution_for_moved_lines() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    let original = "fn a() {\n    1\n}\nfn b() {\n    2\n}\n";
+    fs::write(dir.path().join("sample.rs"), original).unwrap();
+    repo.commit("add functions").unwrap();
+
+    let reordered = "fn b() {\n    2\n}\nfn a() {\n    1\n}\n";
+    fs::write(dir.path().join("sample.rs"), reordered).unwrap();
+    repo.commit("reorder functions").unwrap();
+
+    let blame_lines = repo.blame("sample.rs").unwrap();
+    assert!(
+        blame_lines
+            .iter()
+            .all(|line| line.message == "add functions"),
+        "reordered lines should stay attributed to the introducing commit: {:?}",
+        blame_lines
+            .iter()
+            .map(|l| (&l.content, &l.message))
+            .collect::<Vec<_>>()
+    );
+}
+
 fn write_bisect_script(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     #[cfg(unix)]

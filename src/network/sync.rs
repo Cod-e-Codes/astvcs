@@ -310,6 +310,27 @@ pub fn clone_repo(
         fs::create_dir_all(path).map_err(|e| e.to_string())?;
     }
 
+    let result = clone_repo_inner(url, path, token, depth, insecure);
+    if result.is_err() {
+        cleanup_failed_clone(path);
+    }
+    result
+}
+
+fn cleanup_failed_clone(path: &Path) {
+    let astvcs = path.join(".astvcs");
+    if astvcs.is_dir() {
+        let _ = fs::remove_dir_all(astvcs);
+    }
+}
+
+fn clone_repo_inner(
+    url: &str,
+    path: &Path,
+    token: Option<&str>,
+    depth: Option<usize>,
+    insecure: bool,
+) -> Result<(Repo, String), String> {
     let repo = map_repo(Repo::init(path))?;
     crate::network::remote::add_remote(&repo, "origin", url, token)?;
 

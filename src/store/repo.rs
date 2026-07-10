@@ -523,7 +523,7 @@ impl Repo {
                     "index: {path} tracked in index but absent from HEAD state {head}"
                 ));
             } else if entry.state_id != *head {
-                trace::warn(format!(
+                trace::notice(format!(
                     "index: {path} state_id {} differs from HEAD {head}",
                     entry.state_id
                 ));

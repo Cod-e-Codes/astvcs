@@ -219,7 +219,7 @@ Paths added in the target state and modified again on HEAD before revert produce
 
 `push` requires a fast-forward unless `--force` is passed. Detached HEAD requires `--branch` to name the branch being pushed.
 
-Remote URLs may be a local repository path, a `file://` URL, an `http://` or `https://` base URL from `astvcs serve`, or an SSH URL. SSH examples: `ssh://alice@example.com/var/repos/project`, `bob@host.example:/srv/astvcs.git`. The remote machine must have `astvcs` on `PATH`; authentication and host keys are handled by OpenSSH. Register an HTTP or SSH bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes.
+Remote URLs may be a local repository path, a `file://` URL, an `http://` or `https://` base URL from `astvcs serve`, or an SSH URL. SSH examples: `ssh://alice@example.com/var/repos/project`, `bob@host.example:/srv/astvcs.git`. The remote machine must have `astvcs` on `PATH`; authentication and host keys are handled by OpenSSH. Register an HTTP or SSH bearer token with `remote add --token` (stored in `.astvcs/remotes.json`). For `serve`, pass `--token` or set `ASTVCS_SERVE_TOKEN`; use `--public-read` to allow anonymous reads while still requiring a token for writes. `clone` removes a partial `.astvcs` tree when the operation fails after init so retry into the same empty destination path is not blocked.
 
 **HTTPS serve.** Pass `--tls-cert` and `--tls-key` together with PEM files to listen on HTTPS instead of HTTP. Both flags are required when either is set. Startup logs `https://` or `http://` accordingly.
 
