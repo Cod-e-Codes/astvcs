@@ -244,19 +244,24 @@ fn merge_file_mode(
     left: Option<&TrackedFile>,
     right: Option<&TrackedFile>,
 ) -> Result<FileMode, String> {
-    let left_mode = left.map(|f| f.mode).unwrap_or(FileMode::Regular);
-    let right_mode = right.map(|f| f.mode).unwrap_or(FileMode::Regular);
-    if left_mode == right_mode {
-        return Ok(left_mode);
-    }
-    let base_mode = base.map(|f| f.mode);
-    let left_changed = base_mode.as_ref() != Some(&left_mode);
-    let right_changed = base_mode.as_ref() != Some(&right_mode);
-    match (left_changed, right_changed) {
-        (true, false) => Ok(left_mode),
-        (false, true) => Ok(right_mode),
-        (false, false) => Ok(left_mode),
-        (true, true) => Err("both branches changed file mode".into()),
+    let left_mode = left.map(|f| f.mode);
+    let right_mode = right.map(|f| f.mode);
+    match (left_mode, right_mode) {
+        (Some(l), Some(r)) if l == r => Ok(l),
+        (Some(l), None) => Ok(l),
+        (None, Some(r)) => Ok(r),
+        (None, None) => Ok(FileMode::Regular),
+        (Some(l), Some(r)) => {
+            let base_mode = base.map(|f| f.mode);
+            let left_changed = base_mode != Some(l);
+            let right_changed = base_mode != Some(r);
+            match (left_changed, right_changed) {
+                (true, false) => Ok(l),
+                (false, true) => Ok(r),
+                (false, false) => Ok(l),
+                (true, true) => Err("both branches changed file mode".into()),
+            }
+        }
     }
 }
 
@@ -975,6 +980,26 @@ mod tests {
         assert!(matches!(
             merge_tracked_path("link.txt", None, Some(&regular), Some(&symlink)),
             PathMergeTrackedOutcome::Conflict(_)
+        ));
+    }
+
+    #[test]
+    fn new_executable_on_one_branch_does_not_mode_conflict() {
+        use crate::store::{FileMode, TrackedFile};
+
+        let script = TrackedFile::new(
+            FileContent::Text(crate::frontend::TextBlob::new(
+                "#!/bin/sh\necho hi\n".into(),
+            )),
+            FileMode::Executable,
+        );
+        assert!(matches!(
+            merge_tracked_path("install.sh", None, Some(&script), None),
+            PathMergeTrackedOutcome::Keep(t) if t.mode == FileMode::Executable
+        ));
+        assert!(matches!(
+            merge_tracked_path("install.sh", None, None, Some(&script)),
+            PathMergeTrackedOutcome::Keep(t) if t.mode == FileMode::Executable
         ));
     }
 }

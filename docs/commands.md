@@ -135,7 +135,7 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 `stash push` captures the working-tree diff against HEAD (disk is source of truth; staged content already on disk is included). By default only tracked paths (HEAD manifest entries and tracked deletions) are stashed; pass `-u` / `--include-untracked` to include untracked files from the working-tree scan. Errors with `no local changes to stash` when nothing differs. After saving, astvcs materializes HEAD to disk (clears staging) so the tree is clean for checkout.
 
-`stash apply` and `stash pop` three-way merge each path (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write the result to the working tree only (`index.json` stays at HEAD). Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict` and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
+`stash apply` and `stash pop` three-way merge only paths listed in the stash manifest (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write results to the working tree only (`index.json` stays at HEAD). Other tracked files are left unchanged. Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict` and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
 
 Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD state id).
 

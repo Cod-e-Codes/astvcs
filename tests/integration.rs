@@ -2967,6 +2967,40 @@ fn stash_pop_restores_files() {
 }
 
 #[test]
+fn stash_pop_preserves_unstashed_tracked_files() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("util.go"), "package main\n").unwrap();
+    repo.commit("initial").unwrap();
+
+    let mut main_rs = fs::read_to_string(dir.path().join("main.rs")).unwrap();
+    main_rs.push_str("// dirty\n");
+    fs::write(dir.path().join("main.rs"), main_rs).unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "push"]),
+        "stash push",
+    );
+    assert!(fs::metadata(dir.path().join("util.go")).is_ok());
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "pop"]),
+        "stash pop",
+    );
+    assert!(
+        fs::metadata(dir.path().join("util.go")).is_ok(),
+        "util.go should remain on disk after stash pop"
+    );
+    let status = run_astvcs(Some(dir.path()), &["status"]);
+    assert_astvcs_ok(&status, "status after stash pop");
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        !stdout.contains("util.go"),
+        "util.go should not appear as deleted: {stdout}"
+    );
+}
+
+#[test]
 fn stash_pop_conflict_keeps_entry() {
     let dir = TempDir::new().unwrap();
     let repo = Repo::init_with_identity(dir.path()).unwrap();

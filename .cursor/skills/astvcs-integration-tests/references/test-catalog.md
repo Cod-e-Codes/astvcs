@@ -49,6 +49,7 @@
 | `pull_merge_conflict_after_fetch` | Fetch succeeds; merge conflict leaves local branch unchanged |
 | `stash_before_checkout` | `stash push` cleans tree so checkout succeeds without `--force` |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
+| `stash_pop_preserves_unstashed_tracked_files` | `stash pop` leaves tracked files outside the stash manifest on disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
 | `rebase_linear_success` | Feature branch commits replayed onto updated main |
 | `rebase_conflict_abort_restores` | Replay conflict then `rebase --abort` restores tip and disk |

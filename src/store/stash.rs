@@ -12,7 +12,7 @@ use crate::store::{Repo, ScanOptions, StateId};
 use crate::trace;
 use crate::unparser::unparse;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -119,24 +119,23 @@ fn plan_stash_apply(
     head_files: &HashMap<String, TrackedFile>,
     stash_files: &HashMap<String, TrackedFile>,
 ) -> StashApplyPlan {
-    let mut all_paths: HashSet<String> = base_files.keys().cloned().collect();
-    all_paths.extend(head_files.keys().cloned());
-    all_paths.extend(stash_files.keys().cloned());
-
     let mut merged_files = HashMap::new();
     let mut removed_paths = Vec::new();
     let mut conflicts = Vec::new();
 
-    for path in all_paths {
-        let base = base_files.get(&path);
-        let left = head_files.get(&path);
-        let right = stash_files.get(&path);
-        match merge_tracked_path(&path, base, left, right) {
+    // Only paths recorded in the stash manifest are patched onto the working tree.
+    // Untouched tracked files must stay on disk (merge_path treats absent stash
+    // sides as deletion when base/head are unchanged).
+    for path in stash_files.keys() {
+        let base = base_files.get(path);
+        let left = head_files.get(path);
+        let right = stash_files.get(path);
+        match merge_tracked_path(path, base, left, right) {
             PathMergeTrackedOutcome::Keep(tracked) => {
-                merged_files.insert(path, tracked);
+                merged_files.insert(path.clone(), tracked);
             }
             PathMergeTrackedOutcome::Remove => {
-                removed_paths.push(path);
+                removed_paths.push(path.clone());
             }
             PathMergeTrackedOutcome::Conflict(c) => {
                 conflicts.push(c);

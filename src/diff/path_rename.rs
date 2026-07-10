@@ -2,6 +2,7 @@ use crate::diff::diff_graphs;
 use crate::frontend::FileContent;
 use crate::graph::Mutation;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 /// How closely a removed path and an added path match for pairing as a rename.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +54,7 @@ pub fn detect_path_renames(
                 continue;
             }
             let new_content = &new_files[to];
-            if let Some(kind) = rename_kind(old_content, new_content) {
+            if let Some(kind) = rename_kind(from, to, old_content, new_content) {
                 renames.push(PathRename {
                     from: from.clone(),
                     to: to.clone(),
@@ -104,9 +105,24 @@ pub fn rename_targets_conflict(
     }
 }
 
-fn rename_kind(old: &FileContent, new: &FileContent) -> Option<PathRenameKind> {
+fn path_extension(path: &str) -> &str {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+}
+
+fn rename_kind(
+    old_path: &str,
+    new_path: &str,
+    old: &FileContent,
+    new: &FileContent,
+) -> Option<PathRenameKind> {
     if blobs_equal(old, new) {
         return Some(PathRenameKind::Exact);
+    }
+    if path_extension(old_path) != path_extension(new_path) {
+        return None;
     }
     match (old, new) {
         (FileContent::Ast(o), FileContent::Ast(n)) => {
@@ -189,5 +205,23 @@ mod tests {
         let mut other = HashMap::new();
         other.insert("base.rs".into(), "right.rs".into());
         assert!(rename_targets_conflict("base.rs", &head, &other));
+    }
+
+    #[test]
+    fn unrelated_cross_extension_paths_stay_unpaired() {
+        let mut old = HashMap::new();
+        let mut new = HashMap::new();
+        old.insert(
+            "util.go".into(),
+            parse_text_or_blob(
+                "util.go",
+                "package main\n\nfunc Add(a, b int) int { return a + b }\n",
+            ),
+        );
+        new.insert(
+            "unrelated.yml".into(),
+            parse_text_or_blob("unrelated.yml", "name: demo\nversion: 1\n"),
+        );
+        assert!(detect_path_renames(&old, &new).is_empty());
     }
 }
