@@ -4,6 +4,7 @@ use std::collections::HashSet;
 thread_local! {
     static LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static VERBOSE: RefCell<bool> = const { RefCell::new(false) };
+    static DETAILS: RefCell<bool> = const { RefCell::new(false) };
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
@@ -14,6 +15,15 @@ pub fn set_verbose(enabled: bool) {
 
 pub fn is_verbose() -> bool {
     VERBOSE.with(|v| *v.borrow())
+}
+
+/// Enable or disable structural diagnostic output.
+pub fn set_details(enabled: bool) {
+    DETAILS.with(|v| *v.borrow_mut() = enabled);
+}
+
+pub fn is_detailed() -> bool {
+    is_verbose() || DETAILS.with(|v| *v.borrow())
 }
 
 fn emit(level: &str, message: &str) {
@@ -89,6 +99,17 @@ mod tests {
         set_verbose(false);
         warn("always");
         assert!(take_log().iter().any(|l| l.contains("warning: always")));
+    }
+
+    #[test]
+    fn verbose_also_enables_details() {
+        set_details(false);
+        set_verbose(true);
+        assert!(is_detailed());
+        set_verbose(false);
+        set_details(true);
+        assert!(is_detailed());
+        set_details(false);
     }
 
     #[test]

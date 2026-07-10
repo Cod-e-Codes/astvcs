@@ -164,6 +164,23 @@ fn format_stash_conflicts(
     out
 }
 
+fn format_stash_conflicts_focused(conflicts: &[PathMergeConflict]) -> String {
+    let mut out = format!(
+        "merge would conflict while applying stash in {} path(s)\n",
+        conflicts.len()
+    );
+    for conflict in conflicts {
+        out.push_str(&conflict.detail.format_focused_report_with_labels(
+            &conflict.path,
+            "current HEAD",
+            "stashed change",
+            false,
+        ));
+    }
+    out.push_str("use --details for state IDs, mutations, and all overlap diagnostics\n");
+    out
+}
+
 fn remove_working_path(path: &Path) -> Result<(), String> {
     if path.is_symlink() {
         fs::remove_file(path).map_err(|e| e.to_string())
@@ -401,7 +418,8 @@ impl Repo {
                 &entry.base_state_id,
                 &head,
                 &plan.conflicts,
-            )));
+            ))
+            .with_concise(format_stash_conflicts_focused(&plan.conflicts)));
         }
 
         for path in &plan.removed_paths {

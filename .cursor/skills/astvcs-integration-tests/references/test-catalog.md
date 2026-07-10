@@ -42,6 +42,7 @@
 | `revert_noop_with_dirty_working_tree_skips_materialize_guard` | No-op revert succeeds with dirty tree, no guard (unit, `src/store/repo.rs`) |
 | `cli_status_clean_tree_summary` | Clean-tree status summary line |
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
+| `cli_revert_conflict_labels_sides_without_merge_resolution_syntax` | Revert-specific side labels and no unsupported `--resolve` guidance |
 | `cli_revert_of_revert_restores_content` | Revert then revert the revert commit (parent state reuse) |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |
 | `pull_merges_upstream_changes` | `pull` fetches and merges upstream commits |
@@ -79,7 +80,10 @@
 | `go_sum_and_ps1_status_are_quiet` | Known text-only paths on scan |
 | `parse_fallback_status_annotation` | Broken `.rs` shows ` (text fallback)` in status |
 | `parse_fallback_diff_annotation` | Diff banner and `parse mode:` intent for fallback |
-| `cli_diff_view_writes_html_with_alignment` | `diff --view` writes temp HTML with path, intents, and alignment export |
+| `cli_diff_view_writes_html_with_alignment` | Change-first `diff --view` controls, accessibility hooks, path, intents, and alignment export |
+| `cli_diff_view_large_file_keeps_change_first_controls` | Generated large AST file retains lazy unchanged-tree and change navigation controls |
+| `viewer_javascript_indexes_all_file_modes_and_targets_insertions` | Executed viewer JavaScript indexes AST, text, binary, added, and deleted changes and targets inserted nodes (unit, `src/diff/view.rs`) |
+| `cli_diff_defaults_to_compact_intents_and_details_restores_mutations` | Compact default intent output and detailed raw mutation output |
 | `parse_fallback_md_commit_stays_silent` | `.md` commit emits no warnings |
 | `parse_fallback_broken_rs_stderr_warning` | Broken `.rs` commit warns on stderr |
 | `parse_fallback_verbose_notice_detail` | `-v` adds text fallback `notice:` on commit |

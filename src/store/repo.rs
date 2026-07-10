@@ -309,6 +309,33 @@ impl MergePlan {
         }
         out
     }
+
+    pub fn format_conflicts_focused(&self) -> String {
+        self.format_conflicts_focused_for("merge", "ours", "theirs", true)
+    }
+
+    pub fn format_conflicts_focused_for(
+        &self,
+        operation: &str,
+        left_label: &str,
+        right_label: &str,
+        supports_resolution: bool,
+    ) -> String {
+        let mut out = format!(
+            "{operation} would conflict in {} path(s)\n",
+            self.conflicts.len()
+        );
+        for conflict in &self.conflicts {
+            out.push_str(&conflict.detail.format_focused_report_with_labels(
+                &conflict.path,
+                left_label,
+                right_label,
+                supports_resolution,
+            ));
+        }
+        out.push_str("use --details for state IDs, mutations, and all overlap diagnostics\n");
+        out
+    }
 }
 
 /// Result of committing the working tree.
@@ -351,8 +378,29 @@ impl RevertPlan {
         out.push_str(&format!("parent: {}\n", self.parent_id));
         out.push_str(&format!("head: {}\n", self.head_id));
         for conflict in &self.conflicts {
-            out.push_str(&conflict.format_report());
+            out.push_str(&conflict.detail.format_report_with_labels(
+                &conflict.path,
+                "reverted parent",
+                "current HEAD",
+            ));
         }
+        out
+    }
+
+    pub fn format_conflicts_focused(&self) -> String {
+        let mut out = format!(
+            "revert would conflict in {} path(s)\n",
+            self.conflicts.len()
+        );
+        for conflict in &self.conflicts {
+            out.push_str(&conflict.detail.format_focused_report_with_labels(
+                &conflict.path,
+                "reverted parent",
+                "current HEAD",
+                false,
+            ));
+        }
+        out.push_str("use --details for state IDs, mutations, and all overlap diagnostics\n");
         out
     }
 }
@@ -1406,9 +1454,11 @@ impl Repo {
         let mut out = String::new();
         for p in paths {
             out.push_str(&format!("=== {p} ===\n"));
-            out.push_str(&format!("base:  {base}\n"));
-            out.push_str(&format!("left:  {left}\n"));
-            out.push_str(&format!("right: {right}\n"));
+            if trace::is_detailed() {
+                out.push_str(&format!("base:  {base}\n"));
+                out.push_str(&format!("left:  {left}\n"));
+                out.push_str(&format!("right: {right}\n"));
+            }
             match (base_files.get(&p), left_files.get(&p), right_files.get(&p)) {
                 (None, None, None) => out.push('\n'),
                 (base_c, left_c, right_c) => {
@@ -1781,7 +1831,8 @@ impl Repo {
         let plan = self.plan_revert_unlocked(&target_id)?;
         if !plan.is_clean() {
             trace::warn("revert: aborted due to conflicts");
-            return Err(RepoError::revert_conflict(plan.format_conflicts()));
+            return Err(RepoError::revert_conflict(plan.format_conflicts())
+                .with_concise(plan.format_conflicts_focused()));
         }
         self.finish_revert(&plan, message, force)
     }
@@ -2309,7 +2360,8 @@ impl Repo {
         let plan = self.prepare_merge_unlocked(branch, resolutions)?;
         if !plan.is_clean() {
             trace::warn("merge: aborted due to conflicts");
-            return Err(RepoError::merge_conflict(plan.format_conflicts()));
+            return Err(RepoError::merge_conflict(plan.format_conflicts())
+                .with_concise(plan.format_conflicts_focused()));
         }
         super::hooks::run_pre_merge_hook(self, &plan.head_id, branch, no_verify)?;
         self.finish_merge(&plan, message, force)
@@ -2867,7 +2919,7 @@ fn side_differs(base: Option<&TrackedFile>, side: Option<&TrackedFile>) -> bool 
     }
 }
 
-/// Build alignment-first diff view files between two tracked maps, mirroring the
+/// Build change-first diff view files between two tracked maps, mirroring the
 /// rename-aware, pairwise resolution used by the text diff paths.
 fn diff_view_files_between(
     from: &HashMap<String, TrackedFile>,
@@ -3032,10 +3084,13 @@ fn format_path_rename(
     if path_has_text_fallback(&rename.to, Some(old), new) {
         out.push_str("(text fallback - structural diff unavailable)\n");
     }
-    out.push_str(&format!(
-        "intents:\n  [0] {}\n",
-        intent::format_intent(None, &intent::classify_path_rename(rename))
-    ));
+    let rename_intent = intent::classify_path_rename(rename);
+    let rename_label = if trace::is_detailed() {
+        intent::format_intent_detailed(None, &rename_intent)
+    } else {
+        intent::format_intent_compact(None, &rename_intent)
+    };
+    out.push_str(&format!("intents:\n  [0] {rename_label}\n"));
     if rename.kind == crate::diff::PathRenameKind::WithEdits {
         out.push_str(&format_mutation_diff(Some(&rename.to), old, new));
     }
@@ -3094,15 +3149,17 @@ fn format_mutation_diff(path: Option<&str>, old: &FileContent, new: &FileContent
                 "(no structural changes)\n".into()
             } else {
                 let mut out = String::new();
-                let intents = intent::classify_mutations(Some(o), &mutations);
                 out.push_str("intents:\n");
-                for (i, intent) in &intents {
-                    out.push_str(&format!(
-                        "  [{i}] {}\n",
-                        intent::format_intent(Some(o), intent)
-                    ));
+                let lines = if trace::is_detailed() {
+                    intent::format_intent_lines_detailed(Some(o), &mutations)
+                } else {
+                    intent::format_intent_lines_compact(Some(o), &mutations)
+                };
+                for line in lines {
+                    out.push_str(&line);
+                    out.push('\n');
                 }
-                if trace::is_verbose() {
+                if trace::is_detailed() {
                     out.push_str("mutations:\n");
                     for (i, m) in mutations.iter().enumerate() {
                         out.push_str(&format!("  [{i}] {m:?}\n"));
@@ -3683,6 +3740,16 @@ mod tests {
             .unwrap();
         assert!(out.contains("base -> left:"), "{out}");
         assert!(out.contains("base -> right:"), "{out}");
+        assert!(!out.contains(&base_id), "{out}");
+        assert!(!out.contains("mutations:"), "{out}");
+
+        trace::set_details(true);
+        let detailed = repo
+            .diff_three_way(&base_id, &main_id, &feature_id, Some("main.rs"))
+            .unwrap();
+        trace::set_details(false);
+        assert!(detailed.contains(&base_id), "{detailed}");
+        assert!(detailed.contains("mutations:"), "{detailed}");
     }
 
     #[test]

@@ -54,6 +54,22 @@
     font-size: 13px;
   }
   header .arrow { color: var(--ink-faint); padding: 0 6px; }
+  header .spacer { flex: 1; }
+  button {
+    border: 1px solid var(--line-strong);
+    background: var(--panel);
+    color: var(--ink);
+    padding: 5px 9px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { background: var(--match-bg); }
+  button:focus-visible, [tabindex]:focus-visible, summary:focus-visible {
+    outline: 3px solid var(--select);
+    outline-offset: 2px;
+  }
+  .toolbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+  .change-status { color: var(--ink-soft); padding: 5px 2px; min-width: 92px; }
   main {
     flex: 1;
     display: grid;
@@ -164,15 +180,20 @@
   .trow:hover { background: rgba(0,0,0,0.04); }
   .trow .toggle {
     width: 12px;
-    display: inline-block;
+    display: inline-grid;
+    place-items: center;
     color: var(--ink-faint);
     cursor: pointer;
     user-select: none;
     text-align: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
   }
   .trow .kind { color: var(--ink); font-weight: 600; }
   .trow .payload { color: var(--ink-soft); }
-  .trow .nid { color: var(--ink-faint); font-size: 11px; }
+  .trow .nid { display: none; }
   .children { padding-left: 15px; }
   .children.collapsed { display: none; }
   .trow.k-match { border-left-color: var(--match); background: var(--match-bg); }
@@ -220,6 +241,12 @@
   .edits li { padding: 2px 12px; }
   .edits li.ins { color: var(--insert); }
   .edits li.del { color: var(--delete); }
+  .edits li.active {
+    color: var(--ink);
+    background: var(--accent-soft);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
   .detail {
     margin-top: 16px;
     border: 1px solid var(--line);
@@ -266,6 +293,17 @@
   details .inner { padding: 8px 12px; font-family: var(--mono); font-size: 12.5px; }
   ol.intent-list { margin: 0; padding-left: 24px; }
   ol.intent-list li { padding: 2px 0; }
+  ol.intent-list button {
+    width: 100%;
+    text-align: left;
+    border-color: transparent;
+    font-family: var(--mono);
+  }
+  ol.intent-list button.active {
+    border-color: var(--select);
+    background: var(--select-bg);
+  }
+  .placeholder { margin: 2px 6px 2px 20px; color: var(--ink-soft); }
   .pipeline-step { margin-bottom: 6px; }
   .pipeline-step .label { color: var(--ink); font-weight: 600; }
   .pipeline-step .detail-text { color: var(--ink-soft); }
@@ -276,26 +314,116 @@
     border-top: 1px solid var(--line);
   }
   .empty { color: var(--ink-faint); padding: 40px; text-align: center; }
+  dialog {
+    max-width: 520px;
+    border: 1px solid var(--line-strong);
+    background: var(--panel);
+    color: var(--ink);
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+  @media (max-width: 800px) {
+    main { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line-strong); max-height: 180px; }
+    .trees, .panes { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
 <header>
   <span class="title">astvcs diff</span>
   <span class="labels"><span id="left-label"></span><span class="arrow">-&gt;</span><span id="right-label"></span></span>
+  <span class="spacer"></span>
+  <button id="help-button" type="button" aria-haspopup="dialog">Keyboard help</button>
 </header>
 <main>
-  <aside id="sidebar"></aside>
-  <section class="content" id="content"></section>
+  <aside id="sidebar" aria-label="Changed files"></aside>
+  <section class="content" id="content" aria-live="polite"></section>
 </main>
+<dialog id="keyboard-help" aria-labelledby="keyboard-help-title">
+  <h2 id="keyboard-help-title">Keyboard shortcuts</h2>
+  <p><kbd>n</kbd> next change, <kbd>p</kbd> previous change, <kbd>j</kbd> next file, <kbd>k</kbd> previous file, <kbd>?</kbd> this help.</p>
+  <button id="help-close" type="button">Close</button>
+</dialog>
 <script>
 const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
 
 (function () {
   "use strict";
 
+  function fullHex(id) {
+    if (id == null) return null;
+    if (typeof id === "string") return id;
+    if (Array.isArray(id)) return id.map((b) => (b & 0xff).toString(16).padStart(2, "0")).join("");
+    return String(id);
+  }
+
+  function collectChanges(entries) {
+    const result = [];
+    entries.forEach((entry, fileIndex) => {
+      const file = entry.file;
+      if ((file.intents || []).length) {
+        file.intents.forEach((intent) => {
+          result.push({ fileIndex, kind: "intent", intentIndex: intent.index });
+        });
+      } else if ((file.text_edits || []).length) {
+        file.text_edits.forEach((_, textIndex) => {
+          result.push({ fileIndex, kind: "text", textIndex });
+        });
+      } else if (file.mode !== "unchanged") {
+        result.push({ fileIndex, kind: "file" });
+      }
+    });
+    return result;
+  }
+
+  function mutationPrimaryTarget(mutation) {
+    if (!mutation || typeof mutation !== "object") return null;
+    if (mutation.InsertSubtree) {
+      return { side: "new", id: fullHex(mutation.InsertSubtree.node.id) };
+    }
+    if (mutation.DeleteSubtree) {
+      return { side: "old", id: fullHex(mutation.DeleteSubtree.node_id) };
+    }
+    for (const kind of ["MoveNode", "MoveSubtree", "RenameIdentifier", "EditPayload"]) {
+      if (mutation[kind]) {
+        return { side: "new", id: fullHex(mutation[kind].node_id) };
+      }
+    }
+    if (mutation.SetTrivia) {
+      return { side: "new", id: fullHex(mutation.SetTrivia.child) };
+    }
+    if (mutation.ReorderChildren) {
+      return { side: "new", id: fullHex(mutation.ReorderChildren.parent) };
+    }
+    return null;
+  }
+
+  function intentPrimaryTarget(file, intent) {
+    const indices = intent.mutation_indices || [intent.index];
+    for (const index of indices) {
+      const target = mutationPrimaryTarget((file.mutations || [])[index]);
+      const snapshot = target && file[target.side];
+      if (target && snapshot && (snapshot.nodes || []).some((node) => fullHex(node.id) === target.id)) {
+        return target;
+      }
+    }
+    return null;
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { collectChanges, mutationPrimaryTarget, intentPrimaryTarget };
+  }
+  if (typeof document === "undefined") return;
+
   const doc = ASTVCS_DIFF || { left_label: "", right_label: "", groups: [] };
   const sidebar = document.getElementById("sidebar");
   const content = document.getElementById("content");
+  const help = document.getElementById("keyboard-help");
+  document.getElementById("help-button").addEventListener("click", () => help.showModal());
+  document.getElementById("help-close").addEventListener("click", () => help.close());
   document.getElementById("left-label").textContent = doc.left_label || "old";
   document.getElementById("right-label").textContent = doc.right_label || "new";
 
@@ -307,7 +435,13 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     });
   });
 
-  let activeIndex = flat.length ? 0 : -1;
+  let activeIndex = flat.findIndex((entry) => entry.file.mode !== "unchanged");
+  if (activeIndex < 0 && flat.length) activeIndex = 0;
+  let activeIntent = -1;
+  let activeChangeKey = null;
+  const fullTreeFiles = new Set();
+  let currentState = null;
+  const changes = collectChanges(flat);
 
   function esc(text) {
     return String(text == null ? "" : text)
@@ -321,13 +455,6 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     if (typeof kind === "string") return kind;
     const values = Object.values(kind);
     return values.length ? String(values[0]) : "?";
-  }
-
-  function fullHex(id) {
-    if (id == null) return null;
-    if (typeof id === "string") return id;
-    if (Array.isArray(id)) return id.map((b) => (b & 0xff).toString(16).padStart(2, "0")).join("");
-    return String(id);
   }
 
   function shortHex(id) {
@@ -356,12 +483,14 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
         lastGroup = title;
       }
       (group.files || []).forEach((file) => {
-        const item = document.createElement("div");
+        const item = document.createElement("button");
+        item.type = "button";
         const myIndex = idx;
         item.className = "file-item m-" + file.mode + (myIndex === activeIndex ? " active" : "");
         item.dataset.index = String(myIndex);
         item.innerHTML = '<span class="badge">' + esc(modeLabel(file.mode)) + "</span>" + esc(file.path);
         item.title = file.path;
+        item.setAttribute("aria-current", myIndex === activeIndex ? "true" : "false");
         item.addEventListener("click", () => select(myIndex));
         sidebar.appendChild(item);
         idx += 1;
@@ -369,7 +498,7 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     });
     const hint = document.createElement("div");
     hint.className = "hint";
-    hint.textContent = "j / k to move between files";
+    hint.textContent = "j / k files, n / p changes, ? help";
     sidebar.appendChild(hint);
   }
 
@@ -393,10 +522,49 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     activeIndex = index;
     Array.from(sidebar.querySelectorAll(".file-item")).forEach((el) => {
       el.classList.toggle("active", Number(el.dataset.index) === index);
+      el.setAttribute("aria-current", Number(el.dataset.index) === index ? "true" : "false");
     });
     const active = sidebar.querySelector(".file-item.active");
     if (active) active.scrollIntoView({ block: "nearest" });
+    activeIntent = -1;
+    activeChangeKey = null;
     renderFile(flat[index]);
+  }
+
+  function changeKey(change) {
+    return [change.fileIndex, change.kind, change.intentIndex ?? change.textIndex ?? ""].join(":");
+  }
+
+  function navigateChange(delta) {
+    if (!changes.length) return;
+    let position = changes.findIndex((change) => changeKey(change) === activeChangeKey);
+    if (position < 0) {
+      if (delta > 0) {
+        position = changes.findIndex((change) => change.fileIndex >= activeIndex);
+        if (position < 0) position = 0;
+      } else {
+        position = changes.length - 1;
+        while (position > 0 && changes[position].fileIndex > activeIndex) position -= 1;
+      }
+    } else {
+      position = (position + delta + changes.length) % changes.length;
+    }
+    const target = changes[position];
+    if (target.fileIndex !== activeIndex) select(target.fileIndex);
+    activeChangeKey = changeKey(target);
+    if (!currentState) return;
+    if (target.kind === "intent") {
+      selectIntent(currentState, target.intentIndex);
+    } else if (target.kind === "text") {
+      selectTextChange(currentState, target.textIndex);
+    } else {
+      const heading = currentState.root.querySelector(".file-head");
+      if (heading) {
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+        heading.scrollIntoView({ block: "start" });
+      }
+    }
   }
 
   function nodeIndex(snapshot) {
@@ -438,9 +606,34 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     return { byOld, byNew };
   }
 
+  function changedNodeIds(file, maps) {
+    const oldIds = new Set();
+    const newIds = new Set();
+    const mutations = file.mutations || [];
+    function scan(snapshot, target) {
+      (snapshot && snapshot.nodes || []).forEach((node) => {
+        const id = fullHex(node.id);
+        if (mutations.some((mutation) => mutationMatchesNode(mutation, id))) target.add(id);
+      });
+    }
+    scan(file.old, oldIds);
+    scan(file.new, newIds);
+    (file.alignment || []).forEach((edge) => {
+      const oldId = fullHex(edge.old_id);
+      const newId = fullHex(edge.new_id);
+      if (oldId && newId && (oldIds.has(oldId) || newIds.has(newId))) {
+        oldIds.add(oldId);
+        newIds.add(newId);
+      }
+    });
+    return { old: oldIds, new: newIds };
+  }
+
   function renderTree(snapshot, side, colors, state) {
     const wrap = document.createElement("div");
     wrap.className = "tree";
+    wrap.setAttribute("role", "tree");
+    wrap.setAttribute("aria-label", side + " syntax tree");
     if (!snapshot || !snapshot.nodes || !snapshot.nodes.length) {
       wrap.innerHTML = '<span class="muted">no nodes</span>';
       return wrap;
@@ -448,6 +641,34 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     const map = nodeIndex(snapshot);
     const rootHex = fullHex(snapshot.root);
     const rendered = new Set();
+    const changed = state.changed[side];
+    const changedBelow = new Map();
+
+    function subtreeHasChange(idHex, visiting) {
+      if (changedBelow.has(idHex)) return changedBelow.get(idHex);
+      if (changed.has(idHex)) {
+        changedBelow.set(idHex, true);
+        return true;
+      }
+      if (visiting.has(idHex)) return false;
+      visiting.add(idHex);
+      const node = map.get(idHex);
+      const result = !!node && (node.children || []).some((child) =>
+        subtreeHasChange(fullHex(child), visiting));
+      visiting.delete(idHex);
+      changedBelow.set(idHex, result);
+      return result;
+    }
+
+    function subtreeCount(idHex, visiting) {
+      if (visiting.has(idHex)) return 0;
+      visiting.add(idHex);
+      const node = map.get(idHex);
+      const count = node ? 1 + (node.children || []).reduce(
+        (sum, child) => sum + subtreeCount(fullHex(child), visiting), 0) : 0;
+      visiting.delete(idHex);
+      return count;
+    }
 
     function build(idHex, depth) {
       const node = map.get(idHex);
@@ -464,10 +685,16 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       if (color) row.classList.add("k-" + color);
       row.dataset.id = idHex;
       row.dataset.side = side;
+      row.tabIndex = 0;
+      row.setAttribute("role", "treeitem");
+      row.setAttribute("aria-label", kindStr(node.kind) + (node.payload ? " " + shortPayload(node.payload) : ""));
 
-      const toggle = document.createElement("span");
+      const toggle = document.createElement("button");
+      toggle.type = "button";
       toggle.className = "toggle";
       toggle.textContent = hasChildren ? "\u25be" : "";
+      if (hasChildren) toggle.setAttribute("aria-label", "Collapse children");
+      else toggle.tabIndex = -1;
       row.appendChild(toggle);
 
       const kind = document.createElement("span");
@@ -492,17 +719,19 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
         if (ev.target === toggle) return;
         onNodeClick(side, idHex, state);
       });
+      row.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          onNodeClick(side, idHex, state);
+        }
+      });
       container.appendChild(row);
 
       if (hasChildren) {
         const kids = document.createElement("div");
         kids.className = "children";
-        const collapsed = depth >= 2;
-        if (collapsed) {
-          kids.classList.add("collapsed");
-          toggle.textContent = "\u25b8";
-        }
-        // Guard against cycles from shared ids in a DAG snapshot.
+        row.setAttribute("aria-expanded", "true");
+        // Build changed paths first. Unchanged branches are created on request.
         node.children.forEach((childId) => {
           const childHex = fullHex(childId);
           if (rendered.has(childHex)) {
@@ -513,14 +742,30 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
             kids.appendChild(dup);
             return;
           }
-          rendered.add(childHex);
-          kids.appendChild(build(childHex, depth + 1));
+          if (state.showFull || subtreeHasChange(childHex, new Set())) {
+            rendered.add(childHex);
+            kids.appendChild(build(childHex, depth + 1));
+          } else {
+            const placeholder = document.createElement("button");
+            placeholder.type = "button";
+            placeholder.className = "placeholder";
+            const count = subtreeCount(childHex, new Set());
+            placeholder.textContent = count + " unchanged node" + (count === 1 ? "" : "s");
+            placeholder.setAttribute("aria-label", "Show " + count + " unchanged nodes");
+            placeholder.addEventListener("click", () => {
+              rendered.add(childHex);
+              placeholder.replaceWith(build(childHex, depth + 1));
+            });
+            kids.appendChild(placeholder);
+          }
         });
         container.appendChild(kids);
         toggle.addEventListener("click", (ev) => {
           ev.stopPropagation();
           const isCollapsed = kids.classList.toggle("collapsed");
           toggle.textContent = isCollapsed ? "\u25b8" : "\u25be";
+          row.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+          toggle.setAttribute("aria-label", isCollapsed ? "Expand children" : "Collapse children");
         });
       }
       return container;
@@ -556,8 +801,8 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
   function relatedIntents(file, idHex) {
     if (!idHex) return [];
     return (file.intents || []).filter((iv) => {
-      const mutation = (file.mutations || [])[iv.index];
-      return mutationMatchesNode(mutation, idHex);
+      return (iv.mutation_indices || [iv.index]).some((index) =>
+        mutationMatchesNode((file.mutations || [])[index], idHex));
     });
   }
 
@@ -628,12 +873,13 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
         line.className = "row";
         line.textContent = "[" + iv.index + "] " + iv.label;
         body.appendChild(line);
-        const mutation = (file.mutations || [])[iv.index];
-        if (mutation) {
+        (iv.mutation_indices || [iv.index]).forEach((index) => {
+          const mutation = (file.mutations || [])[index];
+          if (!mutation) return;
           const pre = document.createElement("pre");
           pre.textContent = JSON.stringify(mutation);
           body.appendChild(pre);
-        }
+        });
       });
     } else {
       const line = document.createElement("div");
@@ -671,7 +917,7 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     return pane;
   }
 
-  function textEditList(file) {
+  function textEditList(file, state) {
     const list = document.createElement("ul");
     list.className = "edits";
     if (!file.text_edits || !file.text_edits.length) {
@@ -681,21 +927,38 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       list.appendChild(li);
       return list;
     }
-    file.text_edits.forEach((summary) => {
+    file.text_edits.forEach((summary, index) => {
       const li = document.createElement("li");
       if (/insert/.test(summary)) li.className = "ins";
       else if (/delete/.test(summary)) li.className = "del";
       li.textContent = summary;
+      li.dataset.changeIndex = String(index);
+      li.tabIndex = -1;
+      li.addEventListener("click", () => {
+        activeChangeKey = changeKey({ fileIndex: activeIndex, kind: "text", textIndex: index });
+        selectTextChange(state, index);
+      });
       list.appendChild(li);
     });
     return list;
   }
 
-  function intentsSection(file) {
-    const details = document.createElement("details");
-    details.open = true;
-    const summary = document.createElement("summary");
-    summary.textContent = "Intents (" + (file.intents ? file.intents.length : 0) + ")";
+  function selectTextChange(state, index) {
+    state.root.querySelectorAll(".edits li").forEach((item) => {
+      item.classList.toggle("active", Number(item.dataset.changeIndex) === index);
+    });
+    const target = state.root.querySelector('.edits li[data-change-index="' + index + '"]');
+    if (target) {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "center" });
+    }
+  }
+
+  function intentsSection(file, state) {
+    const details = document.createElement("section");
+    details.className = "detail";
+    const summary = document.createElement("h3");
+    summary.textContent = "Changes (" + (file.intents ? file.intents.length : 0) + ")";
     details.appendChild(summary);
     const inner = document.createElement("div");
     inner.className = "inner";
@@ -706,13 +969,69 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       ol.className = "intent-list";
       file.intents.forEach((iv) => {
         const li = document.createElement("li");
-        li.textContent = iv.label;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = iv.label;
+        button.dataset.intent = String(iv.index);
+        button.addEventListener("click", () => selectIntent(state, iv.index));
+        li.appendChild(button);
         ol.appendChild(li);
       });
       inner.appendChild(ol);
     }
     details.appendChild(inner);
     return details;
+  }
+
+  function selectIntent(state, index) {
+    const file = state.file;
+    const intent = (file.intents || []).find((item) => item.index === index);
+    if (!intent) return;
+    activeIntent = index;
+    activeChangeKey = changeKey({ fileIndex: activeIndex, kind: "intent", intentIndex: index });
+    state.root.querySelectorAll(".intent-list button").forEach((button) => {
+      button.classList.toggle("active", Number(button.dataset.intent) === index);
+    });
+    const indices = intent.mutation_indices || [intent.index];
+    let target = intentPrimaryTarget(file, intent);
+    if (!target) {
+      for (const side of ["new", "old"]) {
+        const snapshot = file[side];
+        const node = (snapshot && snapshot.nodes || []).find((candidate) => {
+          const id = fullHex(candidate.id);
+          return indices.some((mutationIndex) =>
+            mutationMatchesNode((file.mutations || [])[mutationIndex], id));
+        });
+        if (node) {
+          target = { side, id: fullHex(node.id) };
+          break;
+        }
+      }
+    }
+    if (!target) return;
+    const row = state.root.querySelector(
+      '.trow[data-side="' + target.side + '"][data-id="' + target.id + '"]');
+    if (row) {
+      let parent = row.parentElement;
+      while (parent && parent !== state.root) {
+        if (parent.classList && parent.classList.contains("children")) {
+          parent.classList.remove("collapsed");
+          const parentRow = parent.previousElementSibling;
+          if (parentRow && parentRow.classList.contains("trow")) {
+            parentRow.setAttribute("aria-expanded", "true");
+            const toggle = parentRow.querySelector(".toggle");
+            if (toggle) {
+              toggle.textContent = "\u25be";
+              toggle.setAttribute("aria-label", "Collapse children");
+            }
+          }
+        }
+        parent = parent.parentElement;
+      }
+      onNodeClick(target.side, target.id, state);
+      row.focus({ preventScroll: true });
+      row.scrollIntoView({ block: "center" });
+    }
   }
 
   function pipelineSection(file) {
@@ -744,6 +1063,16 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       step.innerHTML = '<span class="label">' + esc(label) + "</span> <span class=\"detail-text\">" + esc(text) + "</span>";
       inner.appendChild(step);
     });
+    if ((file.mutations || []).length) {
+      const mutations = document.createElement("pre");
+      mutations.textContent = "mutations\n" + JSON.stringify(file.mutations, null, 2);
+      inner.appendChild(mutations);
+    }
+    if ((file.alignment || []).length) {
+      const alignment = document.createElement("pre");
+      alignment.textContent = "alignment\n" + JSON.stringify(file.alignment, null, 2);
+      inner.appendChild(alignment);
+    }
     details.appendChild(inner);
     return details;
   }
@@ -773,18 +1102,66 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       content.appendChild(note);
     }
 
+    const state = {
+      file: file,
+      maps: edgeMaps(file.alignment),
+      root: content,
+      detailBody: null,
+      changed: null,
+      showFull: fullTreeFiles.has(activeIndex),
+    };
+    state.changed = changedNodeIds(file, state.maps);
+    currentState = state;
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "toolbar";
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.textContent = "Previous change";
+    previous.addEventListener("click", () => navigateChange(-1));
+    toolbar.appendChild(previous);
+    const next = document.createElement("button");
+    next.type = "button";
+    next.textContent = "Next change";
+    next.addEventListener("click", () => navigateChange(1));
+    toolbar.appendChild(next);
+    const status = document.createElement("span");
+    status.className = "change-status";
+    status.textContent = changes.filter((change) => change.fileIndex === activeIndex).length + " change(s)";
+    toolbar.appendChild(status);
+    const full = document.createElement("button");
+    full.type = "button";
+    full.textContent = "Show full tree";
+    full.setAttribute("aria-pressed", state.showFull ? "true" : "false");
+    full.addEventListener("click", () => {
+      fullTreeFiles.add(activeIndex);
+      renderFile(entry);
+    });
+    toolbar.appendChild(full);
+    const collapse = document.createElement("button");
+    collapse.type = "button";
+    collapse.textContent = "Collapse unchanged";
+    collapse.addEventListener("click", () => {
+      fullTreeFiles.delete(activeIndex);
+      renderFile(entry);
+    });
+    toolbar.appendChild(collapse);
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.textContent = "Expand changed";
+    expand.addEventListener("click", () => {
+      fullTreeFiles.delete(activeIndex);
+      renderFile(entry);
+    });
+    toolbar.appendChild(expand);
+    content.appendChild(toolbar);
+    content.appendChild(intentsSection(file, state));
+
     const showTrees = file.old && file.new;
     if (showTrees) {
       const colors = alignmentColors(file.alignment);
       const trees = document.createElement("div");
       trees.className = "trees";
-
-      const state = {
-        file: file,
-        maps: edgeMaps(file.alignment),
-        root: trees,
-        detailBody: null,
-      };
 
       const oldCol = document.createElement("div");
       oldCol.className = "tree-col";
@@ -804,10 +1181,9 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       trees.appendChild(newCol);
       content.appendChild(trees);
 
-      const detail = document.createElement("div");
-      detail.className = "detail";
-      const dh = document.createElement("h3");
-      dh.textContent = "Selection";
+      const detail = document.createElement("details");
+      const dh = document.createElement("summary");
+      dh.textContent = "Structural details";
       detail.appendChild(dh);
       const dbody = document.createElement("div");
       dbody.className = "detail-body";
@@ -816,25 +1192,39 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
       state.detailBody = dbody;
       content.appendChild(detail);
     } else if (file.mode === "text") {
-      content.appendChild(textEditList(file));
+      content.appendChild(textEditList(file, state));
       content.appendChild(sourcePanes(file));
     } else {
       content.appendChild(sourcePanes(file));
     }
 
-    content.appendChild(intentsSection(file));
     content.appendChild(pipelineSection(file));
     content.scrollTop = 0;
   }
 
   document.addEventListener("keydown", (ev) => {
-    if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+    const target = ev.target;
+    if (help.open) return;
+    if (target && (
+      /^(INPUT|TEXTAREA|SELECT|BUTTON|A|SUMMARY)$/.test(target.tagName) ||
+      target.isContentEditable ||
+      target.closest('[role="button"]')
+    )) return;
     if (ev.key === "j") {
       ev.preventDefault();
       select(Math.min(activeIndex + 1, flat.length - 1));
     } else if (ev.key === "k") {
       ev.preventDefault();
       select(Math.max(activeIndex - 1, 0));
+    } else if (ev.key === "n") {
+      ev.preventDefault();
+      navigateChange(1);
+    } else if (ev.key === "p") {
+      ev.preventDefault();
+      navigateChange(-1);
+    } else if (ev.key === "?") {
+      ev.preventDefault();
+      help.showModal();
     }
   });
 

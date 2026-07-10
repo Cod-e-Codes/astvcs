@@ -351,6 +351,22 @@ fn cli_merge_resolve_conflict() {
 
     let dry = run_astvcs(Some(root), &["merge", "conflict", "--dry-run"]);
     assert!(!dry.status.success());
+    let focused = String::from_utf8_lossy(&dry.stdout);
+    assert!(focused.contains("conflict: conflict.rs"), "{focused}");
+    assert!(focused.contains("ours: rename"), "{focused}");
+    assert!(focused.contains("theirs: rename"), "{focused}");
+    assert!(focused.contains("--resolve conflict.rs:ours"), "{focused}");
+    assert!(!focused.contains("mutations from base"), "{focused}");
+    assert!(!focused.contains("base:"), "{focused}");
+
+    let detailed = run_astvcs(Some(root), &["--details", "merge", "conflict", "--dry-run"]);
+    assert!(!detailed.status.success());
+    let detailed_stdout = String::from_utf8_lossy(&detailed.stdout);
+    assert!(detailed_stdout.contains("base:"), "{detailed_stdout}");
+    assert!(
+        detailed_stdout.contains("mutations from base"),
+        "{detailed_stdout}"
+    );
 
     let head_before = Repo::open(root).unwrap().head_state().unwrap();
     let merge = run_astvcs(
@@ -1185,6 +1201,40 @@ fn cli_revert_and_dry_run() {
     );
     assert!(!dir.path().join("notes.txt").exists());
     assert!(repo.working_tree_is_clean().unwrap());
+}
+
+#[test]
+fn cli_revert_conflict_labels_sides_without_merge_resolution_syntax() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn sample() {\n    let value = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("base").unwrap();
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn sample() {\n    let renamed = 1;\n}\n",
+    )
+    .unwrap();
+    let target = repo.commit("rename value").unwrap().state_id;
+    fs::write(
+        dir.path().join("main.rs"),
+        "fn sample() {\n    let alternate = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("rename again").unwrap();
+
+    let out = run_astvcs(
+        Some(dir.path()),
+        &["revert", &target, "-m", "revert rename", "--dry-run"],
+    );
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("reverted parent: rename"), "{stdout}");
+    assert!(stdout.contains("current HEAD: rename"), "{stdout}");
+    assert!(!stdout.contains("--resolve"), "{stdout}");
 }
 
 #[test]
@@ -3021,6 +3071,7 @@ fn stash_pop_conflict_keeps_entry() {
     assert!(!pop.status.success());
     let stderr = String::from_utf8_lossy(&pop.stderr);
     assert!(stderr.contains("merge would conflict"), "{stderr}");
+    assert!(!stderr.contains("--resolve"), "{stderr}");
     assert_eq!(
         fs::read_to_string(dir.path().join("note.txt")).unwrap(),
         "conflict\n"
@@ -3494,6 +3545,11 @@ fn cherry_pick_conflict_leaves_head_unchanged() {
         &["cherry-pick", &feature_commit, "-m", "pick z"],
     );
     assert!(!out.status.success(), "cherry-pick should fail on conflict");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cherry-pick would conflict"), "{stderr}");
+    assert!(stderr.contains("current HEAD: rename"), "{stderr}");
+    assert!(stderr.contains("picked state: rename"), "{stderr}");
+    assert!(!stderr.contains("--resolve"), "{stderr}");
     assert_eq!(repo.head_state().unwrap(), tip);
     assert_eq!(
         fs::read_to_string(dir.path().join("main.rs")).unwrap(),
@@ -4097,4 +4153,76 @@ fn cli_diff_view_writes_html_with_alignment() {
         html.contains("Match") || html.contains("match") || html.contains("\"kind\""),
         "expected alignment kind markers in embedded JSON"
     );
+    for control in [
+        "Next change",
+        "Previous change",
+        "Show full tree",
+        "Collapse unchanged",
+        "Expand changed",
+        "Keyboard help",
+    ] {
+        assert!(html.contains(control), "missing viewer control {control}");
+    }
+    assert!(html.contains("prefers-reduced-motion"));
+    assert!(html.contains("aria-live"));
+    assert!(html.contains("unchanged node"));
+}
+
+#[test]
+fn cli_diff_defaults_to_compact_intents_and_details_restores_mutations() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    Repo::init_with_identity(root).unwrap();
+    fs::write(root.join("main.rs"), "fn sample() { let value = 1; }\n").unwrap();
+    Repo::open(root).unwrap().commit("baseline").unwrap();
+    fs::write(root.join("main.rs"), "fn sample() { let renamed = 1; }\n").unwrap();
+
+    let compact = run_astvcs(Some(root), &["diff", "main.rs"]);
+    assert_astvcs_ok(&compact, "compact diff");
+    let compact_stdout = String::from_utf8_lossy(&compact.stdout);
+    assert!(
+        compact_stdout.contains("rename `value` to `renamed`"),
+        "{compact_stdout}"
+    );
+    assert!(!compact_stdout.contains("mutations:"), "{compact_stdout}");
+
+    let detailed = run_astvcs(Some(root), &["--details", "diff", "main.rs"]);
+    assert_astvcs_ok(&detailed, "detailed diff");
+    let detailed_stdout = String::from_utf8_lossy(&detailed.stdout);
+    assert!(detailed_stdout.contains("mutations:"), "{detailed_stdout}");
+    assert!(
+        detailed_stdout.contains("RenameIdentifier"),
+        "{detailed_stdout}"
+    );
+}
+
+#[test]
+fn cli_diff_view_large_file_keeps_change_first_controls() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    Repo::init_with_identity(root).unwrap();
+    let before = (0..300)
+        .map(|i| format!("fn item_{i}() -> i32 {{ {i} }}\n"))
+        .collect::<String>();
+    fs::write(root.join("large.rs"), &before).unwrap();
+    Repo::open(root).unwrap().commit("baseline").unwrap();
+    let after = before.replace(
+        "fn item_150() -> i32 { 150 }",
+        "fn item_150() -> i32 { 999 }",
+    );
+    fs::write(root.join("large.rs"), after).unwrap();
+
+    let out = Command::new(astvcs_bin())
+        .arg("--repo")
+        .arg(root)
+        .args(["diff", "--view", "large.rs"])
+        .env("ASTVCS_NO_BROWSER", "1")
+        .output()
+        .expect("spawn astvcs");
+    assert_astvcs_ok(&out, "large diff --view");
+    let html_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let html = fs::read_to_string(html_path).unwrap();
+    assert!(html.contains("large.rs"));
+    assert!(html.contains("Next change"));
+    assert!(html.contains("unchanged node"));
 }

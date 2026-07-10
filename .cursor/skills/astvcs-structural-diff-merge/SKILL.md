@@ -35,12 +35,14 @@ metadata:
 ### Intent changes
 
 - Intents classify raw mutations for human-readable `diff` output (`PrependComment`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, etc.).
+- Default output uses compact intent labels and aggregates formatting-only intents. `--details` and `-v` restore node IDs and raw mutations.
 - Overlap logic in `intent/` drives merge conflict detection. Changing intents can change which merges succeed.
 - Wire new mutation variants through `classify_mutation`, `intents_disjoint`, `remap_mutation`, and `are_disjoint_edits`.
 
 ### Merge changes
 
 - Preserve atomic rollback on conflict.
+- Focused conflict output names paths, both sides' intents, overlap reasons, and `--resolve` syntax. Keep full reports available to library callers and `--details`.
 - Merge planning reads committed states only (`plan_merge` / `load_state_files`); the working tree is not consulted. Forced merges clobber dirty paths during materialization after the plan is fixed.
 - `plan_merge` correlates paths through `detect_path_renames` per side before per-file `merge_path`.
 - `MoveSubtree`/`MoveNode` are disjoint from payload edits on the same `node_id` during merge.
@@ -54,14 +56,14 @@ metadata:
 cargo test workflow_demo identity_demo same_file_demo merge_demo merge_conflict
 ```
 
-Use `diff -v` on fixtures to see raw mutations alongside intents:
+Use `diff --details` for raw mutations without notices, or `-v` for raw mutations plus operational notices:
 
 ```powershell
 cargo build --release
-.\target\release\astvcs.exe --repo examples\identity-demo diff -v conflict.rs
+.\target\release\astvcs.exe --repo examples\identity-demo diff --details conflict.rs
 ```
 
-Open the alignment-first HTML viewer (skips the browser when `CI` is set; still prints the temp HTML path):
+Open the change-first HTML viewer (skips the browser when `CI` is set; still prints the temp HTML path):
 
 ```powershell
 .\target\release\astvcs.exe --repo examples\identity-demo diff --view conflict.rs

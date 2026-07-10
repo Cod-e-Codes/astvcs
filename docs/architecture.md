@@ -12,7 +12,7 @@ User-facing boundaries (in scope vs out of scope) are summarized in the [README 
 
 **Author identity.** Timeline entries record `author_name` and `author_email` metadata for every state created by `commit`, `merge`, `revert`, and `cherry-pick`. Identity is resolved at state-creation time from, in precedence order: `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL` environment variables, repository-local `config.json` (`author` object), then global `~/.astvcs/config.json`. If none are set, those commands fail with an actionable error rather than guessing from the OS user account. The initial empty root state and other pre-existing timeline entries without author fields deserialize with empty author strings. Identity is **not** part of the content-addressed state id: state ids remain `hash_manifest(manifest)` only, so adding author metadata does not change ids for unchanged file content.
 
-**Structured errors.** Repository operations return `RepoResult<T>` (`Result<T, RepoError>`). `RepoError` carries a `kind` enum (for example `lock_contention`, `dirty_working_tree`, `merge_conflict`, `missing_identity`), a human-readable `message` (matching legacy string output for `.contains(...)` compatibility via `Deref` to `str`), and optional `path` / `reference` fields. The library exposes the full struct; the CLI accepts `--json` on any command to print one JSON object on stderr on failure instead of `error: …`. Plain stderr output is unchanged when `--json` is omitted.
+**Structured errors.** Repository operations return `RepoResult<T>` (`Result<T, RepoError>`). `RepoError` carries a `kind` enum (for example `lock_contention`, `dirty_working_tree`, `merge_conflict`, `missing_identity`), a human-readable `message` (matching legacy string output for `.contains(...)` compatibility via `Deref` to `str`), an optional non-serialized `concise` CLI presentation, and optional `path` / `reference` fields. Library `Display`, `Deref`, and JSON always use the complete `message`. Plain CLI output uses `concise` when available; `--details` restores the complete message. The CLI accepts `--json` on any command to print one JSON object on stderr on failure.
 
 **HEAD.** The `HEAD` file holds either a branch name or a state id (detached HEAD). `status`, `diff`, and `commit` compare against the checked-out state, not the branch tip when detached. `reset` moves the branch tip or detached HEAD; `revert` creates a new state that undoes a prior state on top of HEAD.
 
@@ -169,9 +169,9 @@ Alignment is heuristic. Wrong sibling pairing can still produce delete+insert in
 
 **Planned optimization (AST blob size).** AST blobs are stored as canonical JSON (`kind: "ast"`) and blob ids are content hashes of that JSON. A more compact snapshot encoding (for example `kind: "ast_compact"`) would require a format-version migration and dual deserialize; micro-optimizations that skip empty fields would also change existing blob hashes. Storage compaction is deferred until a backward-compatible migration path exists.
 
-**Edit intents.** Raw mutations are classified for human-readable output (`EditLiteral`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, `PrependComment`, `InsertStatement`, etc.). `diff` prints intents by default; pass `-v` to also print raw mutations.
+**Edit intents.** Raw mutations are classified for human-readable output (`EditLiteral`, `RenameIdentifier`, `RenamePath`, `MoveSubtree`, `PrependComment`, `InsertStatement`, etc.). Default `diff` uses compact labels without `NodeId` values and coalesces repeated formatting-only intents while preserving every semantic edit. Pass `--details` for detailed intent labels and raw mutations. `-v` includes the same details plus operational notices.
 
-**Alignment export and graphical viewer.** `diff_graphs` remains mutation-only for merge and existing callers. `diff_graphs_detailed` shares the same recursion and also records `AlignEdge` values: each sibling pair as `Match` with an `AlignMethod` (`Id`, `Key`, `Role`, `Lcs`, `Fingerprint`, `StructuralFallback`, `LeafFallback`), plus `Insert`/`Delete` for unmatched children. `diff --view` builds a `DiffViewDocument` (graph snapshots, alignment, mutations, classified intents, optional unparsed source) and writes a self-contained HTML page that visualizes paired trees. The viewer consumes real edges only; it does not invent confidence scores or persistent cross-commit node ids.
+**Alignment export and graphical viewer.** `diff_graphs` remains mutation-only for merge and existing callers. `diff_graphs_detailed` shares the same recursion and also records `AlignEdge` values: each sibling pair as `Match` with an `AlignMethod` (`Id`, `Key`, `Role`, `Lcs`, `Fingerprint`, `StructuralFallback`, `LeafFallback`), plus `Insert`/`Delete` for unmatched children. `diff --view` builds a `DiffViewDocument` (graph snapshots, alignment, mutations, compact classified intents, optional unparsed source) and writes a self-contained HTML page. The first view is a change summary. Changed nodes and ancestors are expanded; unrelated branches are count-labelled placeholders whose children are created on request. `n`/`p` navigate changes, `j`/`k` navigate files, and a keyboard help dialog documents shortcuts. Raw IDs, alignment methods, mutations, and pipeline data remain in collapsed details. The viewer consumes real edges only; it does not invent confidence scores or persistent cross-commit node ids.
 
 **Text diff.** Fallback files use Myers line diff via the `similar` crate.
 
@@ -183,7 +183,7 @@ Mutations locate children by `node_id`, not stored indices.
 2. Per-path three-way logic: add/add, delete on one side, modify/delete (keeps the modification), unchanged sides short-circuit inside `merge_files`.
 3. Overlap detection uses edit intents, ancestor checks (a deletion covering an edit inside its subtree), and precise insert-site checks. Sibling payload edits under the same parent merge when they touch different nodes. Disjoint structural edits apply in one batch with redirect rebasing. Text merges use disjoint line edits.
 
-Failed merges roll back atomically: HEAD, branch tips, working tree, and `index.json` are unchanged. The error report lists edit intents and raw mutations from each side, plus the overlapping pair (same node, deletion covering a nested edit, same insert site, or same intent). Use `merge --dry-run` to preview, and `diff --base --left --right` to inspect both sides.
+Failed merges roll back atomically: HEAD, branch tips, working tree, and `index.json` are unchanged. Focused conflict output lists paths, both sides' intents, and overlap reasons. Merge and pull include valid `--resolve` syntax; revert labels the reverted parent and current HEAD, while cherry-pick and stash omit unsupported resolution flags. Repeated overlap examples are limited per path with an omitted count. `--details` restores state IDs, raw mutations from each side, and every overlapping pair (same node, deletion covering a nested edit, same insert site, or same intent). Use `merge --dry-run` to preview, and `diff --base --left --right` to inspect both sides.
 
 When conflicts cannot be merged structurally, `merge --resolve path:ours|theirs` picks the full file from HEAD or the other branch for that path only. astvcs does not write conflict markers into the working tree.
 
@@ -243,7 +243,7 @@ src/
     text_diff.rs Myers line diff
     path_rename.rs path-level rename detection
     view.rs      `DiffViewDocument` and self-contained HTML for `diff --view`
-    view/viewer.html alignment-first viewer assets (inlined via `include_str!`)
+    view/viewer.html change-first viewer assets (inlined via `include_str!`)
   intent/
     mod.rs       edit intent classification and overlap reasoning
   merge/
@@ -309,6 +309,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `go_unparse_roundtrip_via_repo` | Commit, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
 | `cli_diff_view_writes_html_with_alignment` | `diff --view` writes temp HTML embedding path, intents, and alignment export |
+| `cli_diff_view_large_file_keeps_change_first_controls` | Generated large AST diff keeps change navigation and lazy unchanged-tree controls |
+| `viewer_javascript_indexes_all_file_modes_and_targets_insertions` | Executes shipped viewer logic for non-AST navigation and inserted-node targeting |
+| `cli_diff_defaults_to_compact_intents_and_details_restores_mutations` | Default diff hides internals; `--details` restores raw mutations |
 | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Sibling literal merge and rename conflicts |
 | `trailing_comment_and_literal_edit_merge` | Trailing comment text survives merge when a sibling literal is edited on the other branch |
 | `cli_trivia_only_commit` | Whitespace-only formatting commit round-trips through the CLI |

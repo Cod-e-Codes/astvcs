@@ -1,7 +1,7 @@
 use crate::diff::{AlignEdge, PathRename, PathRenameKind, diff_graphs_detailed, diff_text};
 use crate::frontend::{FileContent, is_ast_capable_path};
 use crate::graph::{AstGraph, AstGraphSnapshot, Mutation};
-use crate::intent::{classify_mutations, classify_path_rename, format_intent};
+use crate::intent::{classify_path_rename, compact_intents, format_intent_compact};
 use crate::unparser::unparse;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,6 +42,7 @@ pub enum DiffViewMode {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct IntentView {
     pub index: usize,
+    pub mutation_indices: Vec<usize>,
     pub label: String,
 }
 
@@ -91,11 +92,13 @@ fn source_of(content: &FileContent) -> Option<String> {
 }
 
 fn intents_view(base: Option<&AstGraph>, mutations: &[Mutation]) -> Vec<IntentView> {
-    classify_mutations(base, mutations)
+    compact_intents(base, mutations)
         .into_iter()
-        .map(|(index, intent)| IntentView {
+        .enumerate()
+        .map(|(index, (mutation_indices, label))| IntentView {
             index,
-            label: format_intent(base, &intent),
+            mutation_indices,
+            label,
         })
         .collect()
 }
@@ -228,12 +231,14 @@ pub fn file_from_rename(rename: &PathRename, old: &FileContent, new: &FileConten
     let rename_intent = classify_path_rename(rename);
     let mut intents = vec![IntentView {
         index: 0,
-        label: format_intent(None, &rename_intent),
+        mutation_indices: Vec::new(),
+        label: format_intent_compact(None, &rename_intent),
     }];
     if rename.kind == PathRenameKind::WithEdits {
         for existing in file.intents.drain(..) {
             intents.push(IntentView {
-                index: existing.index + 1,
+                index: intents.len(),
+                mutation_indices: existing.mutation_indices,
                 label: existing.label,
             });
         }
@@ -313,6 +318,7 @@ pub fn open_in_browser(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::frontend::{BinaryBlob, SymlinkBlob, TextBlob, parse_rust, parse_text_or_blob};
+    use std::io::Write;
 
     fn ast(src: &str) -> FileContent {
         FileContent::Ast(parse_rust(src).unwrap())
@@ -417,6 +423,7 @@ mod tests {
         assert_eq!(file.path, "b.rs");
         assert_eq!(file.path_from.as_deref(), Some("a.rs"));
         assert_eq!(file.intents[0].index, 0);
+        assert!(file.intents[0].mutation_indices.is_empty());
         assert!(file.intents[0].label.contains("rename path"));
         assert!(file.intents.len() > 1);
     }
@@ -438,6 +445,63 @@ mod tests {
         assert!(!html.contains("/*__ASTVCS_DIFF_JSON__*/null"));
         assert!(html.contains("astvcs diff"));
         assert!(!html.contains("</script\": "));
+    }
+
+    #[test]
+    fn viewer_javascript_indexes_all_file_modes_and_targets_insertions() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("skipping viewer JavaScript test because node is unavailable");
+            return;
+        }
+
+        let template = include_str!("view/viewer.html");
+        let script = template
+            .split_once("<script>")
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map(|(script, _)| script)
+            .expect("viewer template script");
+        let mut file = tempfile::Builder::new().suffix(".js").tempfile().unwrap();
+        file.write_all(script.as_bytes()).unwrap();
+
+        let assertions = r#"
+const assert = require("assert");
+const logic = require(process.argv[1]);
+const entries = [
+  { file: { mode: "ast", intents: [{ index: 0 }] } },
+  { file: { mode: "text", text_edits: ["delete line", "insert line"] } },
+  { file: { mode: "binary" } },
+  { file: { mode: "added" } },
+  { file: { mode: "deleted" } },
+  { file: { mode: "unchanged" } },
+];
+assert.deepStrictEqual(
+  logic.collectChanges(entries).map((change) => change.kind),
+  ["intent", "text", "text", "file", "file", "file"],
+);
+const id = (value) => Array(32).fill(value);
+const inserted = id(9);
+const parent = id(1);
+const target = logic.intentPrimaryTarget(
+  {
+    old: { nodes: [{ id: parent }] },
+    new: { nodes: [{ id: parent }, { id: inserted }] },
+    mutations: [{ InsertSubtree: { parent, node: { id: inserted } } }],
+  },
+  { index: 0, mutation_indices: [0] },
+);
+assert.strictEqual(target.side, "new");
+assert.strictEqual(target.id, "09".repeat(32));
+"#;
+        let output = Command::new("node")
+            .args(["-e", assertions])
+            .arg(file.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

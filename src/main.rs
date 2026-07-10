@@ -25,6 +25,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Show state IDs, node IDs, raw mutations, and complete conflict diagnostics.
+    #[arg(long, global = true)]
+    details: bool,
+
     /// Emit structured JSON errors on failure (stderr).
     #[arg(long, global = true)]
     json: bool,
@@ -290,7 +294,7 @@ struct DiffArgs {
     #[arg(long, requires = "base", requires = "left")]
     right: Option<String>,
 
-    /// Open an alignment-first HTML diff viewer in the default browser.
+    /// Open a change-first HTML diff viewer in the default browser.
     #[arg(long)]
     view: bool,
 
@@ -429,21 +433,22 @@ fn repo_root(cli: &Cli) -> PathBuf {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let json = cli.json;
+    let details = cli.details || cli.verbose;
     if let Err(e) = run(cli) {
-        print_cli_error(json, &e);
+        print_cli_error(json, details, &e);
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
 }
 
-fn print_cli_error(json: bool, err: &RepoError) {
+fn print_cli_error(json: bool, details: bool, err: &RepoError) {
     if json {
         eprintln!(
             "{}",
             serde_json::to_string(err).expect("serialize structured error")
         );
     } else {
-        eprintln!("error: {err}");
+        eprintln!("error: {}", err.cli_message(details));
     }
 }
 
@@ -500,6 +505,7 @@ fn print_file_status(path: &str, status: &FileStatus, text_fallback: bool) {
 
 fn run(cli: Cli) -> RepoResult<()> {
     trace::set_verbose(cli.verbose);
+    trace::set_details(cli.details);
     let root = repo_root(&cli);
     match cli.command {
         Commands::Init { path } => {
@@ -664,7 +670,11 @@ fn run(cli: Cli) -> RepoResult<()> {
                 if plan.is_clean() {
                     print!("{}", plan.format_dry_run());
                 } else {
-                    print!("{}", plan.format_conflicts());
+                    if trace::is_detailed() {
+                        print!("{}", plan.format_conflicts());
+                    } else {
+                        print!("{}", plan.format_conflicts_focused());
+                    }
                     trace::warn("merge dry-run: would conflict");
                     return Err(RepoError::merge_conflict("merge would conflict"));
                 }
@@ -748,7 +758,11 @@ fn run(cli: Cli) -> RepoResult<()> {
                 if plan.is_clean() {
                     print!("{}", plan.format_dry_run());
                 } else {
-                    print!("{}", plan.format_conflicts());
+                    if trace::is_detailed() {
+                        print!("{}", plan.format_conflicts());
+                    } else {
+                        print!("{}", plan.format_conflicts_focused());
+                    }
                     trace::warn("revert dry-run: would conflict");
                     return Err(RepoError::revert_conflict("revert would conflict"));
                 }

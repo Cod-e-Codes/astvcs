@@ -50,39 +50,59 @@ impl std::fmt::Display for OverlapReason {
     }
 }
 
+impl OverlapReason {
+    fn concise(&self) -> &'static str {
+        match self {
+            Self::SamePrimaryNode(_) => "both edits target the same node",
+            Self::SameTouchedParent(_) => "both edits target the same insertion site",
+            Self::DeletionCoversEdit { .. } => "one edit deletes the other edit's context",
+            Self::SameIntent(_) => "both sides make the same kind of edit differently",
+        }
+    }
+}
+
 impl MergeConflict {
     pub fn format_report(&self, path: &str) -> String {
+        self.format_report_with_labels(path, "left (HEAD)", "right (other branch)")
+    }
+
+    pub fn format_report_with_labels(
+        &self,
+        path: &str,
+        left_label: &str,
+        right_label: &str,
+    ) -> String {
         let mut out = format!("merge conflict in {path}: {}\n", self.message);
         if !self.left_intent_lines.is_empty() {
-            out.push_str("\nleft (HEAD) intents from base:\n");
+            out.push_str(&format!("\n{left_label} intents from base:\n"));
             for line in &self.left_intent_lines {
                 out.push_str(&format!("{line}\n"));
             }
         } else if !self.left_mutations.is_empty() {
-            out.push_str("\nleft (HEAD) intents from base:\n");
+            out.push_str(&format!("\n{left_label} intents from base:\n"));
             for line in intent::format_intent_lines(None, &self.left_mutations) {
                 out.push_str(&format!("{line}\n"));
             }
         }
         if !self.left_mutations.is_empty() {
-            out.push_str("\nleft (HEAD) mutations from base:\n");
+            out.push_str(&format!("\n{left_label} mutations from base:\n"));
             for (i, m) in self.left_mutations.iter().enumerate() {
                 out.push_str(&format!("  [{i}] {m:?}\n"));
             }
         }
         if !self.right_intent_lines.is_empty() {
-            out.push_str("\nright (other branch) intents from base:\n");
+            out.push_str(&format!("\n{right_label} intents from base:\n"));
             for line in &self.right_intent_lines {
                 out.push_str(&format!("{line}\n"));
             }
         } else if !self.right_mutations.is_empty() {
-            out.push_str("\nright (other branch) intents from base:\n");
+            out.push_str(&format!("\n{right_label} intents from base:\n"));
             for line in intent::format_intent_lines(None, &self.right_mutations) {
                 out.push_str(&format!("{line}\n"));
             }
         }
         if !self.right_mutations.is_empty() {
-            out.push_str("\nright (other branch) mutations from base:\n");
+            out.push_str(&format!("\n{right_label} mutations from base:\n"));
             for (i, m) in self.right_mutations.iter().enumerate() {
                 out.push_str(&format!("  [{i}] {m:?}\n"));
             }
@@ -101,6 +121,111 @@ impl MergeConflict {
         }
         out
     }
+
+    pub fn format_focused_report(&self, path: &str) -> String {
+        self.format_focused_report_with_labels(path, "ours", "theirs", true)
+    }
+
+    pub fn format_focused_report_with_labels(
+        &self,
+        path: &str,
+        left_label: &str,
+        right_label: &str,
+        supports_resolution: bool,
+    ) -> String {
+        const MAX_OVERLAPS: usize = 3;
+        let mut out = format!("conflict: {path}\n  reason: {}\n", self.message);
+
+        if let Some(line) = self.text_line {
+            out.push_str(&format!("  overlapping line: {}\n", line + 1));
+        }
+
+        for overlap in self.overlapping.iter().take(MAX_OVERLAPS) {
+            let ours = intent_line_at(
+                &self.left_intent_lines,
+                &self.left_mutations,
+                overlap.left_index,
+            );
+            let theirs = intent_line_at(
+                &self.right_intent_lines,
+                &self.right_mutations,
+                overlap.right_index,
+            );
+            out.push_str(&format!("  {left_label}: {ours}\n"));
+            out.push_str(&format!("  {right_label}: {theirs}\n"));
+            out.push_str(&format!("  overlap: {}\n", overlap.reason.concise()));
+        }
+
+        if self.overlapping.len() > MAX_OVERLAPS {
+            out.push_str(&format!(
+                "  {} more overlap example(s) omitted; use --details\n",
+                self.overlapping.len() - MAX_OVERLAPS
+            ));
+        } else if self.overlapping.is_empty() {
+            if let Some(line) = self.left_intent_lines.first() {
+                out.push_str(&format!(
+                    "  {left_label}: {}\n",
+                    compact_existing_intent_line(line)
+                ));
+            }
+            if let Some(line) = self.right_intent_lines.first() {
+                out.push_str(&format!(
+                    "  {right_label}: {}\n",
+                    compact_existing_intent_line(line)
+                ));
+            }
+        }
+
+        if supports_resolution {
+            out.push_str(&format!(
+                "  resolve: --resolve {path}:ours or --resolve {path}:theirs\n"
+            ));
+        }
+        out
+    }
+}
+
+fn intent_line_at(lines: &[String], mutations: &[Mutation], index: usize) -> String {
+    let marker = format!("[{index}] ");
+    if let Some(line) = lines.iter().find(|line| line.contains(&marker)) {
+        return compact_existing_intent_line(line);
+    }
+    mutations
+        .get(index)
+        .map(|mutation| {
+            let classified = intent::classify_mutation(None, mutation);
+            intent::format_intent_compact(None, &classified)
+        })
+        .unwrap_or_else(|| "structural edit".into())
+}
+
+fn compact_existing_intent_line(line: &str) -> String {
+    let label = line
+        .trim()
+        .split_once("] ")
+        .map_or_else(|| line.trim(), |(_, label)| label);
+    if label.starts_with("set trivia") || label == "set root trailing trivia" {
+        return "update formatting".into();
+    }
+    if label.starts_with("insert ") {
+        return label
+            .split_once(" under ")
+            .map_or(label, |(summary, _)| summary)
+            .to_string();
+    }
+    if label.starts_with("move subtree") {
+        return "move subtree".into();
+    }
+    if label.starts_with("move ") {
+        return "move node".into();
+    }
+    if label.starts_with("reorder members") {
+        return "reorder members".into();
+    }
+    label
+        .split_once(" at ")
+        .map_or(label, |(summary, _)| summary)
+        .to_string()
 }
 
 /// Per-path merge failure with structured conflict detail.
@@ -749,6 +874,25 @@ mod tests {
         assert!(report.contains("left ["));
         assert!(report.contains("intents from base"));
         assert!(report.contains("rename"));
+        let focused = c.format_focused_report("main.rs");
+        assert!(focused.contains("conflict: main.rs"), "{focused}");
+        assert!(focused.contains("ours: rename"), "{focused}");
+        assert!(focused.contains("theirs: rename"), "{focused}");
+        assert!(focused.contains("--resolve main.rs:ours"), "{focused}");
+        let node_id = c.left_mutations[0].primary_node().unwrap().to_string();
+        assert!(!focused.contains(&node_id), "{focused}");
+        let contextual = c.format_focused_report_with_labels(
+            "main.rs",
+            "reverted parent",
+            "current HEAD",
+            false,
+        );
+        assert!(
+            contextual.contains("reverted parent: rename"),
+            "{contextual}"
+        );
+        assert!(contextual.contains("current HEAD: rename"), "{contextual}");
+        assert!(!contextual.contains("--resolve"), "{contextual}");
     }
 
     #[test]

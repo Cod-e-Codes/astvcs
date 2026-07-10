@@ -180,7 +180,8 @@ pub fn classify_mutations(
         .collect()
 }
 
-pub fn format_intent(base: Option<&AstGraph>, intent: &EditIntent) -> String {
+/// Format an intent with internal node identifiers for diagnostics.
+pub fn format_intent_detailed(base: Option<&AstGraph>, intent: &EditIntent) -> String {
     match intent {
         EditIntent::RenameIdentifier { node_id, new_name } => {
             let old = base
@@ -248,10 +249,123 @@ pub fn format_intent(base: Option<&AstGraph>, intent: &EditIntent) -> String {
     }
 }
 
-pub fn format_intent_lines(base: Option<&AstGraph>, mutations: &[Mutation]) -> Vec<String> {
+/// Backward-compatible detailed intent formatting for library callers.
+pub fn format_intent(base: Option<&AstGraph>, intent: &EditIntent) -> String {
+    format_intent_detailed(base, intent)
+}
+
+/// Format an intent for normal command output without internal node identifiers.
+pub fn format_intent_compact(base: Option<&AstGraph>, intent: &EditIntent) -> String {
+    match intent {
+        EditIntent::RenameIdentifier { node_id, new_name } => {
+            let old = base
+                .and_then(|g| g.get(node_id))
+                .map(|n| n.payload.as_str())
+                .unwrap_or("?");
+            format!("rename `{old}` to `{new_name}`")
+        }
+        EditIntent::EditLiteral { new_value, .. } => {
+            format!("edit literal to `{new_value}`")
+        }
+        EditIntent::EditPayload {
+            kind, new_payload, ..
+        } => {
+            format!("edit {} payload to `{new_payload}`", kind.as_str())
+        }
+        EditIntent::PrependComment => "prepend comment".into(),
+        EditIntent::InsertStatement => "insert statement".into(),
+        EditIntent::DeleteStatement => "delete statement".into(),
+        EditIntent::InsertSubtree { kind, before, .. } => {
+            let position = if before.is_some() {
+                " before sibling"
+            } else {
+                ""
+            };
+            format!("insert {}{position}", kind.as_str())
+        }
+        EditIntent::DeleteSubtree { kind, .. } => {
+            format!("delete {} subtree", kind.as_str())
+        }
+        EditIntent::MoveNode { .. } => "move node".into(),
+        EditIntent::MoveSubtree { .. } => "move subtree".into(),
+        EditIntent::RenamePath {
+            from,
+            to,
+            with_edits,
+        } => {
+            if *with_edits {
+                format!("rename path `{from}` -> `{to}` (with edits)")
+            } else {
+                format!("rename path `{from}` -> `{to}`")
+            }
+        }
+        EditIntent::ReorderMembers { .. } => "reorder members".into(),
+        EditIntent::SetTrivia { .. } | EditIntent::SetRootTrailingTrivia => {
+            "update formatting".into()
+        }
+    }
+}
+
+fn is_formatting_intent(intent: &EditIntent) -> bool {
+    matches!(
+        intent,
+        EditIntent::SetTrivia { .. } | EditIntent::SetRootTrailingTrivia
+    )
+}
+
+/// Compact intents in mutation order, coalescing formatting-only changes.
+///
+/// Each item includes the source mutation indices represented by its label.
+pub fn compact_intents(
+    base: Option<&AstGraph>,
+    mutations: &[Mutation],
+) -> Vec<(Vec<usize>, String)> {
+    let classified = classify_mutations(base, mutations);
+    let formatting_indices: Vec<usize> = classified
+        .iter()
+        .filter_map(|(index, intent)| is_formatting_intent(intent).then_some(*index))
+        .collect();
+    let first_formatting = formatting_indices.first().copied();
+    let mut out = Vec::new();
+
+    for (index, intent) in classified {
+        if is_formatting_intent(&intent) {
+            if Some(index) == first_formatting {
+                let count = formatting_indices.len();
+                let label = if count == 1 {
+                    "update formatting".to_string()
+                } else {
+                    format!("update formatting ({count} changes)")
+                };
+                out.push((formatting_indices.clone(), label));
+            }
+            continue;
+        }
+        out.push((vec![index], format_intent_compact(base, &intent)));
+    }
+    out
+}
+
+pub fn format_intent_lines_detailed(
+    base: Option<&AstGraph>,
+    mutations: &[Mutation],
+) -> Vec<String> {
     classify_mutations(base, mutations)
         .into_iter()
-        .map(|(i, intent)| format!("  [{i}] {}", format_intent(base, &intent)))
+        .map(|(i, intent)| format!("  [{i}] {}", format_intent_detailed(base, &intent)))
+        .collect()
+}
+
+/// Backward-compatible detailed intent lines for library diagnostics.
+pub fn format_intent_lines(base: Option<&AstGraph>, mutations: &[Mutation]) -> Vec<String> {
+    format_intent_lines_detailed(base, mutations)
+}
+
+pub fn format_intent_lines_compact(base: Option<&AstGraph>, mutations: &[Mutation]) -> Vec<String> {
+    compact_intents(base, mutations)
+        .into_iter()
+        .enumerate()
+        .map(|(display_index, (_, label))| format!("  [{display_index}] {label}"))
         .collect()
 }
 
@@ -390,5 +504,34 @@ mod tests {
             new_value: "2".into(),
         };
         assert!(intents_disjoint(&a, &b));
+    }
+
+    #[test]
+    fn compact_intent_omits_node_ids() {
+        let base = parse_rust("fn sample() { let value = 1; }\n").unwrap();
+        let next = parse_rust("fn sample() { let renamed = 1; }\n").unwrap();
+        let diff = crate::diff::diff_graphs(&base, &next);
+        let detailed = format_intent_lines_detailed(Some(&base), &diff.mutations).join("\n");
+        let compact = format_intent_lines_compact(Some(&base), &diff.mutations).join("\n");
+        assert!(
+            detailed.len() > compact.len(),
+            "{detailed:?} vs {compact:?}"
+        );
+        assert!(compact.contains("rename `value` to `renamed`"), "{compact}");
+        assert!(!compact.contains(" at "), "{compact}");
+    }
+
+    #[test]
+    fn compact_intents_aggregate_formatting_changes_in_stable_order() {
+        let base = parse_rust("fn sample() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
+        let next = parse_rust("fn sample() {\n  let x = 1;\n\n    let y = 2;\n}\n").unwrap();
+        let diff = crate::diff::diff_graphs(&base, &next);
+        let compact = compact_intents(Some(&base), &diff.mutations);
+        let formatting: Vec<_> = compact
+            .iter()
+            .filter(|(_, label)| label.starts_with("update formatting"))
+            .collect();
+        assert_eq!(formatting.len(), 1, "{compact:?}");
+        assert!(!formatting[0].0.is_empty());
     }
 }

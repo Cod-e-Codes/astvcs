@@ -42,7 +42,16 @@ impl Repo {
 
         if !plan.is_clean() {
             trace::warn("cherry-pick: aborted due to conflicts");
-            return Err(RepoError::merge_conflict(plan.format_conflicts()));
+            return Err(
+                RepoError::merge_conflict(plan.format_conflicts()).with_concise(
+                    plan.format_conflicts_focused_for(
+                        "cherry-pick",
+                        "current HEAD",
+                        "picked state",
+                        false,
+                    ),
+                ),
+            );
         }
 
         let materialize_opts = MaterializeOptions::new("cherry-pick").force(force);

@@ -28,6 +28,9 @@ pub enum RepoErrorKind {
 pub struct RepoError {
     pub kind: RepoErrorKind,
     pub message: String,
+    /// Optional focused CLI presentation. Library display and JSON keep `message`.
+    #[serde(skip)]
+    pub concise: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,6 +42,7 @@ impl RepoError {
         Self {
             kind,
             message: message.into(),
+            concise: None,
             path: None,
             reference: None,
         }
@@ -52,6 +56,19 @@ impl RepoError {
     pub fn with_reference(mut self, reference: impl Into<String>) -> Self {
         self.reference = Some(reference.into());
         self
+    }
+
+    pub fn with_concise(mut self, concise: impl Into<String>) -> Self {
+        self.concise = Some(concise.into());
+        self
+    }
+
+    pub fn cli_message(&self, details: bool) -> &str {
+        if details {
+            &self.message
+        } else {
+            self.concise.as_deref().unwrap_or(&self.message)
+        }
     }
 
     pub fn lock_contention(message: impl Into<String>) -> Self {
@@ -222,5 +239,16 @@ mod tests {
             "author identity not configured; run `astvcs identity set --name <name> --email <email>` \
              or set ASTVCS_AUTHOR_NAME and ASTVCS_AUTHOR_EMAIL"
         );
+    }
+
+    #[test]
+    fn concise_presentation_does_not_change_display_or_json() {
+        let err = RepoError::merge_conflict("full diagnostics").with_concise("focused diagnostics");
+        assert_eq!(err.cli_message(false), "focused diagnostics");
+        assert_eq!(err.cli_message(true), "full diagnostics");
+        assert_eq!(err.to_string(), "full diagnostics");
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains("\"message\":\"full diagnostics\""), "{json}");
+        assert!(!json.contains("concise"), "{json}");
     }
 }

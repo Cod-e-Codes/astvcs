@@ -13,6 +13,7 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `--version` | Print crate version and exit |
 | `--repo <path>` | Repository root (default: current directory) |
 | `-v`, `--verbose` | Print operational `notice:` detail to stderr (also forces a full working-tree scan) |
+| `--details` | Show state IDs, node IDs, raw mutations, and complete conflict diagnostics without enabling operational notices |
 | `--json` | On failure, print a structured JSON error object on stderr instead of `error: …` |
 
 ## Subcommands
@@ -24,11 +25,11 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
 | `status [--full-scan]` | Git-style two-column status: staged vs HEAD (`M `, `A `, `D `, `R `) and unstaged vs effective index (` M`, ` A`, ` D`, `??`). Combined `MM` when both. Clean tree: `nothing to commit, working tree clean`. Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. Incremental scan is used by default; pass `--full-scan` to walk every directory. |
 | `add [-u\|--update] [-A\|--all] <paths...>` | Stage paths for commit. `-u`: tracked modifications and deletions only. `-A`: all changes including untracked. Directory paths recurse. |
-| `diff [path]` | Unstaged diff (working tree vs staging overlay or HEAD). Path renames print `(rename)` or `(rename with edits)` with a `RenamePath` intent. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
+| `diff [path]` | Unstaged diff (working tree vs staging overlay or HEAD). Every semantic edit is shown with compact intent labels; repeated formatting-only intents are aggregated. Path renames print `(rename)` or `(rename with edits)`. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
 | `diff --staged` / `--cached [path]` | Staged diff vs HEAD |
 | `diff --state <ref>` | Diff current HEAD against a branch, remote-tracking ref, or state id |
 | `diff --base <ref> --left <ref> --right <ref> [path]` | Three-way diff from merge base |
-| `diff --view [...]` | Same comparison modes as text `diff` (`[path]`, `--staged`, `--state`, or `--base`/`--left`/`--right`). Writes a self-contained HTML file under the system temp directory, opens it in the default browser (skipped when `CI` or `ASTVCS_NO_BROWSER` is set), and prints the file path. The viewer is alignment-first: paired old/new AST trees with match method labels, plus intents and mutations for the selected edge. Text and binary paths show honest summaries without fake trees. |
+| `diff --view [...]` | Same comparison modes as text `diff` (`[path]`, `--staged`, `--state`, or `--base`/`--left`/`--right`). Writes a self-contained HTML file under the system temp directory, opens it in the default browser (skipped when `CI` or `ASTVCS_NO_BROWSER` is set), and prints the file path. The viewer opens on a change summary, expands changed context, and lazily reveals count-labelled unchanged branches. Use `n`/`p` for changes and `j`/`k` for files. Alignment, node IDs, mutations, and pipeline data stay in collapsed details. |
 | `commit -m <msg> [--full-scan] [--no-verify]` | Commit staged changes when staging is active (after first `add`); otherwise legacy whole-tree commit. Errors when staging is active but empty while the working tree has changes. Requires configured author identity. Pass `--full-scan` to bypass the scan cache. Runs `pre-commit` and `commit-msg` hooks unless `--no-verify`. |
 | `branch list` | List branches |
 | `branch create <name> [--from <branch>]` | Create a branch |
@@ -135,7 +136,7 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 `stash push` captures the working-tree diff against HEAD (disk is source of truth; staged content already on disk is included). By default only tracked paths (HEAD manifest entries and tracked deletions) are stashed; pass `-u` / `--include-untracked` to include untracked files from the working-tree scan. Errors with `no local changes to stash` when nothing differs. After saving, astvcs materializes HEAD to disk (clears staging) so the tree is clean for checkout.
 
-`stash apply` and `stash pop` three-way merge only paths listed in the stash manifest (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write results to the working tree only (`index.json` stays at HEAD). Other tracked files are left unchanged. Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict` and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
+`stash apply` and `stash pop` three-way merge only paths listed in the stash manifest (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write results to the working tree only (`index.json` stays at HEAD). Other tracked files are left unchanged. Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict`, labels current HEAD and the stashed change, omits unsupported `--resolve` guidance, and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
 
 Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD state id).
 
@@ -151,7 +152,7 @@ v1 does not include an interactive rebase editor or commit reordering.
 
 ### `cherry-pick`
 
-`cherry-pick <ref> -m <msg>` applies the changes introduced by a single state onto HEAD as a new commit. Resolves `<ref>` like other commands (branch, tag, remote-tracking ref, or state id). Refuses merge commits and the root empty state. Refuses when staging is non-empty or the working tree is dirty unless `--force`. On conflict, aborts with no side effects (HEAD, refs, disk, and timeline unchanged), same contract as `merge`. On success, writes a new state with the user message and current author identity, materializes it, and updates the branch tip or detached HEAD.
+`cherry-pick <ref> -m <msg>` applies the changes introduced by a single state onto HEAD as a new commit. Resolves `<ref>` like other commands (branch, tag, remote-tracking ref, or state id). Refuses merge commits and the root empty state. Refuses when staging is non-empty or the working tree is dirty unless `--force`. On conflict, labels current HEAD and the picked state, omits unsupported `--resolve` guidance, and aborts with no side effects (HEAD, refs, disk, and timeline unchanged). On success, writes a new state with the user message and current author identity, materializes it, and updates the branch tip or detached HEAD.
 
 Three-way roles match rebase replay geometry (`base` = parent of the cherry-picked commit, `left` = HEAD, `right` = cherry-picked commit). Unlike `revert` (which inverts roles: `base` = target, `left` = parent, `right` = HEAD), cherry-pick applies **right vs base** onto **left**.
 
@@ -207,7 +208,7 @@ If the reverted manifest is identical to HEAD, revert is a true no-op (same stdo
 
 Paths added in the target state and modified again on HEAD before revert produce a conflict (`path modified after the reverted state`) rather than silently keeping HEAD's newer content.
 
-`--dry-run` plans in memory only; conflicts print the report and exit non-zero without writes (same contract as `merge --dry-run`).
+`--dry-run` plans in memory only; conflicts label the reverted parent and current HEAD, omit unsupported `--resolve` guidance, and exit non-zero without writes.
 
 ### Network sync
 
@@ -331,7 +332,7 @@ fsck: repository ok
 
 ### Merge conflict resolution
 
-When a merge would conflict, pass `--resolve <path>:ours` or `--resolve <path>:theirs` for each conflicted path (repository-relative, matching manifest keys). `ours` is the current branch (HEAD); `theirs` is the branch being merged in. Non-conflicted paths keep the structurally merged result from the planner.
+When a merge would conflict, default output lists each path, the overlapping ours and theirs intents, the reason, and resolution syntax. Repeated overlap examples are limited per path with an omitted count. Pass `--details` for state IDs, raw mutations, and every overlap. Resolve with `--resolve <path>:ours` or `--resolve <path>:theirs` for each conflicted path (repository-relative, matching manifest keys). `ours` is the current branch (HEAD); `theirs` is the branch being merged in. Non-conflicted paths keep the structurally merged result from the planner.
 
 - Unresolved conflicts abort the merge with no ref, working tree, or `index.json` changes.
 - `--resolve` for a path not in the conflict list errors before any write.
@@ -342,7 +343,7 @@ With `--dry-run`, resolutions are applied in memory only: a fully resolved plan 
 
 ## Stderr output
 
-By default, stderr shows only `warning:` lines (unexpected parse fallback, merge conflicts, materialize `--force` clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. NUL-containing or non-UTF-8 file content is stored as binary blobs (no warning). With `-v`, `notice:` lines are included: scan results, parse mode per file, text fallback reasons, text/binary blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
+By default, stderr shows only `warning:` lines (unexpected parse fallback, merge conflicts, materialize `--force` clobbers, index inconsistencies). Known text-only paths such as `.gitignore`, `.md`, `.txt`, `go.sum`, and `.ps1` do not warn; they store as text blobs without stderr output. NUL-containing or non-UTF-8 file content is stored as binary blobs (no warning). `--details` expands structural output without operational notices. With `-v`, structural details and `notice:` lines are included: scan results, parse mode per file, text fallback reasons, text/binary blob storage, blob writes, materialize actions, merge planning, reset/revert planning, and no-op commits. Primary command output stays on stdout.
 
 `status` and `diff` also surface text fallback on stdout for AST-capable paths (see `status` and `diff` rows above) so CI and operators see structural diff loss without relying on stderr alone.
 
@@ -360,7 +361,7 @@ With `--json`, failures print a single JSON object on stderr, for example:
 {"kind":"missing_identity","message":"author identity not configured; run `astvcs identity set --name <name> --email <email>` or set ASTVCS_AUTHOR_NAME and ASTVCS_AUTHOR_EMAIL"}
 ```
 
-The `message` field matches the text shown after `error:` when `--json` is omitted.
+The JSON `message` field and library `Display` keep the complete diagnostic. Focused plain CLI errors may be shorter; pass `--details` to print the complete message.
 
 ## Ignore rules
 

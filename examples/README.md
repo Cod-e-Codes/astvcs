@@ -34,7 +34,7 @@ Run all walkthroughs non-interactively (build, reset, log to stdout/stderr):
 
 Integration tests in `tests/integration.rs` cover the same scenarios in CI. The full catalog is in [`.cursor/skills/astvcs-integration-tests/references/test-catalog.md`](../.cursor/skills/astvcs-integration-tests/references/test-catalog.md).
 
-`astvcs diff --view` opens the shipped alignment-first HTML viewer (same binary assets as production). It is not a second demo UI. Integration coverage: `cli_diff_view_writes_html_with_alignment`.
+`astvcs diff --view` opens the shipped change-first HTML viewer (same binary assets as production). It starts with compact intents, next and previous change controls, and lazy unchanged branches. Use `--details` on text diffs for node IDs and raw mutations. Integration coverage: `cli_diff_view_writes_html_with_alignment` and `cli_diff_view_large_file_keeps_change_first_controls`.
 
 | Fixture | Integration test | What it shows |
 |---------|------------------|---------------|
@@ -181,7 +181,7 @@ Set-Content -NoNewline $I\conflict.rs "fn sample() {`n    let alternate = 1;`n}`
 .\target\release\astvcs.exe --repo $I merge conflict --dry-run
 ```
 
-`merge --dry-run` exits 1 on conflict; the repo is unchanged.
+`merge --dry-run` exits 1 on conflict; the repo is unchanged. The focused report shows the path, ours and theirs intents, overlap reason, and exact resolution syntax. Add `--details` for state IDs, raw mutations, and every overlap.
 
 Resolve by picking one side (`ours` = HEAD, `theirs` = merged branch):
 

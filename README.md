@@ -31,7 +31,9 @@ intents:
 
 Three-way merge applies both sides when alignment finds disjoint structural edits. Overlapping edits on the same node (for example, two renames of one identifier) are structural conflicts; the repository stays unchanged until you pass `merge --resolve path:ours|theirs` for each conflicted path.
 
-To inspect how nodes were paired, run `astvcs diff --view` (optionally with a path, `--staged`, `--state`, or three-way flags). It opens a local HTML page built from the real alignment export, not a mock overlay.
+Default diffs use compact intent labels and keep internal node IDs hidden. Pass `--details` for raw mutations and complete structural diagnostics, or `-v` for the same details plus operational notices.
+
+To inspect how nodes were paired, run `astvcs diff --view` (optionally with a path, `--staged`, `--state`, or three-way flags). It opens a local HTML page on the change summary, with next and previous change navigation and lazy unchanged branches. The page uses the real alignment export, not a mock overlay.
 
 ## Documentation
 
@@ -42,7 +44,7 @@ To inspect how nodes were paired, run `astvcs diff --view` (optionally with a pa
 | [examples/README.md](examples/README.md) | Nine runnable fixture walkthroughs |
 | [docs/RELEASE.md](docs/RELEASE.md) | Tagged release packaging |
 
-Contributor Agent Skills live under [`.cursor/skills/`](.cursor/skills/) (`astvcs-develop`, `astvcs-structural-diff-merge`, `astvcs-add-tree-sitter-language`, `astvcs-integration-tests`).
+Contributor Agent Skills live under [`.cursor/skills/`](.cursor/skills/) (`astvcs-develop`, `astvcs-output-ux`, `astvcs-structural-diff-merge`, `astvcs-add-tree-sitter-language`, `astvcs-integration-tests`).
 
 ## Quick start
 
@@ -60,7 +62,7 @@ cargo build --release
 .\target\release\astvcs.exe log
 ```
 
-Use `--repo <path>` to target another directory. Pass `-v` / `--verbose` for operational `notice:` lines on stderr. Pass `--json` on any command for structured JSON errors on failure.
+Use `--repo <path>` to target another directory. Pass `--details` for structural diagnostics, `-v` / `--verbose` for those details plus operational `notice:` lines on stderr, or `--json` for structured JSON errors on failure.
 
 Run all example fixtures non-interactively: `.\examples\run-demos.ps1`.
 
@@ -95,7 +97,7 @@ CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push t
 
 **In scope today**
 
-- AST diff and three-way merge for supported languages; text and binary fallback for everything else; `diff --view` alignment-first HTML viewer
+- AST diff and three-way merge for supported languages; text and binary fallback for everything else; change-first `diff --view` HTML viewer
 - Staging index (`add`, `diff --staged`), branches, lightweight tags, author identity
 - `reset` (soft, mixed, hard), `revert`, `rebase`, `cherry-pick`, `stash`, `blame`, `bisect` on linear first-parent history
 - Remotes over local path, HTTP, HTTPS, or SSH; optional bearer auth; TLS on `serve`; shallow `clone` / `fetch` with `--depth`
