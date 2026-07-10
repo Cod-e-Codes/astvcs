@@ -1,5 +1,7 @@
 use crate::frontend::FileContent;
-use crate::merge::{PathMergeConflict, PathMergeTrackedOutcome, merge_tracked_path};
+use crate::merge::{
+    ConflictResolutionStyle, PathMergeConflict, PathMergeTrackedOutcome, merge_tracked_path,
+};
 use crate::store::atomic::{self, write_atomic_json};
 use crate::store::blobs::BlobStore;
 use crate::store::error::{RepoError, RepoResult};
@@ -174,7 +176,7 @@ fn format_stash_conflicts_focused(conflicts: &[PathMergeConflict]) -> String {
             &conflict.path,
             "current HEAD",
             "stashed change",
-            false,
+            ConflictResolutionStyle::None,
         ));
     }
     out.push_str("use --details for state IDs, mutations, and all overlap diagnostics\n");

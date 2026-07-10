@@ -1,3 +1,4 @@
+use crate::merge::ConflictResolutionStyle;
 use crate::store::error::{RepoError, RepoResult};
 use crate::store::identity::resolve_author_identity;
 use crate::store::repo::{
@@ -48,7 +49,7 @@ impl Repo {
                         "cherry-pick",
                         "current HEAD",
                         "picked state",
-                        false,
+                        ConflictResolutionStyle::None,
                     ),
                 ),
             );

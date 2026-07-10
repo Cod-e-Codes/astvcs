@@ -5,7 +5,10 @@ use crate::diff::{
 };
 use crate::frontend::{FileContent, path_has_text_fallback};
 use crate::intent;
-use crate::merge::{MergeConflict, PathMergeConflict, PathMergeTrackedOutcome, merge_tracked_path};
+use crate::merge::{
+    ConflictResolutionStyle, MergeConflict, PathMergeConflict, PathMergeTrackedOutcome,
+    merge_tracked_path,
+};
 use crate::store::atomic::{self, write_atomic_json, write_atomic_text};
 use crate::store::blobs::BlobStore;
 use crate::store::error::{RepoError, RepoResult};
@@ -311,7 +314,16 @@ impl MergePlan {
     }
 
     pub fn format_conflicts_focused(&self) -> String {
-        self.format_conflicts_focused_for("merge", "ours", "theirs", true)
+        self.format_conflicts_focused_for("merge", "ours", "theirs", ConflictResolutionStyle::Merge)
+    }
+
+    pub fn format_rebase_conflicts_focused(&self) -> String {
+        self.format_conflicts_focused_for(
+            "rebase",
+            "ours",
+            "theirs",
+            ConflictResolutionStyle::RebaseContinue,
+        )
     }
 
     pub fn format_conflicts_focused_for(
@@ -319,7 +331,7 @@ impl MergePlan {
         operation: &str,
         left_label: &str,
         right_label: &str,
-        supports_resolution: bool,
+        resolution: ConflictResolutionStyle,
     ) -> String {
         let mut out = format!(
             "{operation} would conflict in {} path(s)\n",
@@ -330,7 +342,7 @@ impl MergePlan {
                 &conflict.path,
                 left_label,
                 right_label,
-                supports_resolution,
+                resolution,
             ));
         }
         out.push_str("use --details for state IDs, mutations, and all overlap diagnostics\n");
@@ -397,7 +409,7 @@ impl RevertPlan {
                 &conflict.path,
                 "reverted parent",
                 "current HEAD",
-                false,
+                ConflictResolutionStyle::None,
             ));
         }
         out.push_str("use --details for state IDs, mutations, and all overlap diagnostics\n");

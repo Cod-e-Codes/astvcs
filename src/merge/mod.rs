@@ -61,6 +61,27 @@ impl OverlapReason {
     }
 }
 
+/// How focused conflict output should describe resolution syntax.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConflictResolutionStyle {
+    None,
+    Merge,
+    RebaseContinue,
+}
+
+impl ConflictResolutionStyle {
+    fn append_line(self, out: &mut String, path: &str) {
+        let line = match self {
+            Self::None => return,
+            Self::Merge => format!("  resolve: --resolve {path}:ours or --resolve {path}:theirs\n"),
+            Self::RebaseContinue => format!(
+                "  resolve: rebase --continue --resolve {path}:ours or rebase --continue --resolve {path}:theirs\n"
+            ),
+        };
+        out.push_str(&line);
+    }
+}
+
 impl MergeConflict {
     pub fn format_report(&self, path: &str) -> String {
         self.format_report_with_labels(path, "left (HEAD)", "right (other branch)")
@@ -123,7 +144,12 @@ impl MergeConflict {
     }
 
     pub fn format_focused_report(&self, path: &str) -> String {
-        self.format_focused_report_with_labels(path, "ours", "theirs", true)
+        self.format_focused_report_with_labels(
+            path,
+            "ours",
+            "theirs",
+            ConflictResolutionStyle::Merge,
+        )
     }
 
     pub fn format_focused_report_with_labels(
@@ -131,7 +157,7 @@ impl MergeConflict {
         path: &str,
         left_label: &str,
         right_label: &str,
-        supports_resolution: bool,
+        resolution: ConflictResolutionStyle,
     ) -> String {
         const MAX_OVERLAPS: usize = 3;
         let mut out = format!("conflict: {path}\n  reason: {}\n", self.message);
@@ -176,11 +202,7 @@ impl MergeConflict {
             }
         }
 
-        if supports_resolution {
-            out.push_str(&format!(
-                "  resolve: --resolve {path}:ours or --resolve {path}:theirs\n"
-            ));
-        }
+        resolution.append_line(&mut out, path);
         out
     }
 }
@@ -885,7 +907,17 @@ mod tests {
             "main.rs",
             "reverted parent",
             "current HEAD",
-            false,
+            ConflictResolutionStyle::None,
+        );
+        let rebase = c.format_focused_report_with_labels(
+            "main.rs",
+            "ours",
+            "theirs",
+            ConflictResolutionStyle::RebaseContinue,
+        );
+        assert!(
+            rebase.contains("rebase --continue --resolve main.rs:ours"),
+            "{rebase}"
         );
         assert!(
             contextual.contains("reverted parent: rename"),

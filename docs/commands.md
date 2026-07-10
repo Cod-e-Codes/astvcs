@@ -146,7 +146,7 @@ Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD
 
 Progress is stored in `.astvcs/rebase-state.json` (`branch`, `upstream`, `onto`, `original_tip`, `current_head`, `remaining`, `conflicted`). Each commit is replayed with a three-way merge (`base` = original parent, `left` = current replay head, `right` = commit being replayed). Replayed states keep the original commit message and author metadata.
 
-On replay conflict, the branch tip stays at `original_tip` until the first successful replay; after partial progress the tip is the last good `current_head`. The conflicted merge result is materialized to the working tree (no conflict markers). Use `rebase --continue` with `--resolve path:ours|theirs` (ours = current replay head, theirs = replayed commit) or edit conflicted paths on disk and continue. `rebase --abort` restores `original_tip` and materializes it.
+On replay conflict, the branch tip stays at `original_tip` until the first successful replay; after partial progress the tip is the last good `current_head`. The conflicted merge result is materialized to the working tree (no conflict markers). Focused stderr says `rebase would conflict` and shows `rebase --continue --resolve path:ours|theirs` (ours = current replay head, theirs = replayed commit). You can also edit conflicted paths on disk and continue. `rebase --abort` restores `original_tip` and materializes it.
 
 v1 does not include an interactive rebase editor or commit reordering.
 

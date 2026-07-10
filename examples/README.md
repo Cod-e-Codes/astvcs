@@ -34,7 +34,7 @@ Run all walkthroughs non-interactively (build, reset, log to stdout/stderr):
 
 Integration tests in `tests/integration.rs` cover the same scenarios in CI. The full catalog is in [`.cursor/skills/astvcs-integration-tests/references/test-catalog.md`](../.cursor/skills/astvcs-integration-tests/references/test-catalog.md).
 
-`astvcs diff --view` opens the shipped change-first HTML viewer (same binary assets as production). It starts with compact intents, next and previous change controls, and lazy unchanged branches. Use `--details` on text diffs for node IDs and raw mutations. Integration coverage: `cli_diff_view_writes_html_with_alignment` and `cli_diff_view_large_file_keeps_change_first_controls`.
+`astvcs diff --view` opens the shipped change-first HTML viewer (same binary assets as production). It starts with compact intents, next and previous change controls, and lazy unchanged branches. Use `astvcs diff --details` for node IDs and raw mutations in terminal output. Integration coverage: `cli_diff_view_writes_html_with_alignment` and `cli_diff_view_large_file_keeps_change_first_controls`.
 
 | Fixture | Integration test | What it shows |
 |---------|------------------|---------------|

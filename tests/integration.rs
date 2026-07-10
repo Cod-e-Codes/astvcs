@@ -3410,6 +3410,13 @@ fn rebase_conflict_abort_restores() {
     repo.checkout_branch("feature").unwrap();
     let rebase = run_astvcs(Some(dir.path()), &["rebase", "main"]);
     assert!(!rebase.status.success(), "rebase should stop on conflict");
+    let stderr = String::from_utf8_lossy(&rebase.stderr);
+    assert!(stderr.contains("rebase would conflict"), "{stderr}");
+    assert!(
+        stderr.contains("rebase --continue --resolve main.rs:ours"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("merge would conflict in"), "{stderr}");
     assert!(dir.path().join(".astvcs/rebase-state.json").exists());
     assert_eq!(repo.head_state().unwrap(), feature_tip);
 

@@ -329,7 +329,7 @@ impl Repo {
         if !plan.is_clean() {
             trace::warn("rebase: conflicts remain after continue");
             return Err(RepoError::merge_conflict(plan.format_conflicts())
-                .with_concise(plan.format_conflicts_focused()));
+                .with_concise(plan.format_rebase_conflicts_focused()));
         }
 
         let new_head = self.persist_replay_commit(&entry, &plan, &state.current_head)?;
@@ -446,7 +446,7 @@ impl Repo {
             self.materialize_replay_conflict_unlocked(&plan, &state.current_head, force)?;
             trace::warn(format!("rebase: conflict replaying {commit_id}"));
             return Err(RepoError::merge_conflict(plan.format_conflicts())
-                .with_concise(plan.format_conflicts_focused()));
+                .with_concise(plan.format_rebase_conflicts_focused()));
         }
 
         let new_head = self.persist_replay_commit(&entry, &plan, &state.current_head)?;

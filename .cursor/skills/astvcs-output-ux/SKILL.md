@@ -21,7 +21,7 @@ metadata:
 - `--details` adds node IDs, state IDs, raw mutations, and complete diagnostics.
 - `-v` includes the same details plus operational `notice:` lines.
 - Keep `RepoError.message`, `Display`, `Deref`, and JSON output compatible. Plain CLI errors may use `RepoError.concise`.
-- Focused conflicts name each path, both sides' intents, and the overlap reason. Show exact `--resolve path:ours|theirs` syntax only for commands that support it, and use command-specific side labels. State when examples are omitted.
+- Focused conflicts name each path, both sides' intents, and the overlap reason. Show command-specific resolution syntax only where supported (`--resolve` for merge and pull, `rebase --continue --resolve` for rebase). Use command-specific side labels elsewhere. State when examples are omitted.
 
 ## Viewer
 

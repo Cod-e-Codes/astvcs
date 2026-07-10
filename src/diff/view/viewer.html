@@ -1077,6 +1077,24 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     return details;
   }
 
+  function focusFirstChange(entry, state) {
+    const file = entry.file;
+    if ((file.intents || []).length) {
+      selectIntent(state, file.intents[0].index);
+      return;
+    }
+    if ((file.text_edits || []).length) {
+      selectTextChange(state, 0);
+      return;
+    }
+    const heading = state.root.querySelector(".file-head");
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+      heading.scrollIntoView({ block: "start" });
+    }
+  }
+
   function renderFile(entry) {
     const file = entry.file;
     content.innerHTML = "";
@@ -1143,6 +1161,8 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     collapse.textContent = "Collapse unchanged";
     collapse.addEventListener("click", () => {
       fullTreeFiles.delete(activeIndex);
+      activeIntent = -1;
+      activeChangeKey = null;
       renderFile(entry);
     });
     toolbar.appendChild(collapse);
@@ -1152,6 +1172,7 @@ const ASTVCS_DIFF = /*__ASTVCS_DIFF_JSON__*/null;
     expand.addEventListener("click", () => {
       fullTreeFiles.delete(activeIndex);
       renderFile(entry);
+      if (currentState) focusFirstChange(entry, currentState);
     });
     toolbar.appendChild(expand);
     content.appendChild(toolbar);

@@ -53,7 +53,7 @@
 | `stash_pop_preserves_unstashed_tracked_files` | `stash pop` leaves tracked files outside the stash manifest on disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
 | `rebase_linear_success` | Feature branch commits replayed onto updated main |
-| `rebase_conflict_abort_restores` | Replay conflict then `rebase --abort` restores tip and disk |
+| `rebase_conflict_abort_restores` | Replay conflict stderr uses `rebase --continue --resolve`, then `rebase --abort` restores tip and disk |
 | `rebase_conflict_continue` | `--resolve` on `rebase --continue` finishes replay |
 | `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
 | `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
