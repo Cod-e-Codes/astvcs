@@ -8,9 +8,9 @@ User-facing boundaries (in scope vs out of scope) are summarized in the [README 
 
 ## Repository model
 
-**States.** Each `commit` writes a content-addressed state (64-character hex id) and a timeline entry with parent link(s). Merge states have two parents. Identical file content is stored once in the blob store; states hold only a manifest (`path -> blob hash`). Committing with no file changes is a no-op.
+**States.** Each `commit` writes a content-addressed manifest (`states/{manifest_id}.json`, where `manifest_id = hash_manifest(manifest)`) and a timeline entry with a distinct commit id (`timeline/{commit_id}.json`). Commit ids hash manifest content plus parents and metadata so parallel branches that reach identical trees keep separate messages and ancestry. Refs and `HEAD` point at commit ids. Merge states have two parents. Identical file content is stored once in the blob store; manifests hold only `path -> blob hash`. Committing with no file changes is a no-op.
 
-**Author identity.** Timeline entries record `author_name` and `author_email` metadata for every state created by `commit`, `merge`, `revert`, and `cherry-pick`. Identity is resolved at state-creation time from, in precedence order: `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL` environment variables, repository-local `config.json` (`author` object), then global `~/.astvcs/config.json`. If none are set, those commands fail with an actionable error rather than guessing from the OS user account. The initial empty root state and other pre-existing timeline entries without author fields deserialize with empty author strings. Identity is **not** part of the content-addressed state id: state ids remain `hash_manifest(manifest)` only, so adding author metadata does not change ids for unchanged file content.
+**Author identity.** Timeline entries record `author_name` and `author_email` metadata for every state created by `commit`, `merge`, `revert`, and `cherry-pick`. Identity is resolved at state-creation time from, in precedence order: `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL` environment variables, repository-local `config.json` (`author` object), then global `~/.astvcs/config.json`. If none are set, those commands fail with an actionable error rather than guessing from the OS user account. The initial empty root state and other pre-existing timeline entries without author fields deserialize with empty author strings. Author metadata is part of the commit id hash; manifest ids remain `hash_manifest(manifest)` only so unchanged file content still deduplicates in `states/` and the blob store.
 
 **Structured errors.** Repository operations return `RepoResult<T>` (`Result<T, RepoError>`). `RepoError` carries a `kind` enum (for example `lock_contention`, `dirty_working_tree`, `merge_conflict`, `missing_identity`), a human-readable `message` (matching legacy string output for `.contains(...)` compatibility via `Deref` to `str`), an optional non-serialized `concise` CLI presentation, and optional `path` / `reference` fields. Library `Display`, `Deref`, and JSON always use the complete `message`. Plain CLI output uses `concise` when available; `--details` restores the complete message. The CLI accepts `--json` on any command to print one JSON object on stderr on failure.
 
@@ -62,7 +62,7 @@ By default `gc` is a dry-run for both tiers and reports unreachable blob count, 
 
 **Blob pack storage.** New commits still write loose sharded JSON files under `.astvcs/blobs/`. Run `repack` to pack loose blobs into zstd-compressed pack files under `.astvcs/packs/` with an `index.json` mapping blob ids to pack offsets. Reads check loose files first, then the pack index. Content addressing is unchanged: blob ids remain SHA-256 over the canonical serialized `FileContent` JSON. Delta encoding (prefix/suffix against a same-shard base blob) is used only when it beats plain zstd compression. Packed blobs participate in reachability, `gc`, `fsck`, and network sync the same as loose blobs.
 
-**Repository integrity (`fsck`).** Default `fsck` is report-only. It checks: state manifests referencing missing blobs; refs pointing to state ids with no timeline entry; timeline entries with no state manifest (`missing state manifest`); state manifests with no timeline entry (`orphaned state manifest`); HEAD naming a branch with no ref file; `index.json` entries inconsistent with HEAD (wrong `state_id`, paths absent from HEAD manifest, or index present while HEAD is invalid); pack index entries that fail decompression or hash verification; orphan `.astvcs-tmp` files whose canonical target does not exist (the cases `cleanup_stray_temp_files` leaves alone); and `config.json` `format_version` greater than the binary supports (`unknown format version`). Unreachable states that were intentionally retained are not reported as errors; after `gc --prune-history` removed them, they are simply absent.
+**Repository integrity (`fsck`).** Default `fsck` is report-only. It checks: state manifests referencing missing blobs; refs pointing to commit ids with no timeline entry; timeline entries with no resolvable manifest (`missing state manifest`); `states/` files not referenced by any timeline entry (`orphaned state manifest`); HEAD naming a branch with no ref file; `index.json` entries inconsistent with HEAD (wrong `state_id`, paths absent from HEAD manifest, or index present while HEAD is invalid); pack index entries that fail decompression or hash verification; orphan `.astvcs-tmp` files whose canonical target does not exist (the cases `cleanup_stray_temp_files` leaves alone); and `config.json` `format_version` greater than the binary supports (`unknown format version`). Unreachable states that were intentionally retained are not reported as errors; after `gc --prune-history` removed them, they are simply absent.
 
 **`fsck --repair`** applies conservative fixes under the repo lock: rewrite `index.json` from HEAD when HEAD is valid and the index is inconsistent; remove stray `.astvcs-tmp` files when the canonical file exists. It refuses when HEAD names a missing branch while other local branches exist. It never repairs missing blobs, pack corruption, or missing state manifests. **`fsck --prune-refs`** deletes dangling local branch refs, tag refs, and remote-tracking ref files (never the `HEAD` file). Repairs run before a full re-check; applied fixes are listed in the output. Missing blobs and unreachable history still require `gc --prune` and optionally `gc --prune-history` after refs reflect the history you want to keep.
 
@@ -71,8 +71,8 @@ By default `gc` is a dry-run for both tiers and reports unreachable blob count, 
 ```
 .astvcs/blobs/       content-addressed file payloads (sharded by hash prefix; loose writes)
 .astvcs/packs/       optional zstd-compressed pack files and index.json (via repack)
-.astvcs/states/      state manifests
-.astvcs/timeline/    parent links and metadata
+.astvcs/states/      content-addressed manifests (`hash_manifest`)
+.astvcs/timeline/    commit ids, parent links, and metadata
 .astvcs/refs/heads/  branch tips
 .astvcs/repo.lock    exclusive advisory lock (empty; OS lock on open)
 HEAD                 branch name or state id
@@ -95,7 +95,7 @@ config.json          repository settings (`version`, `format_version`, `default_
 
 **Binary files.** Files whose bytes contain a NUL or are not valid UTF-8 are stored as `FileContent::Binary` blobs. UTF-8 text (including known text-only paths and parse-fallback sources) continues to use AST or text blobs. Binary payloads share the same content-addressed `blobs/` tree as AST and text: each blob is a JSON envelope `{"kind":"binary","bytes":"<base64>"}` hashed by the serialized bytes (same sharded layout as other kinds). A separate `blobs-bin/` tree was not added: one store keeps deduplication, `gc`, `fsck`, and network sync unified; the `kind` field distinguishes encodings on read. There is no maximum file size policy beyond available disk and memory. Materialization writes raw bytes via `atomic::write_atomic`. `status` reports binary paths as added, modified, or removed like text. `diff` and `diff --state` print path headers and `(binary file - content diff omitted)` instead of a byte-level diff. Three-way merge treats binary paths as opaque whole-file replace only (no structural or line merge); add/add with different bytes conflicts like text add/add.
 
-**File modes and symlinks.** Manifest entries are `path -> { blob, mode }` where `mode` is `regular` (default, serialized as a plain blob id string for backward compatibility), `executable`, or `symlink`. Mode metadata is separate from blob content hashing: the same text blob id with different modes produces different state ids (`hash_manifest` appends the mode tag only for non-regular entries). Symlink targets are stored as `FileContent::Symlink` blobs (`{"kind":"symlink","target":"..."}`) referenced from the manifest. On Unix, checkout creates symlinks via `symlink(2)` and restores the executable bit (`chmod +x`) for `executable` entries. On Windows, astvcs attempts `symlink_file`; if creation fails (common without Developer Mode or elevation), it emits `warning:` and skips the link rather than copying the target. CI enables Developer Mode on `windows-latest` so symlink integration tests run on both platforms. Executable detection on Unix uses the file mode bit; on Windows, `.sh`/`.bash`/`.zsh` files with a `#!` shebang are stored as `executable` (manifest round-trip; `+x` is not applied on disk). The working-tree scan includes symlinks (not followed). Merge treats symlinks as opaque whole-path values like binaries; replacing a symlink with a regular file (or vice versa) on one branch conflicts; mode-only edits merge when one side changed the mode from base. Absent paths are not treated as `regular` during three-way mode merge.
+**File modes and symlinks.** Manifest entries are `path -> { blob, mode }` where `mode` is `regular` (default, serialized as a plain blob id string for backward compatibility), `executable`, or `symlink`. Mode metadata is separate from blob content hashing: the same text blob id with different modes produces different manifest ids (`hash_manifest` appends the mode tag only for non-regular entries). Symlink targets are stored as `FileContent::Symlink` blobs (`{"kind":"symlink","target":"..."}`) referenced from the manifest. On Unix, checkout creates symlinks via `symlink(2)` and restores the executable bit (`chmod +x`) for `executable` entries. On Windows, astvcs attempts `symlink_file`; if creation fails (common without Developer Mode or elevation), it emits `warning:` and skips the link rather than copying the target. CI enables Developer Mode on `windows-latest` so symlink integration tests run on both platforms. Executable detection on Unix uses the file mode bit; on Windows, `.sh`/`.bash`/`.zsh` files with a `#!` shebang are stored as `executable` (manifest round-trip; `+x` is not applied on disk). The working-tree scan includes symlinks (not followed). Merge treats symlinks as opaque whole-path values like binaries; replacing a symlink with a regular file (or vice versa) on one branch conflicts; mode-only edits merge when one side changed the mode from base. Absent paths are not treated as `regular` during three-way mode merge.
 
 ## Parsing and storage
 
@@ -250,7 +250,7 @@ src/
   store/
     atomic.rs    same-directory rename writes, stray temp cleanup
     blobs.rs     content-addressed blob store
-    manifest.rs  manifest entries, file modes, hash_manifest
+    manifest.rs  manifest entries, file modes, hash_manifest, hash_commit
     tracked.rs   TrackedFile (content + mode)
     working.rs   load working-tree paths with mode detection
     error.rs     RepoError kinds and structured failures
@@ -292,7 +292,7 @@ tests/
 
 **Non-goals (v1 and beyond for full git parity):**
 
-- No git object hash compatibility (astvcs state ids remain manifest hashes).
+- No git object hash compatibility (commit ids and manifest ids differ from git).
 - No native `.git` directory mode for astvcs.
 - No bidirectional sync with git remotes or working trees.
 - No full commit history import (snapshot only in v1).
@@ -367,7 +367,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `commit_without_identity_fails_with_actionable_error` | `commit` without configured identity fails (no OS-user fallback) |
 | `identity_set_and_read_roundtrip_via_repo_open` | Repository `identity set` survives `Repo::open` |
 | `identity_recorded_on_commit_merge_and_revert` | Author on timeline entries from commit, merge, and revert |
-| `identity_does_not_change_content_addressed_state_id` | State id remains manifest hash; identity is separate metadata |
+| `identity_does_not_change_content_addressed_state_id` | Manifest id remains `hash_manifest`; commit id is separate |
+| `parallel_branches_identical_content_keep_distinct_log_messages` | Parallel branches with the same tree keep distinct commit ids and log messages |
 | `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind` and `--json` stderr; plain message matches string path |
 | `path_rename_exact_reports_rename_intent_in_diff` | Exact path rename intent, not delete+add (unit) |
 | `path_rename_with_edits_reports_rename_with_edits` | AST rename+edit pairing (unit) |

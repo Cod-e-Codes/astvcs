@@ -107,7 +107,8 @@
 | `import_git_snapshot_from_subprocess` | `import-git` reads local git HEAD; file content and log message match |
 | `identity_set_and_read_roundtrip_via_repo_open` | Repository identity config round-trip |
 | `identity_recorded_on_commit_merge_and_revert` | Author metadata on commit, merge, and revert states |
-| `identity_does_not_change_content_addressed_state_id` | Manifest-only state ids unchanged by identity |
+| `identity_does_not_change_content_addressed_state_id` | Manifest id remains `hash_manifest`; commit id is separate metadata hash |
+| `parallel_branches_identical_content_keep_distinct_log_messages` | Same tree on parallel branches keeps distinct commit ids and log messages |
 | `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind`, `--json` stderr, plain string parity |
 | `incremental_status_reuses_unchanged_file_reads` | Incremental scan skips unchanged content reads; touched file alone re-read (unit) |
 | `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit) |

@@ -41,7 +41,7 @@ pub use history::{AncestryResult, ancestors, merge_base, timeline_ancestry, walk
 pub use identity::{
     AuthorIdentity, IdentityConfig, configured_identity, resolve_author_identity, set_identity,
 };
-pub use manifest::{FileMode, ManifestEntry, ManifestMap, hash_manifest};
+pub use manifest::{FileMode, ManifestEntry, ManifestMap, hash_commit, hash_manifest};
 pub use merge_resolve::{
     MergeResolution, MergeResolveSide, apply_merge_resolutions, parse_merge_resolution,
     parse_merge_resolutions,

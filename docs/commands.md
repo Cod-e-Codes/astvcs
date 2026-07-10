@@ -80,7 +80,7 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 | `import-git <git-path> [-m <msg>]` | Import git HEAD tree snapshot into the astvcs repo (one commit); auto-`init` if `.astvcs` is missing; requires author identity; skips binary blobs and submodules with `warning:` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, `bisect`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character state ids. Resolution order: state id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, `bisect`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character commit ids from `log`. Branch and tag refs store commit ids; manifest content is deduplicated separately in `states/`. Resolution order: commit id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### Lightweight tags
 
@@ -204,7 +204,7 @@ Preconditions (error before any write):
 - Target is an ancestor of HEAD (reverting HEAD tip is allowed)
 - Target is not the root empty state
 
-If the reverted manifest is identical to HEAD, revert is a true no-op (same stdout as `commit` with no changes: no new timeline entry, refs unchanged). When the reverted tree matches the target's parent manifest, the branch tip moves to that parent state id instead of writing a duplicate content-addressed state.
+If the reverted manifest is identical to HEAD, revert is a true no-op (same stdout as `commit` with no changes: no new timeline entry, refs unchanged). When the reverted tree matches the target's parent manifest, the branch tip moves to that parent commit id instead of writing a new commit with the same manifest.
 
 Paths added in the target state and modified again on HEAD before revert produce a conflict (`path modified after the reverted state`) rather than silently keeping HEAD's newer content.
 

@@ -334,13 +334,19 @@ fn handle_state(repo: &Repo, method: &str, id: &str, body: &[u8], serve_read: bo
             }
         }
         "PUT" => {
-            if repo.has_state(&state_id) {
-                return api_response(409, b"state already exists".to_vec());
-            }
             let manifest: crate::store::ManifestMap = match serde_json::from_slice(body) {
                 Ok(m) => m,
                 Err(e) => return api_response(400, e.to_string().into_bytes()),
             };
+            let manifest_id = crate::store::hash_manifest(&manifest);
+            if repo
+                .astvcs_dir()
+                .join("states")
+                .join(format!("{manifest_id}.json"))
+                .is_file()
+            {
+                return api_response(409, b"state already exists".to_vec());
+            }
             match map_repo(repo.import_state_manifest(&state_id, &manifest)) {
                 Ok(()) => api_response(201, b"created".to_vec()),
                 Err(e) => api_response(500, e.into_bytes()),

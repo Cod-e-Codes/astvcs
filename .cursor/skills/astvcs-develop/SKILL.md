@@ -45,6 +45,7 @@ cargo build --release
 
 - Minimize scope. Match existing module layout and naming in `src/`.
 - `NodeId` is per-snapshot only. Cross-version continuity comes from `diff_graphs` alignment, not persistent ids.
+- Refs and timeline use commit ids (`hash_commit`); `states/` and blobs use manifest ids (`hash_manifest`).
 - Parse failures and unsupported extensions fall back to text blobs with `warning:` on stderr; AST-capable text fallback paths also show ` (text fallback)` in `status` and a banner plus `parse mode:` intent in `diff`.
 - NUL-containing or non-UTF-8 file content stores as `FileContent::Binary` (byte-for-byte round-trip).
 - Operational detail uses `trace::notice` (gated by `-v`); user-facing problems use `trace::warning`. Default diffs and conflicts stay focused, `--details` restores structural diagnostics, and `-v` includes details plus notices.

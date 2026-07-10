@@ -15,7 +15,7 @@ use crate::store::error::{RepoError, RepoResult};
 use crate::store::history::{merge_base_checked, walk_history};
 use crate::store::identity::{AuthorIdentity, resolve_author_identity};
 use crate::store::lock::{self, RepoLockGuard};
-use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_manifest};
+use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_commit, hash_manifest};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
 use crate::store::scan_cache::{self, ScanCache};
 use crate::store::staging::{
@@ -2424,6 +2424,19 @@ impl Repo {
         }
         let head = plan.head_id.clone();
         let other = plan.other_id.clone();
+        if plan.is_clean() && plan.base_id == plan.head_id {
+            let materialize_opts = MaterializeOptions::new("merge").force(force);
+            let clobbered = self.materialize_guard(&materialize_opts)?;
+            self.materialize_state_inner(&other, clobbered, &materialize_opts)?;
+            let current_branch = self.head_branch_unlocked()?;
+            if let Some(branch) = current_branch {
+                self.write_branch_ref_unlocked(&branch, &other)?;
+            } else {
+                self.write_head_target(&HeadTarget::Detached(other.clone()))?;
+            }
+            trace::notice(format!("merge: fast-forward to {other}"));
+            return Ok(other);
+        }
         let merged_files = plan.merged_files.clone();
         let materialize_opts = MaterializeOptions::new("merge").force(force);
         let clobbered = self.materialize_guard(&materialize_opts)?;
@@ -2603,23 +2616,32 @@ impl Repo {
                 ManifestEntry::with_mode(blob_id, tracked.mode),
             );
         }
-        let state_id = hash_manifest(&manifest);
+        let manifest_id = hash_manifest(&manifest);
+        let timestamp = now_iso();
+        let commit_id = hash_commit(
+            &manifest_id,
+            &parents,
+            message,
+            &timestamp,
+            &author.name,
+            &author.email,
+        );
 
-        write_atomic_json(
-            &self
-                .astvcs_dir()
-                .join("states")
-                .join(format!("{state_id}.json")),
-            &manifest,
-        )?;
+        let states_path = self
+            .astvcs_dir()
+            .join("states")
+            .join(format!("{manifest_id}.json"));
+        if !states_path.is_file() {
+            write_atomic_json(&states_path, &manifest)?;
+        }
 
         let parent_count = parents.len();
         let entry = TimelineEntry {
-            id: state_id.clone(),
+            id: commit_id.clone(),
             parent: parent.clone(),
             parents,
             message: message.to_string(),
-            timestamp: now_iso(),
+            timestamp,
             author_name: author.name.clone(),
             author_email: author.email.clone(),
             manifest: manifest.clone(),
@@ -2629,14 +2651,14 @@ impl Repo {
             &self
                 .astvcs_dir()
                 .join("timeline")
-                .join(format!("{state_id}.json")),
+                .join(format!("{commit_id}.json")),
             &entry,
         )?;
         trace::notice(format!(
-            "persist: state {state_id} ({} paths, parents={parent_count})",
+            "persist: commit {commit_id} manifest {manifest_id} ({} paths, parents={parent_count})",
             manifest.len(),
         ));
-        Ok(state_id)
+        Ok(commit_id)
     }
 
     fn migrate_inline_files(
@@ -2758,6 +2780,9 @@ impl Repo {
     }
 
     pub fn has_state(&self, state_id: &StateId) -> bool {
+        if self.has_timeline(state_id) {
+            return true;
+        }
         self.astvcs_dir()
             .join("states")
             .join(format!("{state_id}.json"))
@@ -2787,22 +2812,18 @@ impl Repo {
 
     pub fn import_state_manifest(
         &self,
-        state_id: &StateId,
+        _state_id: &StateId,
         manifest: &ManifestMap,
     ) -> RepoResult<()> {
         let _lock = self.repo_lock()?;
-        if hash_manifest(manifest) != *state_id {
-            return Err(RepoError::other(format!(
-                "state id mismatch for {state_id}"
-            )));
+        let manifest_id = hash_manifest(manifest);
+        let states_path = self
+            .astvcs_dir()
+            .join("states")
+            .join(format!("{manifest_id}.json"));
+        if !states_path.is_file() {
+            write_atomic_json(&states_path, manifest)?;
         }
-        write_atomic_json(
-            &self
-                .astvcs_dir()
-                .join("states")
-                .join(format!("{state_id}.json")),
-            manifest,
-        )?;
         Ok(())
     }
 

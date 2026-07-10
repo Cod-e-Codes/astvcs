@@ -699,6 +699,23 @@ fn check_orphaned_state_manifests(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
     if !states_dir.is_dir() {
         return Ok(findings);
     }
+    let mut referenced_manifests = std::collections::HashSet::new();
+    let timeline_dir = repo.astvcs_dir().join("timeline");
+    if timeline_dir.is_dir() {
+        for entry in fs::read_dir(&timeline_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if let Ok(timeline) =
+                crate::store::repo::read_json_unlocked::<crate::store::repo::TimelineEntry>(&path)
+            {
+                referenced_manifests.insert(crate::store::hash_manifest(&timeline.manifest));
+                referenced_manifests.insert(timeline.id);
+            }
+        }
+    }
     for entry in fs::read_dir(&states_dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
@@ -711,12 +728,15 @@ fn check_orphaned_state_manifests(repo: &Repo) -> RepoResult<Vec<FsckFinding>> {
         let Some(state_id) = name.strip_suffix(".json") else {
             continue;
         };
-        if !repo.has_timeline_unlocked(&state_id.to_string()) {
-            findings.push(FsckFinding {
-                kind: FsckKind::OrphanedStateManifest,
-                detail: format!("states/{state_id}.json has no timeline entry"),
-            });
+        if referenced_manifests.contains(state_id)
+            || repo.has_timeline_unlocked(&state_id.to_string())
+        {
+            continue;
         }
+        findings.push(FsckFinding {
+            kind: FsckKind::OrphanedStateManifest,
+            detail: format!("states/{state_id}.json has no timeline entry"),
+        });
     }
     Ok(findings)
 }

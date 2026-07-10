@@ -126,6 +126,37 @@ pub fn hash_manifest(manifest: &ManifestMap) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Unique commit id for timeline entries and refs.
+///
+/// Manifest content remains keyed by [`hash_manifest`]; commit ids incorporate
+/// parents and metadata so parallel branches with identical trees stay distinct.
+pub fn hash_commit(
+    manifest_id: &str,
+    parents: &[String],
+    message: &str,
+    timestamp: &str,
+    author_name: &str,
+    author_email: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(manifest_id.as_bytes());
+    hasher.update([0]);
+    let mut sorted_parents: Vec<_> = parents.iter().collect();
+    sorted_parents.sort();
+    for parent in sorted_parents {
+        hasher.update(parent.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update(message.as_bytes());
+    hasher.update([0]);
+    hasher.update(timestamp.as_bytes());
+    hasher.update([0]);
+    hasher.update(author_name.as_bytes());
+    hasher.update([0]);
+    hasher.update(author_email.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +195,17 @@ mod tests {
             ManifestEntry::with_mode(blob, FileMode::Executable),
         );
         assert_ne!(hash_manifest(&regular), hash_manifest(&executable));
+    }
+
+    #[test]
+    fn commit_hash_differs_for_same_manifest_different_messages() {
+        let manifest_id = hash_manifest(&ManifestMap::new());
+        let parents = vec!["parent".into()];
+        let ts = "2026-01-01T00:00:00Z";
+        let a = hash_commit(&manifest_id, &parents, "first", ts, "A", "a@example.com");
+        let b = hash_commit(&manifest_id, &parents, "second", ts, "A", "a@example.com");
+        assert_ne!(a, b);
+        assert_ne!(a, manifest_id);
     }
 
     #[test]

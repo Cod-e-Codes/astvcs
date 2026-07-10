@@ -2161,7 +2161,17 @@ fn identity_does_not_change_content_addressed_state_id() {
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     let id = repo.commit("v1").unwrap().state_id;
     let manifest = repo.load_manifest(&id).unwrap();
-    assert_eq!(id, astvcs::hash_manifest(&manifest));
+    let manifest_id = astvcs::hash_manifest(&manifest);
+    assert_ne!(
+        id, manifest_id,
+        "commit id should differ from manifest content hash"
+    );
+    assert!(
+        repo.astvcs_dir()
+            .join("states")
+            .join(format!("{manifest_id}.json"))
+            .is_file()
+    );
     let entry = repo.load_timeline_entry(&id).unwrap();
     assert_eq!(entry.author_name, "Test User");
     assert_eq!(entry.author_email, "test@example.com");
@@ -2801,6 +2811,44 @@ fn cli_add_dot_stages_tracked_changes() {
     assert!(
         stdout.contains("A  c.txt") || stdout.contains("A c.txt"),
         "add . should stage untracked files: {stdout}"
+    );
+}
+
+#[test]
+fn parallel_branches_identical_content_keep_distinct_log_messages() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("f.txt"), "content\n").unwrap();
+    repo.commit("base").unwrap();
+    repo.create_branch("b1", None).unwrap();
+    repo.create_branch("b2", None).unwrap();
+
+    repo.checkout_branch("b1").unwrap();
+    fs::write(dir.path().join("f.txt"), "content\nsame edit\n").unwrap();
+    repo.add(&[".".into()], false, true).unwrap();
+    repo.commit("b1: edit A").unwrap();
+
+    repo.checkout_branch("b2").unwrap();
+    fs::write(dir.path().join("f.txt"), "content\nsame edit\n").unwrap();
+    repo.add(&[".".into()], false, true).unwrap();
+    repo.commit("b2: edit A (different message, identical content)")
+        .unwrap();
+
+    repo.checkout_branch("b1").unwrap();
+    let log = repo.history(1).unwrap();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].message, "b1: edit A");
+    let b1_tip = repo.head_state().unwrap();
+
+    repo.checkout_branch("b2").unwrap();
+    let b2_tip = repo.head_state().unwrap();
+    assert_ne!(b1_tip, b2_tip, "branch tips should be distinct commit ids");
+    let manifest_b1 = repo.load_manifest(&b1_tip).unwrap();
+    let manifest_b2 = repo.load_manifest(&b2_tip).unwrap();
+    assert_eq!(
+        astvcs::hash_manifest(&manifest_b1),
+        astvcs::hash_manifest(&manifest_b2),
+        "identical trees share manifest hash"
     );
 }
 
