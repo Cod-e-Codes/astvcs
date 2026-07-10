@@ -956,7 +956,10 @@ impl Repo {
         } else {
             for raw in paths {
                 let rel = normalize_repo_path(raw)?;
-                if self.root.join(&rel).is_dir() {
+                if rel.is_empty() || rel == "." {
+                    candidates.extend(working_files.iter().cloned());
+                    candidates.extend(head_files.keys().cloned());
+                } else if self.root.join(&rel).is_dir() {
                     let prefix = format!("{rel}/");
                     for p in working_files {
                         if p == &rel || p.starts_with(&prefix) {
@@ -2369,6 +2372,16 @@ impl Repo {
         no_verify: bool,
     ) -> RepoResult<StateId> {
         let _lock = self.repo_lock()?;
+        if !force {
+            let staging = self.load_staging_unlocked()?;
+            if staging.staging_in_use() {
+                return Err(RepoError::invalid_input(
+                    "cannot merge with staged changes; commit or reset --mixed to unstage",
+                ));
+            }
+            let materialize_opts = MaterializeOptions::new("merge").force(false);
+            self.materialize_guard(&materialize_opts)?;
+        }
         let plan = self.prepare_merge_unlocked(branch, resolutions)?;
         if !plan.is_clean() {
             trace::warn("merge: aborted due to conflicts");
@@ -4503,14 +4516,50 @@ mod tests {
 
         let err = repo.merge_branch("feature", "merge").unwrap_err();
         assert!(
-            err.contains("conflict") || err.contains("uncommitted changes"),
-            "{err}"
+            err.contains("uncommitted changes"),
+            "dirty tree should be refused before conflict reporting: {err}"
         );
         assert_eq!(repo.head_state().unwrap(), tip);
         assert_eq!(
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
             "dirty\n"
         );
+    }
+
+    #[test]
+    fn add_dot_stages_working_tree_files() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        repo.commit("baseline").unwrap();
+
+        fs::write(dir.path().join("a.txt"), "a v2\n").unwrap();
+        fs::write(dir.path().join("c.txt"), "new\n").unwrap();
+        repo.add(&[".".into()], false, false).unwrap();
+
+        let staging = repo.load_staging_unlocked().unwrap();
+        assert!(staging.active);
+        assert!(staging.entries.contains_key("a.txt"));
+        assert!(
+            staging.entries.contains_key("c.txt"),
+            "add . should stage untracked files under the repository root"
+        );
+    }
+
+    #[test]
+    fn add_all_dot_stages_untracked_files() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        repo.commit("baseline").unwrap();
+
+        fs::write(dir.path().join("a.txt"), "a v2\n").unwrap();
+        fs::write(dir.path().join("c.txt"), "new\n").unwrap();
+        repo.add(&[".".into()], false, true).unwrap();
+
+        let staging = repo.load_staging_unlocked().unwrap();
+        assert!(staging.active);
+        assert!(staging.entries.contains_key("a.txt"));
+        assert!(staging.entries.contains_key("c.txt"));
     }
 
     #[test]

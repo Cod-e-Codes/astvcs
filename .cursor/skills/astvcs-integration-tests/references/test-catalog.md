@@ -39,6 +39,8 @@
 | `cli_materialize_refuses_dirty_tree_and_force_overrides` | Merge, checkout, revert refuse dirty tree; `--force` clobber warnings |
 | `merge_force_on_dirty_overlapping_path_applies_committed_plan` | Merge `--force` on dirty path in merge plan uses committed three-way result (unit, `src/store/repo.rs`) |
 | `merge_refuses_dirty_tree_when_merge_is_clean` | Merge refuses dirty tree before materialize (unit, `src/store/repo.rs`) |
+| `merge_dirty_tree_preserved_when_merge_would_conflict` | Dirty tree refused before merge conflict reporting (unit, `src/store/repo.rs`) |
+| `add_dot_stages_working_tree_files`, `add_all_dot_stages_untracked_files` | `add .` and `add -A .` expand to repository root (unit, `src/store/repo.rs`) |
 | `revert_noop_with_dirty_working_tree_skips_materialize_guard` | No-op revert succeeds with dirty tree, no guard (unit, `src/store/repo.rs`) |
 | `cli_status_clean_tree_summary` | Clean-tree status summary line |
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
@@ -110,6 +112,7 @@
 | `incremental_status_reuses_unchanged_file_reads` | Incremental scan skips unchanged content reads; touched file alone re-read (unit) |
 | `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit) |
 | `partial_commit_only_stages_paths` | Staged commit snapshots only added paths |
+| `cli_add_dot_stages_tracked_changes` | `add .` and `add -A .` stage repository-root paths |
 | `status_shows_staged_and_unstaged_columns` | Git-style `MM` / `M ` status columns |
 | `merge_refuses_with_staged_changes` | Merge blocked when staging non-empty |
 | `checkout_force_with_staged_changes` | Checkout `--force` with staged edits warns |

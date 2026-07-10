@@ -2778,6 +2778,33 @@ fn partial_commit_only_stages_paths() {
 }
 
 #[test]
+fn cli_add_dot_stages_tracked_changes() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("a.txt"), "a v1\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "b v1\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "baseline"]),
+        "baseline",
+    );
+
+    fs::write(dir.path().join("a.txt"), "a v2\n").unwrap();
+    fs::write(dir.path().join("c.txt"), "new\n").unwrap();
+    assert_astvcs_ok(&run_astvcs(Some(dir.path()), &["add", "."]), "add dot");
+    let out = run_astvcs(Some(dir.path()), &["status"]);
+    assert_astvcs_ok(&out, "status after add dot");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("M  a.txt") || stdout.contains("M a.txt"),
+        "expected staged a.txt: {stdout}"
+    );
+    assert!(
+        stdout.contains("A  c.txt") || stdout.contains("A c.txt"),
+        "add . should stage untracked files: {stdout}"
+    );
+}
+
+#[test]
 fn status_shows_staged_and_unstaged_columns() {
     let dir = TempDir::new().unwrap();
     let repo = Repo::init_with_identity(dir.path()).unwrap();
