@@ -18,6 +18,7 @@
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
 | `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |
+| `branch_create_from_remote_tracking_ref` | `branch create --from` resolves remote-tracking refs and reports unknown refs cleanly |
 | `remove_default_branch_updates_config` | Removing default branch promotes `develop` over `feature` in config |
 | `merge_demo_add_add_and_deletion` | Add/add and deletion cases |
 | `merge_demo_deletion_when_other_branch_unchanged` | Modify vs delete |

@@ -711,7 +711,7 @@ impl Repo {
             !self.branch_ref_exists_unlocked(&config.default_branch)
         };
         let state = match from {
-            Some(b) => self.read_branch_ref(b)?,
+            Some(reference) => self.resolve_state_ref_unlocked(reference)?,
             None => self.head_state_unlocked()?,
         };
         write_atomic_text(&ref_path, &format!("{state}\n"))?;
@@ -4075,6 +4075,41 @@ mod tests {
         repo.write_remote_ref("origin", "main", &v1).unwrap();
 
         assert_eq!(repo.resolve_state_ref("origin/main").unwrap(), v1);
+    }
+
+    #[test]
+    fn create_branch_from_remote_tracking_ref() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.commit("v1").unwrap().state_id;
+        repo.write_remote_ref("origin", "upstream", &v1).unwrap();
+
+        repo.create_branch("local-track", Some("origin/upstream"))
+            .unwrap();
+        assert_eq!(repo.branch_state("local-track").unwrap(), v1);
+    }
+
+    #[test]
+    fn create_branch_from_state_id() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("note.txt"), "v1\n").unwrap();
+        let v1 = repo.commit("v1").unwrap().state_id;
+
+        repo.create_branch("from-id", Some(&v1)).unwrap();
+        assert_eq!(repo.branch_state("from-id").unwrap(), v1);
+    }
+
+    #[test]
+    fn create_branch_from_unknown_ref_errors_cleanly() {
+        let (_dir, repo) = sample_repo();
+        let err = repo
+            .create_branch("x", Some("origin/nope"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("unknown branch or state: origin/nope"),
+            "{err}"
+        );
     }
 
     #[test]

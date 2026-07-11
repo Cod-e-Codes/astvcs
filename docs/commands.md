@@ -32,7 +32,7 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `diff --view [...]` | Same comparison modes as text `diff` (`[path]`, `--staged`, `--state`, or `--base`/`--left`/`--right`). Writes a self-contained HTML file under the system temp directory, opens it in the default browser (skipped when `CI` or `ASTVCS_NO_BROWSER` is set), and prints the file path. The viewer opens on a change summary, expands changed context, and lazily reveals count-labelled unchanged branches. Use `n`/`p` for changes and `j`/`k` for files. Alignment, node IDs, mutations, and pipeline data stay in collapsed details. |
 | `commit -m <msg> [--full-scan] [--no-verify]` | Commit staged changes when staging is active (after first `add`); otherwise legacy whole-tree commit. Errors when staging is active but empty while the working tree has changes. Requires configured author identity. Pass `--full-scan` to bypass the scan cache. Runs `pre-commit` and `commit-msg` hooks unless `--no-verify`. |
 | `branch list` | List branches |
-| `branch create <name> [--from <branch>]` | Create a branch |
+| `branch create <name> [--from <ref>]` | Create a branch at `<ref>` or HEAD when `--from` is omitted |
 | `branch remove <name>` | Remove a branch ref (see guardrails below) |
 | `tag create <name> <ref>` | Create a lightweight tag pointing at a resolved ref |
 | `tag list` | List tags with state ids (sorted by name) |
@@ -80,7 +80,7 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `fsck` | Check repository integrity; report-only by default, exits non-zero when issues are found; optional `--repair` and `--prune-refs` |
 | `import-git <git-path> [-m <msg>]` | Import git HEAD tree snapshot into the astvcs repo (one commit); auto-`init` if `.astvcs` is missing; requires author identity; commits only git HEAD paths (ignores unrelated files on disk); skips binary blobs and submodules with `warning:` |
 
-Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, `bisect`, and `merge` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character commit ids from `log`. Branch and tag refs store commit ids; manifest content is deduplicated separately in `states/`. Resolution order: commit id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
+Refs accepted by `diff`, `merge-base`, `checkout --state`, `reset`, `revert`, `rebase`, `cherry-pick`, `bisect`, `merge`, and `branch create --from` include local branch names, lightweight tags, remote-tracking refs (`<remote>/<branch>`), and 64-character commit ids from `log`. Branch and tag refs store commit ids; manifest content is deduplicated separately in `states/`. Resolution order: commit id, then `refs/heads/<name>`, then `refs/tags/<name>`, then `refs/remotes/<remote>/<branch>` when that file exists (a local branch literally named `origin/main` wins via the heads check).
 
 ### Lightweight tags
 

@@ -1680,6 +1680,42 @@ fn cli_branch_remove_guardrails() {
 }
 
 #[test]
+fn branch_create_from_remote_tracking_ref() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let repo = Repo::init_with_identity(root).unwrap();
+    fs::write(root.join("note.txt"), "v1\n").unwrap();
+    let v1 = repo.commit("v1").unwrap().state_id;
+    repo.write_remote_ref("origin", "upstream", &v1).unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(root),
+            &[
+                "branch",
+                "create",
+                "local-track",
+                "--from",
+                "origin/upstream",
+            ],
+        ),
+        "branch create from remote-tracking ref",
+    );
+    assert_eq!(repo.branch_state("local-track").unwrap(), v1);
+
+    let bad = run_astvcs(
+        Some(root),
+        &["branch", "create", "bad", "--from", "origin/missing"],
+    );
+    assert!(!bad.status.success());
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        stderr.contains("unknown branch or state"),
+        "expected actionable ref error: {stderr}"
+    );
+}
+
+#[test]
 fn remove_default_branch_updates_config() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
