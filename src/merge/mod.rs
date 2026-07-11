@@ -1,8 +1,13 @@
 use crate::diff::{DiffResult, TextEdit, diff_graphs, diff_text};
 use crate::frontend::FileContent;
-use crate::graph::{AstGraph, Mutation, NodeId};
+use crate::graph::{AstGraph, Mutation, NodeId, NodeKind};
 use crate::intent::{self};
 use crate::store::{FileMode, TrackedFile};
+
+mod language_merge_cases;
+pub use language_merge_cases::{
+    LanguageMergeCase, assert_disjoint_language_merge, language_merge_cases,
+};
 
 /// Result of attempting to merge two file states.
 #[derive(Clone, Debug)]
@@ -746,9 +751,55 @@ fn mutations_merge_equivalent(a: &Mutation, b: &Mutation) -> bool {
                 node: n2,
                 ..
             },
-        ) => p1 == p2 && b1 == b2 && n1.kind == n2.kind && n1.payload == n2.payload,
+        ) if p1 == p2 && n1.kind == n2.kind && n1.payload == n2.payload => {
+            if b1 == b2 {
+                return true;
+            }
+            is_punctuation_token_insert(a) && is_punctuation_token_insert(b)
+        }
         _ => false,
     }
+}
+
+fn is_punctuation_token_insert(mutation: &Mutation) -> bool {
+    let Mutation::InsertSubtree {
+        node, descendants, ..
+    } = mutation
+    else {
+        return false;
+    };
+    node.kind == NodeKind::Token
+        && node.children.is_empty()
+        && descendants.iter().all(|n| n.children.is_empty())
+        && node
+            .payload
+            .chars()
+            .all(|c| c.is_ascii_punctuation() || c.is_ascii_whitespace())
+        && !node.payload.is_empty()
+}
+
+fn parent_has_punctuation_token_insert(mutations: &[Mutation], parent: NodeId) -> bool {
+    mutations.iter().any(|m| {
+        matches!(
+            m,
+            Mutation::InsertSubtree { parent: p, .. } if *p == parent
+        ) && is_punctuation_token_insert(m)
+    })
+}
+
+fn omit_shared_punctuation_insert(
+    mutation: &Mutation,
+    left: &[Mutation],
+    right: &[Mutation],
+) -> bool {
+    let Mutation::InsertSubtree { parent, .. } = mutation else {
+        return false;
+    };
+    if !is_punctuation_token_insert(mutation) {
+        return false;
+    }
+    parent_has_punctuation_token_insert(left, *parent)
+        && parent_has_punctuation_token_insert(right, *parent)
 }
 
 /// Apply side-unique mutations only; shared equivalent edits are omitted (not applied twice).
@@ -758,10 +809,16 @@ fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutati
         if right.iter().any(|rm| mutations_merge_equivalent(lm, rm)) {
             continue;
         }
+        if omit_shared_punctuation_insert(lm, left, right) {
+            continue;
+        }
         combined.push(lm.clone());
     }
     for rm in right {
         if left.iter().any(|lm| mutations_merge_equivalent(lm, rm)) {
+            continue;
+        }
+        if omit_shared_punctuation_insert(rm, left, right) {
             continue;
         }
         if combined.iter().any(|m| mutations_merge_equivalent(m, rm)) {
@@ -1098,83 +1155,6 @@ mod tests {
     }
 
     #[test]
-    fn process_calc_disjoint_edits_merge_without_trailing_newline() {
-        let base = parse_rust(
-            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}",
-        )
-        .unwrap();
-        let left = parse_rust(
-            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}",
-        )
-        .unwrap();
-        let right = parse_rust(
-            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}",
-        )
-        .unwrap();
-        let left_diff = diff_graphs(&base, &left);
-        let right_diff = diff_graphs(&base, &right);
-        if !left_diff.mutations.is_empty() && !right_diff.mutations.is_empty() {
-            let lm = &left_diff.mutations[0];
-            let rm = &right_diff.mutations[0];
-            assert!(
-                mutations_merge_equivalent(lm, rm) || lm == rm,
-                "comma inserts should merge-equivalent: lm={lm:?} rm={rm:?}"
-            );
-        }
-        assert!(matches!(
-            merge_files(
-                &FileContent::Ast(base),
-                &FileContent::Ast(left),
-                &FileContent::Ast(right),
-            ),
-            MergeOutcome::Merged(_)
-        ));
-    }
-
-    #[test]
-    fn process_calc_disjoint_edits_merge_valid_rust() {
-        use crate::unparser::unparse;
-
-        let base = parse_rust(
-            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}\n",
-        )
-        .unwrap();
-        let left = parse_rust(
-            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}\n",
-        )
-        .unwrap();
-        let right = parse_rust(
-            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}\n",
-        )
-        .unwrap();
-        let outcome = merge_files(
-            &FileContent::Ast(base),
-            &FileContent::Ast(left),
-            &FileContent::Ast(right),
-        );
-        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
-            panic!("expected merge, got {outcome:?}");
-        };
-        let text = unparse(&merged);
-        assert!(
-            !text.contains(",,"),
-            "merged source must not duplicate separators: {text:?}"
-        );
-        assert!(
-            parse_rust(&text).is_ok(),
-            "merged source must parse: {text:?}"
-        );
-        assert!(
-            text.contains("x*c + 1") || text.contains("x * c + 1"),
-            "{text:?}"
-        );
-        assert!(
-            text.contains("y-a - 1") || text.contains("y - a - 1"),
-            "{text:?}"
-        );
-    }
-
-    #[test]
     fn identical_mutations_are_not_overlapping() {
         let base = parse_rust("fn wrap(a: i32) {}\n").unwrap();
         let extended = parse_rust("fn wrap(a: i32, b: i32) {}\n").unwrap();
@@ -1228,13 +1208,13 @@ mod tests {
             );
             for (li, lm) in left_diff.mutations.iter().enumerate() {
                 for (ri, rm) in right_diff.mutations.iter().enumerate() {
-                    if lm == rm {
+                    if mutations_merge_equivalent(lm, rm) {
                         assert!(
                             overlaps.is_empty()
                                 || overlaps
                                     .iter()
                                     .all(|ov| ov.left_index != li || ov.right_index != ri),
-                            "shared identical mutation should not conflict: base={base_s} lm={lm:?}"
+                            "shared merge-equivalent mutation should not conflict: base={base_s} lm={lm:?}"
                         );
                     }
                 }
@@ -1243,7 +1223,12 @@ mod tests {
                 let shared: Vec<_> = left_diff
                     .mutations
                     .iter()
-                    .filter(|lm| right_diff.mutations.iter().any(|rm| *lm == rm))
+                    .filter(|lm| {
+                        right_diff
+                            .mutations
+                            .iter()
+                            .any(|rm| mutations_merge_equivalent(lm, rm))
+                    })
                     .collect();
                 if !shared.is_empty() {
                     panic!(

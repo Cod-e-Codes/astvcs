@@ -47,7 +47,8 @@ metadata:
 - `plan_merge` correlates paths through `detect_path_renames` per side before per-file `merge_path`.
 - `MoveSubtree`/`MoveNode` are disjoint from payload edits on the same `node_id` during merge.
 - Disjoint sibling payload edits under the same parent should merge when they touch different nodes.
-- Identical mutations on both branches (byte-for-byte equal, often a shared diff artifact) must not report overlap via `SameIntent`. Omit shared merge-equivalent mutations from the combined apply batch (do not apply even once).
+- Identical mutations on both branches (byte-for-byte equal, often a shared diff artifact) must not report overlap via `SameIntent`. Omit shared merge-equivalent mutations from the combined apply batch (do not apply even once). Also omit punctuation-only `InsertSubtree` token inserts when both branches emitted any under the same parent.
+- Shared fixtures for every AST frontend live in `src/merge/language_merge_cases.rs`; extend them when adding a language or changing merge overlap rules.
 - Conflicting `SetTrivia` on the same slot should report a structural conflict.
 - Do not write conflict markers into the working tree.
 

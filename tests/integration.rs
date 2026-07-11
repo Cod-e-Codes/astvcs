@@ -662,54 +662,50 @@ fn same_file_demo_disjoint_merge() {
 }
 
 #[test]
-fn process_calc_disjoint_edits_merge() {
-    use astvcs::frontend::parse_rust;
+fn disjoint_body_edits_merge_across_languages() {
+    use astvcs::frontend::parse_source;
+    use astvcs::merge::language_merge_cases;
 
-    let dir = TempDir::new().unwrap();
-    let repo = Repo::init_with_identity(dir.path()).unwrap();
-    fs::write(
-        dir.path().join("calc.rs"),
-        "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}",
-    )
-    .unwrap();
-    repo.commit("base").unwrap();
-    repo.create_branch("b1", None).unwrap();
-    repo.checkout_branch("b1").unwrap();
-    fs::write(
-        dir.path().join("calc.rs"),
-        "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}",
-    )
-    .unwrap();
-    repo.commit("b1: change z").unwrap();
-    repo.checkout_branch("main").unwrap();
-    fs::write(
-        dir.path().join("calc.rs"),
-        "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}",
-    )
-    .unwrap();
-    repo.commit("main: change y").unwrap();
-    let merged = repo.merge_branch("b1", "merge").unwrap();
-    let files = repo.load_state_files(&merged).unwrap();
-    let text = match &files["calc.rs"].content {
-        astvcs::FileContent::Ast(g) => unparse(g),
-        other => panic!("expected ast, got {other:?}"),
-    };
-    assert!(
-        !text.contains(",,"),
-        "merged source must not duplicate separators: {text:?}"
-    );
-    assert!(
-        parse_rust(&text).is_ok(),
-        "merged source must parse: {text:?}"
-    );
-    assert!(
-        text.contains("x*c + 1") || text.contains("x * c + 1"),
-        "{text:?}"
-    );
-    assert!(
-        text.contains("y-a - 1") || text.contains("y - a - 1"),
-        "{text:?}"
-    );
+    for case in language_merge_cases() {
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
+        fs::write(dir.path().join(case.path), case.base).unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("b1", None).unwrap();
+        repo.checkout_branch("b1").unwrap();
+        fs::write(dir.path().join(case.path), case.right).unwrap();
+        repo.commit("b1").unwrap();
+        repo.checkout_branch("main").unwrap();
+        fs::write(dir.path().join(case.path), case.left).unwrap();
+        repo.commit("main").unwrap();
+        let merged = repo.merge_branch("b1", "merge").unwrap();
+        let files = repo.load_state_files(&merged).unwrap();
+        let text = match &files[case.path].content {
+            astvcs::FileContent::Ast(g) => unparse(g),
+            other => panic!("{}: expected ast, got {other:?}", case.label),
+        };
+        for forbidden in case.forbidden {
+            assert!(
+                !text.contains(forbidden),
+                "{}: merged source must not contain {forbidden:?}: {text:?}",
+                case.label
+            );
+        }
+        parse_source(case.path, &text)
+            .unwrap_or_else(|e| panic!("{}: merged source must parse: {e}: {text:?}", case.label));
+        assert!(
+            case.left_markers.iter().any(|m| text.contains(m)),
+            "{}: merged source missing left edit markers {:?}: {text:?}",
+            case.label,
+            case.left_markers
+        );
+        assert!(
+            case.right_markers.iter().any(|m| text.contains(m)),
+            "{}: merged source missing right edit markers {:?}: {text:?}",
+            case.label,
+            case.right_markers
+        );
+    }
 }
 
 fn normalize_newlines(text: &str) -> String {

@@ -183,7 +183,7 @@ Mutations locate children by `node_id`, not stored indices.
 
 1. Find the lowest common ancestor on the timeline (`merge-base`).
 2. Per-path three-way logic: add/add, delete on one side, modify/delete (keeps the modification), unchanged sides short-circuit inside `merge_files`.
-3. Overlap detection uses edit intents, ancestor checks (a deletion covering an edit inside its subtree), and precise insert-site checks. Mutations that are merge-equivalent on both branches (including shared diff artifacts such as a punctuation insert at the same site) are not overlapping. Those shared mutations are omitted from the combined apply batch rather than applied once or twice. Sibling payload edits under the same parent merge when they touch different nodes. Disjoint structural edits apply in one batch with redirect rebasing. Text merges use disjoint line edits.
+3. Overlap detection uses edit intents, ancestor checks (a deletion covering an edit inside its subtree), and precise insert-site checks. Mutations that are merge-equivalent on both branches (including shared diff artifacts such as a punctuation insert at the same site, or punctuation-only token inserts under the same parent on both sides) are not overlapping. Those shared mutations are omitted from the combined apply batch rather than applied once or twice; side-unique punctuation token inserts are also omitted when both branches emitted punctuation inserts under the same parent. Sibling payload edits under the same parent merge when they touch different nodes. Disjoint structural edits apply in one batch with redirect rebasing. Text merges use disjoint line edits. `src/merge/language_merge_cases.rs` holds per-language disjoint-edit fixtures exercised across every AST frontend.
 
 Failed merges roll back atomically: HEAD, branch tips, working tree, and `index.json` are unchanged. Focused conflict output lists paths, both sides' intents, and overlap reasons. Merge and pull include `--resolve` syntax; rebase includes `rebase --continue --resolve`; revert labels the reverted parent and current HEAD; cherry-pick and stash omit unsupported resolution flags. Repeated overlap examples are limited per path with an omitted count. `--details` restores state IDs, raw mutations from each side, and every overlapping pair (same node, deletion covering a nested edit, same insert site, or same intent). Use `merge --dry-run` to preview, and `diff --base --left --right` to inspect both sides.
 
@@ -389,9 +389,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `move_subtree_and_sibling_payload_edit_merge` | Move + concurrent payload edit merge cleanly (unit) |
 | `identical_mutations_are_not_overlapping` | Byte-identical mutation pairs are not overlapping (unit, `merge/mod.rs`) |
 | `cross_branch_identical_mutations_merge_cleanly` | Shared identical diff artifacts on both branches do not block merge (unit, `merge/mod.rs`) |
-| `process_calc_disjoint_edits_merge_valid_rust` | Disjoint body edits in a multi-param function merge to valid, parseable Rust (unit, `merge/mod.rs`) |
-| `merge_process_calc_disjoint_edits_via_repo` | Full repo commit/branch/merge path for calc.rs disjoint edits (unit, `store/repo.rs`) |
-| `process_calc_disjoint_edits_merge` | Same calc.rs scenario through `merge_branch` (integration) |
+| `process_calc_disjoint_edits_merge_valid_rust` | Disjoint body edits in a multi-param function merge to valid, parseable Rust (unit, `merge/language_merge_cases.rs`) |
+| `merge_disjoint_edits_across_languages_via_repo` | Full repo commit/branch/merge path for every AST frontend (unit, `store/repo.rs`) |
+| `disjoint_body_edits_merge_across_languages` | Same fixtures through `merge_branch` (integration) |
 | `moved_function_reports_move_not_delete_insert` | Intra-file reposition avoids delete+insert (unit) |
 | `binary_commit_status_and_diff` | Binary PNG fixture: status modified, diff omits content |
 | `binary_roundtrip_checkout_on_branch` | Byte-for-byte checkout across branches |
