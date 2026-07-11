@@ -504,12 +504,7 @@ fn merge_ast(base: &AstGraph, left: &AstGraph, right: &AstGraph) -> MergeOutcome
     }
 
     let mut merged = base.clone();
-    let mut combined = left_diff.mutations.clone();
-    for mutation in &right_diff.mutations {
-        if !combined.contains(mutation) {
-            combined.push(mutation.clone());
-        }
-    }
+    let combined = combine_mutation_batches(&left_diff.mutations, &right_diff.mutations);
     if let Err(e) = merged.apply_batch(&combined) {
         return MergeOutcome::Conflict(ast_merge_conflict(
             base,
@@ -649,7 +644,7 @@ fn apply_disjoint_edits(base: &str, left_edits: &[TextEdit], right_edits: &[Text
 }
 
 fn overlap_reason(base: &AstGraph, a: &Mutation, b: &Mutation) -> Option<OverlapReason> {
-    if a == b {
+    if mutations_merge_equivalent(a, b) {
         return None;
     }
     if are_disjoint_edits(a, b) {
@@ -730,6 +725,51 @@ fn touches_same_insert_site(a: &Mutation, b: &Mutation) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when two mutations are the same edit for merge overlap and batch-combine purposes.
+fn mutations_merge_equivalent(a: &Mutation, b: &Mutation) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a, b) {
+        (
+            Mutation::InsertSubtree {
+                parent: p1,
+                before: b1,
+                node: n1,
+                ..
+            },
+            Mutation::InsertSubtree {
+                parent: p2,
+                before: b2,
+                node: n2,
+                ..
+            },
+        ) => p1 == p2 && b1 == b2 && n1.kind == n2.kind && n1.payload == n2.payload,
+        _ => false,
+    }
+}
+
+/// Apply side-unique mutations only; shared equivalent edits are omitted (not applied twice).
+fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutation> {
+    let mut combined = Vec::new();
+    for lm in left {
+        if right.iter().any(|rm| mutations_merge_equivalent(lm, rm)) {
+            continue;
+        }
+        combined.push(lm.clone());
+    }
+    for rm in right {
+        if left.iter().any(|lm| mutations_merge_equivalent(lm, rm)) {
+            continue;
+        }
+        if combined.iter().any(|m| mutations_merge_equivalent(m, rm)) {
+            continue;
+        }
+        combined.push(rm.clone());
+    }
+    combined
 }
 
 fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
@@ -1055,6 +1095,83 @@ mod tests {
             ),
             MergeOutcome::Merged(_)
         ));
+    }
+
+    #[test]
+    fn process_calc_disjoint_edits_merge_without_trailing_newline() {
+        let base = parse_rust(
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}",
+        )
+        .unwrap();
+        let left = parse_rust(
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}",
+        )
+        .unwrap();
+        let right = parse_rust(
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}",
+        )
+        .unwrap();
+        let left_diff = diff_graphs(&base, &left);
+        let right_diff = diff_graphs(&base, &right);
+        if !left_diff.mutations.is_empty() && !right_diff.mutations.is_empty() {
+            let lm = &left_diff.mutations[0];
+            let rm = &right_diff.mutations[0];
+            assert!(
+                mutations_merge_equivalent(lm, rm) || lm == rm,
+                "comma inserts should merge-equivalent: lm={lm:?} rm={rm:?}"
+            );
+        }
+        assert!(matches!(
+            merge_files(
+                &FileContent::Ast(base),
+                &FileContent::Ast(left),
+                &FileContent::Ast(right),
+            ),
+            MergeOutcome::Merged(_)
+        ));
+    }
+
+    #[test]
+    fn process_calc_disjoint_edits_merge_valid_rust() {
+        use crate::unparser::unparse;
+
+        let base = parse_rust(
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}\n",
+        )
+        .unwrap();
+        let left = parse_rust(
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}\n",
+        )
+        .unwrap();
+        let right = parse_rust(
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}\n",
+        )
+        .unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        assert!(
+            !text.contains(",,"),
+            "merged source must not duplicate separators: {text:?}"
+        );
+        assert!(
+            parse_rust(&text).is_ok(),
+            "merged source must parse: {text:?}"
+        );
+        assert!(
+            text.contains("x*c + 1") || text.contains("x * c + 1"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("y-a - 1") || text.contains("y - a - 1"),
+            "{text:?}"
+        );
     }
 
     #[test]

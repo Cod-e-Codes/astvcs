@@ -3408,6 +3408,51 @@ mod tests {
     }
 
     #[test]
+    fn merge_process_calc_disjoint_edits_via_repo() {
+        let (dir, repo) = sample_repo();
+        let calc = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}";
+        fs::write(dir.path().join("calc.rs"), calc).unwrap();
+        repo.commit("base").unwrap();
+        repo.create_branch("b1", None).unwrap();
+        repo.checkout_branch("b1").unwrap();
+        fs::write(
+            dir.path().join("calc.rs"),
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}",
+        )
+        .unwrap();
+        repo.commit("b1").unwrap();
+        repo.checkout_branch("main").unwrap();
+        fs::write(
+            dir.path().join("calc.rs"),
+            "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}",
+        )
+        .unwrap();
+        repo.commit("main").unwrap();
+        let merged = repo.merge_branch("b1", "merge").unwrap();
+        let files = repo.load_state_files(&merged).unwrap();
+        let text = match &files["calc.rs"].content {
+            FileContent::Ast(g) => unparse(g),
+            other => panic!("expected ast, got {other:?}"),
+        };
+        assert!(
+            !text.contains(",,"),
+            "merged source must not duplicate separators: {text:?}"
+        );
+        assert!(
+            parse_rust(&text).is_ok(),
+            "merged source must parse: {text:?}"
+        );
+        assert!(
+            text.contains("x*c + 1") || text.contains("x * c + 1"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("y-a - 1") || text.contains("y - a - 1"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
     fn merge_three_way_via_blob_graphs() {
         use crate::merge::{MergeOutcome, merge_files};
 

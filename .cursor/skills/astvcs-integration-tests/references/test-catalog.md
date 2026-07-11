@@ -16,6 +16,7 @@
 | `parse_all_supported_languages` | Every supported extension and special path parses |
 | `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural stability and text matches edited source (Rust, Python, JS, JSON, TS, Go, HTML, CSS) |
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
+| `process_calc_disjoint_edits_merge` | Multi-param calc.rs: disjoint body edits merge to valid parseable Rust without phantom comma corruption (integration) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
 | `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |
 | `branch_create_from_remote_tracking_ref` | `branch create --from` resolves remote-tracking refs and reports unknown refs cleanly |
@@ -28,6 +29,7 @@
 | `rename_vs_parent_delete_reports_overlap` | Rename vs parent delete overlap report |
 | `identical_mutations_are_not_overlapping` | Byte-identical mutation pairs are not overlapping (unit, `merge/mod.rs`) |
 | `cross_branch_identical_mutations_merge_cleanly` | Shared identical diff artifacts on both branches do not block merge (unit, `merge/mod.rs`) |
+| `process_calc_disjoint_edits_merge_valid_rust` | Multi-param function: disjoint body edits merge to valid parseable Rust (unit, `merge/mod.rs`) |
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync; push target passes `fsck` after push |
