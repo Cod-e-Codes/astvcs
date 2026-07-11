@@ -2894,6 +2894,24 @@ fn parallel_branches_identical_content_keep_distinct_log_messages() {
         astvcs::hash_manifest(&manifest_b2),
         "identical trees share manifest hash"
     );
+
+    let report = repo.gc(true, true).unwrap();
+    assert_eq!(
+        report.states_removed,
+        0,
+        "shared manifest and both branch tips must stay reachable: {}",
+        report.format_output()
+    );
+    let manifest_id = astvcs::hash_manifest(&manifest_b1);
+    assert!(
+        dir.path()
+            .join(".astvcs/states")
+            .join(format!("{manifest_id}.json"))
+            .is_file(),
+        "shared manifest file must survive gc --prune-history"
+    );
+    assert!(repo.load_manifest(&b1_tip).is_ok());
+    assert!(repo.load_manifest(&b2_tip).is_ok());
 }
 
 #[test]

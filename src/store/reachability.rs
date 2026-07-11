@@ -1,5 +1,5 @@
 use super::{StateId, TimelineEntry};
-use crate::store::manifest::ManifestMap;
+use crate::store::manifest::{ManifestMap, hash_manifest};
 use std::collections::{HashSet, VecDeque};
 
 pub const ROOT_STATE_ID: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -41,6 +41,7 @@ where
             continue;
         }
         let manifest = load_manifest(&id)?;
+        out.states.insert(hash_manifest(&manifest));
         out.blobs.extend(manifest.values().map(|e| e.blob.clone()));
 
         let entry = load_timeline(&id)?;
@@ -170,5 +171,34 @@ mod tests {
         .unwrap();
         assert!(!reach.states.contains(&s2));
         assert!(!reach.blobs.contains("blob-b"));
+    }
+
+    #[test]
+    fn reachable_includes_manifest_id_when_distinct_from_commit() {
+        let commit_id = "a".repeat(64);
+        let mut manifest = ManifestMap::new();
+        manifest.insert("x.txt".into(), ManifestEntry::regular("blob-x".into()));
+        let manifest_id = hash_manifest(&manifest);
+        let entry = TimelineEntry {
+            id: commit_id.clone(),
+            parent: None,
+            parents: vec![],
+            message: "tip".into(),
+            timestamp: "0".into(),
+            author_name: String::new(),
+            author_email: String::new(),
+            manifest: manifest.clone(),
+            files: None,
+        };
+
+        let reach = reachable_from_tips(
+            [commit_id.clone()],
+            |_| Ok(entry.clone()),
+            |_| Ok(manifest.clone()),
+        )
+        .unwrap();
+
+        assert!(reach.states.contains(&commit_id));
+        assert!(reach.states.contains(&manifest_id));
     }
 }

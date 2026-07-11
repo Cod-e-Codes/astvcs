@@ -1062,6 +1062,36 @@ mod tests {
     }
 
     #[test]
+    fn gc_prune_history_retains_reachable_manifest_files() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        let tip = repo.commit("init").unwrap().state_id;
+        let manifest_id = crate::store::hash_manifest(&repo.load_manifest(&tip).unwrap());
+        let manifest_path = dir
+            .path()
+            .join(".astvcs/states")
+            .join(format!("{manifest_id}.json"));
+        assert!(manifest_path.is_file());
+        assert_ne!(
+            manifest_id, tip,
+            "manifest id should differ from commit id in normal commits"
+        );
+
+        let report = repo.gc(true, true).unwrap();
+        assert_eq!(
+            report.states_removed,
+            0,
+            "reachable history should not be pruned: {}",
+            report.format_output()
+        );
+        assert!(
+            manifest_path.is_file(),
+            "reachable manifest file must survive gc --prune-history"
+        );
+        assert!(repo.load_manifest(&tip).is_ok());
+    }
+
+    #[test]
     fn fsck_repair_fixes_index_inconsistency() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();

@@ -93,7 +93,7 @@
 | `parse_fallback_md_commit_stays_silent` | `.md` commit emits no warnings |
 | `parse_fallback_broken_rs_stderr_warning` | Broken `.rs` commit warns on stderr |
 | `parse_fallback_verbose_notice_detail` | `-v` adds text fallback `notice:` on commit |
-| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `gc_preserves_packed_blobs`, `gc_prune_history_idempotent`, `gc_preserves_unreachable_states_until_prune_history`, `gc_prune_history_does_not_remove_reachable_states`, `fsck_clean_repository`, `fsck_clean_after_repack`, `fsck_repair_fixes_index_inconsistency`, `fsck_repair_refuses_ambiguous_head`, `fsck_prune_refs_removes_dangling_ref`, `fsck_warns_on_unknown_format_version`, `legacy_repo_without_format_version_migrates_on_lock`, `format_version_zero_migrates_idempotently` | Reachability GC, prune-history, repack, fsck, and format migration unit tests (`store/integrity.rs`, `store/format.rs`) |
+| `gc_no_unreachable_is_noop`, `gc_preserves_remote_tracking_blobs`, `gc_twice_is_idempotent`, `gc_preserves_packed_blobs`, `gc_prune_history_idempotent`, `gc_preserves_unreachable_states_until_prune_history`, `gc_prune_history_does_not_remove_reachable_states`, `gc_prune_history_retains_reachable_manifest_files`, `reachable_includes_manifest_id_when_distinct_from_commit`, `fsck_clean_repository`, `fsck_clean_after_repack`, `fsck_repair_fixes_index_inconsistency`, `fsck_repair_refuses_ambiguous_head`, `fsck_prune_refs_removes_dangling_ref`, `fsck_warns_on_unknown_format_version`, `legacy_repo_without_format_version_migrates_on_lock`, `format_version_zero_migrates_idempotently` | Reachability GC, prune-history, repack, fsck, and format migration unit tests (`store/integrity.rs`, `store/format.rs`, `store/reachability.rs`) |
 | `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`, `cli_fsck_repair_fixes_index_inconsistency`, `cli_fsck_repair_refuses_ambiguous_head`, `cli_fsck_repair_leaves_missing_blob`, `cli_fsck_prune_refs_removes_dangling_ref`, `cli_fsck_warns_on_unknown_format_version` | fsck clean, corruption, repair, prune-refs, unknown format version |
 | `format_version_migrates_on_open_and_lock` | Legacy `format_version: 0` migrates on first locked command |
 | `cli_gc_dry_run_and_prune` | gc dry-run reports blobs and history; `--prune` removes unreachable blobs |
@@ -114,7 +114,7 @@
 | `identity_set_and_read_roundtrip_via_repo_open` | Repository identity config round-trip |
 | `identity_recorded_on_commit_merge_and_revert` | Author metadata on commit, merge, and revert states |
 | `identity_does_not_change_content_addressed_state_id` | Manifest id remains `hash_manifest`; commit id is separate metadata hash |
-| `parallel_branches_identical_content_keep_distinct_log_messages` | Same tree on parallel branches keeps distinct commit ids and log messages |
+| `parallel_branches_identical_content_keep_distinct_log_messages` | Same tree on parallel branches keeps distinct commit ids and log messages; shared manifest survives `gc --prune-history` |
 | `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind`, `--json` stderr, plain string parity |
 | `incremental_status_reuses_unchanged_file_reads` | Incremental scan skips unchanged content reads; touched file alone re-read (unit) |
 | `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit) |
