@@ -78,5 +78,5 @@ Three-way inspection:
 ## Verify
 
 - Targeted `cargo test` for affected scenarios.
-- Full suite via `powershell -File .cursor/skills/astvcs-develop/scripts/verify.ps1`.
+- Full suite via `bash .cursor/skills/astvcs-develop/scripts/verify.sh`.
 - Update `examples/` and [examples/README.md](../../../examples/README.md) if user-visible merge or diff behavior changes.

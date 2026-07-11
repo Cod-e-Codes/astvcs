@@ -1,4 +1,4 @@
-# Run all fixture walkthroughs non-interactively (repo root: .\examples\run-demos.ps1)
+# Run all fixture walkthroughs non-interactively (repo root: .\examples\run-demos.ps1 or ./examples/run-demos.sh)
 param(
     [string]$LogPath = ""
 )
@@ -101,13 +101,16 @@ try {
     Invoke-Astvcs $D @("commit", "--message", "baseline") "workflow: baseline"
     Write-FixtureFile $D\lib.rs "//! workflow demo crate`npub mod core;`npub mod util;`n"
     Invoke-Astvcs $D @("diff", "lib.rs") "workflow: diff prepend"
+    Invoke-Astvcs $D @("add", "lib.rs") "workflow: add prepend"
     Invoke-Astvcs $D @("commit", "--message", "prepend doc comment") "workflow: prepend commit"
     Invoke-Astvcs $D @("branch", "create", "feature") "workflow: branch feature"
     Invoke-Astvcs $D @("checkout", "--branch", "feature") "workflow: checkout feature"
     Write-FixtureFile $D\util.rs "pub fn label() -> &'static str {`n    `"feature-branch`"`n}`n"
+    Invoke-Astvcs $D @("add", "util.rs") "workflow: add feature util"
     Invoke-Astvcs $D @("commit", "--message", "feature util label") "workflow: feature commit"
     Invoke-Astvcs $D @("checkout", "--branch", "main") "workflow: checkout main"
     Write-FixtureFile $D\core.rs "pub fn answer() -> i32 {`n    43`n}`n"
+    Invoke-Astvcs $D @("add", "core.rs") "workflow: add main core"
     Invoke-Astvcs $D @("commit", "--message", "main core answer") "workflow: main commit"
     $base = (& $astvcs --repo $D merge-base main feature | Select-Object -Last 1)
     Invoke-Astvcs $D @("diff", "--base", $base, "--left", "main", "--right", "feature", "core.rs") "workflow: three-way core"

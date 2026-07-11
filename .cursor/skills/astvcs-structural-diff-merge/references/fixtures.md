@@ -16,12 +16,12 @@ CLI-only scenarios (no fixture directory): staging (`partial_commit_only_stages_
 
 Reset fixtures before manual CLI walks:
 
-```powershell
-.\examples\reset.ps1
+```bash
+./examples/reset.sh
 ```
 
 Run all nine fixture walkthroughs non-interactively:
 
-```powershell
-.\examples\run-demos.ps1
+```bash
+./examples/run-demos.sh
 ```

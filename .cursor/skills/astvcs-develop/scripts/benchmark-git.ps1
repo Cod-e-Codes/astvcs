@@ -1,5 +1,6 @@
 # Benchmark astvcs vs Git: parse/commit, diff, merge, repo size
 # Usage: powershell -File benchmark-git.ps1 [-AstvcsPath <path>] [-WorkRoot <path>]
+# Unix: bash benchmark-git.sh [--astvcs-path <path>] [--work-root <path>]
 
 param(
     [string]$AstvcsPath = "",

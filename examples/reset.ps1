@@ -1,4 +1,4 @@
-# Reset example fixtures to baseline (repo root: .\examples\reset.ps1)
+# Reset example fixtures to baseline (repo root: .\examples\reset.ps1 or ./examples/reset.sh)
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 

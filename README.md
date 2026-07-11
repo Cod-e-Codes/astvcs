@@ -50,21 +50,23 @@ Contributor Agent Skills live under [`.cursor/skills/`](.cursor/skills/) (`astvc
 
 Requires a built binary or a [release download](#install). Set author identity once (or use `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL`):
 
-```powershell
+```bash
 cargo build --release
 
-.\target\release\astvcs.exe identity set --name "You" --email you@example.com
-.\target\release\astvcs.exe init
+./target/release/astvcs identity set --name "You" --email you@example.com
+./target/release/astvcs init
 # edit files in the repo root
-.\target\release\astvcs.exe status
-.\target\release\astvcs.exe add .
-.\target\release\astvcs.exe commit -m "describe the change"
-.\target\release\astvcs.exe log
+./target/release/astvcs status
+./target/release/astvcs add .
+./target/release/astvcs commit -m "describe the change"
+./target/release/astvcs log
 ```
+
+On Windows the release binary is `target\release\astvcs.exe`.
 
 Use `--repo <path>` to target another directory (parent directories are searched when `.astvcs` is not at that path). Pass `--details` for structural diagnostics, `-v` / `--verbose` for those details plus operational `notice:` lines on stderr, or `--json` for structured JSON errors on failure.
 
-Run all example fixtures non-interactively: `.\examples\run-demos.ps1`.
+Run all example fixtures non-interactively: `./examples/run-demos.sh`.
 
 ## Install
 
@@ -77,7 +79,7 @@ Prebuilt binaries for Linux and Windows are on [GitHub Releases](https://github.
 
 Extract the archive, put the binary on your `PATH`, then verify:
 
-```powershell
+```bash
 astvcs --version
 ```
 
@@ -85,13 +87,13 @@ astvcs --version
 
 Requires Rust 1.96+ (edition 2024) and a C toolchain for tree-sitter native dependencies.
 
-```powershell
+```bash
 cargo build --release
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request. Binary: `target\release\astvcs.exe` on Windows.
+CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request. Binary: `target/release/astvcs` on Unix, `target\release\astvcs.exe` on Windows.
 
 ## Scope at a glance
 

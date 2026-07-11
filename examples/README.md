@@ -4,33 +4,35 @@ Runnable walkthroughs for the astvcs CLI. Project overview and quick start: [REA
 
 Nine fixtures cover structural merge scenarios, network sync, lifecycle commands, shallow clone, git import, and HTTP serve. Run from the astvcs repo root.
 
-```powershell
+```bash
 cargo build --release
-.\target\release\astvcs.exe --version
+./target/release/astvcs --version
 ```
 
-Then use `.\target\release\astvcs.exe` (no `cargo run` per command).
+On Windows use `target\release\astvcs.exe`. Helper scripts (`reset`, `run-demos`) also ship as `.ps1` for native PowerShell.
 
-On Windows, use `Set-Content -NoNewline` when editing fixture files so astvcs sees LF-only line endings (`reset.ps1` and `run-demos.ps1` write LF baselines via `[IO.File]::WriteAllText`).
+`reset.sh` and `run-demos.sh` write LF-only fixture baselines. When editing fixtures by hand on Windows, use `Set-Content -NoNewline` so astvcs sees LF-only line endings.
 
 Set author identity once per repository before the first `commit`, `merge`, or `revert` (or use `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL`):
 
-```powershell
-.\target\release\astvcs.exe --repo <path> identity set --name "Example" --email example@astvcs.local
+```bash
+./target/release/astvcs --repo <path> identity set --name "Example" --email example@astvcs.local
 ```
 
 **Reset before each walkthrough** (removes `.astvcs`, temp sibling dirs, and restores baseline source files):
 
-```powershell
-.\examples\reset.ps1
+```bash
+./examples/reset.sh
 ```
 
 Run all walkthroughs non-interactively (build, reset, log to stdout/stderr):
 
-```powershell
-.\examples\run-demos.ps1
-.\examples\run-demos.ps1 -LogPath C:\path\to\astvcs-demo-output.txt
+```bash
+./examples/run-demos.sh
+./examples/run-demos.sh --log-path /tmp/astvcs-demo-output.txt
 ```
+
+Walkthrough sections below use PowerShell for native Windows manual runs; use `./target/release/astvcs` and forward slashes on Unix.
 
 Integration tests in `tests/integration.rs` cover the same scenarios in CI. The full catalog is in [`.cursor/skills/astvcs-integration-tests/references/test-catalog.md`](../.cursor/skills/astvcs-integration-tests/references/test-catalog.md).
 
@@ -76,15 +78,18 @@ $D = "examples\workflow-demo"
 
 Set-Content -NoNewline $D\lib.rs "//! workflow demo crate`npub mod core;`npub mod util;`n"
 .\target\release\astvcs.exe --repo $D diff lib.rs
+.\target\release\astvcs.exe --repo $D add lib.rs
 .\target\release\astvcs.exe --repo $D commit --message "prepend doc comment"
 
 .\target\release\astvcs.exe --repo $D branch create feature
 .\target\release\astvcs.exe --repo $D checkout --branch feature
 Set-Content -NoNewline $D\util.rs "pub fn label() -> &'static str {`n    `"feature-branch`"`n}`n"
+.\target\release\astvcs.exe --repo $D add util.rs
 .\target\release\astvcs.exe --repo $D commit --message "feature util label"
 
 .\target\release\astvcs.exe --repo $D checkout --branch main
 Set-Content -NoNewline $D\core.rs "pub fn answer() -> i32 {`n    43`n}`n"
+.\target\release\astvcs.exe --repo $D add core.rs
 .\target\release\astvcs.exe --repo $D commit --message "main core answer"
 
 $base = (.\target\release\astvcs.exe --repo $D merge-base main feature | Select-Object -Last 1)
@@ -128,7 +133,7 @@ Get-Content $D\util.rs
 Get-Content $D\lib.rs
 ```
 
-Deletion (continues same `$D`; do not run `reset.ps1` between the two parts):
+Deletion (continues same `$D`; do not run `reset.sh` between the two parts):
 
 ```powershell
 .\target\release\astvcs.exe --repo $D checkout --branch main
@@ -251,7 +256,7 @@ Get-Content $C\note.txt
 
 ## Lifecycle demo
 
-Single linear walkthrough for `blame`, `tag`, `stash`, `rebase`, and `cherry-pick`. `run-demos.ps1` runs `stash push` before `checkout` (see `stash_before_checkout`); optional `stash pop` on `feature` after `feature 2` is documented below. Conflict abort/continue paths stay in integration tests only.
+Single linear walkthrough for `blame`, `tag`, `stash`, `rebase`, and `cherry-pick`. `run-demos.sh` runs `stash push` before `checkout` (see `stash_before_checkout`); optional `stash pop` on `feature` after `feature 2` is documented below. Conflict abort/continue paths stay in integration tests only.
 
 ```powershell
 .\examples\reset.ps1
@@ -349,7 +354,7 @@ git -C $gitDir commit -m "git baseline"
 Get-Content (Join-Path $astvcsDir "hello.txt")
 ```
 
-`run-demos.ps1` skips this section with a log line when `git` is not on PATH.
+`run-demos.sh` skips this section with a log line when `git` is not on PATH.
 
 ## Serve demo (HTTP)
 
@@ -383,7 +388,7 @@ See [docs/commands.md](../docs/commands.md) for `serve`, `fetch`, `pull`, and `p
 
 After the first `add`, commits use the staging index. `reset --mixed <ref>` moves the branch tip and syncs `index.json` to the target while clearing staging; the working tree is unchanged (git's default reset mode). See `reset_mixed_unstages_and_keeps_disk` in `tests/integration.rs`.
 
-Mini walkthrough (continues `workflow-demo` after the merge above, or run `reset.ps1` and repeat init + identity + baseline):
+Mini walkthrough (continues `workflow-demo` after the merge above, or run `reset.sh` and repeat init + identity + baseline):
 
 ```powershell
 Set-Content -NoNewline $D\core.rs "pub fn answer() -> i32 {`n    99`n}`n"
