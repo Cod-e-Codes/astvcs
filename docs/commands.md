@@ -149,7 +149,7 @@ Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD
 
 Progress is stored in `.astvcs/rebase-state.json` (`branch`, `upstream`, `onto`, `original_tip`, `current_head`, `remaining`, `conflicted`). Each commit is replayed with a three-way merge (`base` = original parent, `left` = current replay head, `right` = commit being replayed). Replayed states keep the original commit message and author metadata.
 
-On replay conflict, the branch tip stays at `original_tip` until the first successful replay; after partial progress the tip is the last good `current_head`. The conflicted merge result is materialized to the working tree (no conflict markers). Focused stderr says `rebase would conflict` and shows `rebase --continue --resolve path:ours|theirs` (ours = current replay head, theirs = replayed commit). You can also edit conflicted paths on disk and continue. `rebase --abort` restores `original_tip` and materializes it.
+On replay conflict, the branch tip stays at `original_tip` until the first successful replay; after partial progress the tip is the last good `current_head`. The conflicted merge result is materialized to the working tree (no conflict markers). Focused stderr says `rebase would conflict` and shows `rebase --continue --resolve path:ours|theirs` (ours = current replay head, theirs = replayed commit). Pass multiple `--resolve` flags on one `rebase --continue` when several paths conflict in the same replay step. You can also edit conflicted paths on disk and continue. `rebase --abort` restores `original_tip` and materializes it.
 
 v1 does not include an interactive rebase editor or commit reordering.
 
@@ -178,7 +178,7 @@ The short state id is the first 8 characters of the 64-character state id. Blame
 
 `bisect bad [ref]` and `bisect good [ref]` update boundaries and recompute candidates (default `ref` is HEAD).
 
-`bisect run <script> [args...]` checks out midpoint candidates (materializes with `--force` semantics for dirty trees), runs the script with cwd = repository root, and narrows the search from the exit code: **0** = good, **1** = bad, **125** = skip (git convention). Prints `Bisecting: N revisions left...` during the run and `first bad state: <id> (<message>)` when done. Sets `ASTVCS_BISECT_STATE` to the checked-out state id. The repository lock is suspended while the script runs so nested `astvcs` invocations do not deadlock (same mechanism as client hooks).
+`bisect run <script> [args...]` checks out midpoint candidates (materializes with `--force` semantics for dirty trees), runs the script with cwd = repository root, and narrows the search from the exit code: **0** = good, **1** = bad, **125** = skip (git convention). Exit **125** removes the checked-out candidate from the search without classifying it. If every candidate is skipped, the run errors with `no untested revisions remain after skips` and leaves bisect state in place until `bisect reset`. Prints `Bisecting: N revisions left...` during the run and `first bad state: <id> (<message>)` when done. Sets `ASTVCS_BISECT_STATE` to the checked-out state id. The repository lock is suspended while the script runs so nested `astvcs` invocations do not deadlock (same mechanism as client hooks).
 
 `bisect reset` deletes bisect state and restores `original_branch` or detached `original_head`.
 
@@ -211,13 +211,13 @@ If the reverted manifest is identical to HEAD, revert is a true no-op (same stdo
 
 Paths added in the target state and modified again on HEAD before revert produce a conflict (`path modified after the reverted state`) rather than silently keeping HEAD's newer content.
 
-`--dry-run` plans in memory only; conflicts label the reverted parent and current HEAD, omit unsupported `--resolve` guidance, and exit non-zero without writes.
+`--dry-run` plans in memory only; conflicts label the reverted parent and current HEAD, omit unsupported `--resolve` guidance, and exit non-zero without writes. With `--json`, revert conflicts emit `{"kind":"revert_conflict",...}` on stderr; success stays on stdout without JSON.
 
 ### Network sync
 
 `fetch` updates `.astvcs/refs/remotes/<remote>/<branch>` only. To work on fetched commits without merging, use `reset` or `checkout --state` with the remote-tracking ref (for example `origin/main`).
 
-**Shallow fetch.** `--depth N` limits downloaded timeline entries to `N` from each tip (`N=1` is tip only). Boundaries are stored in `.astvcs/shallow.json`. A full fetch (no `--depth`) clears shallow boundaries and downloads all missing history. Shallow tag fetch uses the same depth per tag tip. `merge-base` and `merge` may fail with a `shallow history` error when history is incomplete; deepen with a higher `--depth` or a full fetch.
+**Shallow fetch.** `--depth N` limits downloaded timeline entries to `N` from each tip (`N=1` is tip only). Boundaries are stored in `.astvcs/shallow.json`. A full fetch (no `--depth`) clears shallow boundaries and downloads all missing history. Shallow tag fetch uses the same depth per tag tip. `merge-base` and `merge` may fail with a `shallow history` error when history is incomplete (`--json` reports `kind: other`); deepen with a higher `--depth` or a full fetch.
 
 `pull <remote>` runs `fetch` then merges the remote-tracking ref (`<remote>/<branch>`) into the current branch. Default branch name is the checked-out branch (same as `push`); detached HEAD requires `--branch`. `--depth` is passed through to the fetch step. Default merge message is `Merge <remote>/<branch>`; override with `-m`. On fetch failure, no merge is attempted. On fetch success with merge conflicts, remote-tracking refs are updated but the local branch tip and working tree are unchanged (same abort guarantee as `merge`). When already up to date after fetch, `pull` succeeds with an `Already up to date` message. Merge failure after a successful fetch prints `warning: pull: merge failed after successful fetch` on stderr.
 

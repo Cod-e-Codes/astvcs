@@ -4364,6 +4364,279 @@ fn bisect_run_releases_lock_for_nested_astvcs() {
 }
 
 #[test]
+fn bisect_run_skip_exit_125() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    set_identity(&repo, "Alice", "alice@example.com", false).unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v1\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 1"]),
+        "commit 1",
+    );
+    let good_id = repo.head_state().unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v2\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 2"]),
+        "commit 2",
+    );
+
+    fs::write(dir.path().join("file.txt"), "v3\n").unwrap();
+    fs::write(dir.path().join("skip-me.txt"), "skip\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 3"]),
+        "commit 3",
+    );
+    fs::remove_file(dir.path().join("skip-me.txt")).unwrap();
+
+    fs::write(dir.path().join("file.txt"), "v4\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "commit 4"]),
+        "commit 4",
+    );
+
+    #[cfg(unix)]
+    {
+        let script = dir.path().parent().unwrap().join("bisect-skip.sh");
+        write_bisect_script(
+            &script,
+            "#!/bin/sh\nif [ -f skip-me.txt ]; then exit 125; fi\nexit 1\n",
+        );
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "start", "HEAD", good_id.as_str()],
+            ),
+            "bisect start",
+        );
+        let out = run_astvcs(
+            Some(dir.path()),
+            &["bisect", "run", script.to_str().unwrap()],
+        );
+        assert_astvcs_ok(&out, "bisect run with skip");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("first bad state:") && stdout.contains("commit 2"),
+            "expected first bad commit 2 after skipping commit 3: {stdout}"
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        let script = dir.path().parent().unwrap().join("bisect-skip.ps1");
+        write_bisect_script(
+            &script,
+            &format!(
+                "Set-Location -LiteralPath \"{}\"\r\nif (Test-Path skip-me.txt) {{ exit 125 }}\r\nexit 1\r\n",
+                dir.path().display()
+            ),
+        );
+        assert_astvcs_ok(
+            &run_astvcs(
+                Some(dir.path()),
+                &["bisect", "start", "HEAD", good_id.as_str()],
+            ),
+            "bisect start",
+        );
+        let out = run_astvcs(
+            Some(dir.path()),
+            &[
+                "bisect",
+                "run",
+                "powershell",
+                "-NoProfile",
+                "-File",
+                script.to_str().unwrap(),
+            ],
+        );
+        assert_astvcs_ok(&out, "bisect run with skip");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("first bad state:") && stdout.contains("commit 2"),
+            "expected first bad commit 2 after skipping commit 3: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn bisect_run_all_skips_leave_state_until_reset() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    set_identity(&repo, "Alice", "alice@example.com", false).unwrap();
+
+    fs::write(dir.path().join("file.txt"), "good\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "good"]),
+        "good",
+    );
+    let good_id = repo.head_state().unwrap();
+
+    fs::write(dir.path().join("file.txt"), "bad\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "only bad"]),
+        "only bad",
+    );
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(dir.path()),
+            &["bisect", "start", "HEAD", good_id.as_str()],
+        ),
+        "bisect start",
+    );
+
+    #[cfg(unix)]
+    let script = {
+        let path = dir.path().parent().unwrap().join("bisect-always-skip.sh");
+        write_bisect_script(&path, "#!/bin/sh\nexit 125\n");
+        path
+    };
+    #[cfg(windows)]
+    let script = {
+        let path = dir.path().parent().unwrap().join("bisect-always-skip.ps1");
+        write_bisect_script(&path, "exit 125\r\n");
+        path
+    };
+
+    #[cfg(unix)]
+    let out = run_astvcs(
+        Some(dir.path()),
+        &["--json", "bisect", "run", script.to_str().unwrap()],
+    );
+    #[cfg(windows)]
+    let out = run_astvcs(
+        Some(dir.path()),
+        &[
+            "--json",
+            "bisect",
+            "run",
+            "powershell",
+            "-NoProfile",
+            "-File",
+            script.to_str().unwrap(),
+        ],
+    );
+
+    assert!(
+        !out.status.success(),
+        "bisect run should fail when all candidates are skipped"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no untested revisions remain after skips"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\"kind\":\"invalid_input\""), "{stderr}");
+    assert!(dir.path().join(".astvcs/bisect-state.json").exists());
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["bisect", "reset"]),
+        "bisect reset",
+    );
+    assert!(!dir.path().join(".astvcs/bisect-state.json").exists());
+}
+
+#[test]
+fn rebase_multi_path_resolve_continue() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("a.txt"), "line0\nshared\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "line0\nshared\n").unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("feature", None).unwrap();
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("a.txt"), "FEAT-A\nshared\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "FEAT-B\nshared\n").unwrap();
+    repo.commit("feature both").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(dir.path().join("a.txt"), "MAIN-A\nshared\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "MAIN-B\nshared\n").unwrap();
+    repo.commit("main both").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    let rebase = run_astvcs(Some(dir.path()), &["rebase", "main"]);
+    assert!(!rebase.status.success(), "rebase should stop on conflict");
+    let stderr = String::from_utf8_lossy(&rebase.stderr);
+    assert!(stderr.contains("rebase would conflict"), "{stderr}");
+    assert!(stderr.contains("a.txt"), "{stderr}");
+    assert!(stderr.contains("b.txt"), "{stderr}");
+
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(dir.path()),
+            &[
+                "rebase",
+                "--continue",
+                "--resolve",
+                "a.txt:theirs",
+                "--resolve",
+                "b.txt:theirs",
+            ],
+        ),
+        "rebase continue with two resolves",
+    );
+    assert!(!dir.path().join(".astvcs/rebase-state.json").exists());
+    let a = fs::read_to_string(dir.path().join("a.txt")).unwrap();
+    let b = fs::read_to_string(dir.path().join("b.txt")).unwrap();
+    assert!(a.contains("FEAT-A"), "expected feature side in a.txt: {a}");
+    assert!(b.contains("FEAT-B"), "expected feature side in b.txt: {b}");
+}
+
+#[test]
+fn cli_revert_json_reports_revert_conflict() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("keep.txt"), "stay\n").unwrap();
+    fs::write(dir.path().join("notes.txt"), "seed\n").unwrap();
+    repo.commit("seed").unwrap();
+    fs::remove_file(dir.path().join("notes.txt")).unwrap();
+    repo.commit("remove").unwrap();
+    fs::write(dir.path().join("notes.txt"), "added\n").unwrap();
+    let target = repo.commit("add notes").unwrap().state_id;
+    fs::write(dir.path().join("notes.txt"), "added later\n").unwrap();
+    let tip = repo.commit("modify notes").unwrap().state_id;
+
+    let dry = run_astvcs(
+        Some(dir.path()),
+        &[
+            "--json",
+            "revert",
+            &target,
+            "--message",
+            "revert add",
+            "--dry-run",
+        ],
+    );
+    assert!(!dry.status.success());
+    let dry_json = String::from_utf8_lossy(&dry.stderr);
+    assert!(
+        dry_json.contains("\"kind\":\"revert_conflict\""),
+        "{dry_json}"
+    );
+    assert!(dry_json.contains("revert would conflict"), "{dry_json}");
+    assert_eq!(repo.head_state().unwrap(), tip);
+
+    let live = run_astvcs(
+        Some(dir.path()),
+        &["--json", "revert", &target, "--message", "revert add"],
+    );
+    assert!(!live.status.success());
+    let live_json = String::from_utf8_lossy(&live.stderr);
+    assert!(
+        live_json.contains("\"kind\":\"revert_conflict\""),
+        "{live_json}"
+    );
+    assert!(
+        live_json.contains("path modified after the reverted state"),
+        "{live_json}"
+    );
+    assert_eq!(repo.head_state().unwrap(), tip);
+}
+
+#[test]
 fn shallow_clone_has_fewer_timeline_entries_than_full_clone() {
     let upstream = TempDir::new().unwrap();
     let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
@@ -4497,6 +4770,15 @@ fn merge_base_fails_on_shallow_clone_with_incomplete_history() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("shallow history"));
+
+    let json_out = run_astvcs(
+        Some(shallow_dir.path()),
+        &["--json", "merge-base", "main", "feature"],
+    );
+    assert!(!json_out.status.success());
+    let json_err = String::from_utf8_lossy(&json_out.stderr);
+    assert!(json_err.contains("\"kind\":\"other\""), "{json_err}");
+    assert!(json_err.contains("shallow history"), "{json_err}");
 
     let out = run_astvcs(
         Some(shallow_dir.path()),

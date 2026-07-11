@@ -44,7 +44,7 @@
 | `network_file_remote_fetch_push_and_clone` | File remote sync; push target passes `fsck` after push |
 | `shallow_clone_has_fewer_timeline_entries_than_full_clone` | `--depth` on clone limits timeline entries |
 | `full_fetch_deepens_shallow_clone` | Full fetch downloads missing shallow history and clears boundaries |
-| `merge_base_fails_on_shallow_clone_with_incomplete_history` | Shallow history blocks merge-base and merge |
+| `merge_base_fails_on_shallow_clone_with_incomplete_history` | Shallow history blocks merge-base and merge; `--json` shallow merge-base uses `kind: other` |
 | `shallow_clone_fetches_fewer_timeline_entries_than_full_clone` | Unit shallow vs full clone (`network/sync.rs`) |
 | `full_fetch_deepens_shallow_clone` | Unit and integration: full fetch downloads missing shallow history |
 | `merge_base_fails_on_shallow_repo_when_lca_missing` | Shallow merge-base error (unit, `network/sync.rs`) |
@@ -61,6 +61,7 @@
 | `revert_noop_with_dirty_working_tree_skips_materialize_guard` | No-op revert succeeds with dirty tree, no guard (unit, `src/store/repo.rs`) |
 | `cli_status_clean_tree_summary` | Clean-tree status summary line |
 | `cli_revert_and_dry_run` | Revert conflict and success paths |
+| `cli_revert_json_reports_revert_conflict` | `revert --json` emits `revert_conflict` on stderr without writes |
 | `cli_revert_conflict_labels_sides_without_merge_resolution_syntax` | Revert-specific side labels and no unsupported `--resolve` guidance |
 | `cli_revert_of_revert_restores_content` | Revert then revert the revert commit (parent state reuse) |
 | `resolve_remote_ref_for_diff_merge_base_and_checkout` | Remote-tracking ref resolution |
@@ -76,6 +77,7 @@
 | `rebase_linear_success` | Feature branch commits replayed onto updated main |
 | `rebase_conflict_abort_restores` | Replay conflict stderr uses `rebase --continue --resolve`, then `rebase --abort` restores tip and disk |
 | `rebase_conflict_continue` | `--resolve` on `rebase --continue` finishes replay |
+| `rebase_multi_path_resolve_continue` | Multiple `--resolve` flags on one `rebase --continue` finish a multi-path replay conflict |
 | `tag_create_and_list` | `tag create`, `tag list`, `tag remove` |
 | `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
 | `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
@@ -90,6 +92,8 @@
 | `blame_linear_two_commits` | Line blame attributes edits to correct commits in linear history |
 | `blame_reorder_preserves_attribution_for_moved_lines` | Reordered unchanged lines stay attributed to the introducing commit |
 | `bisect_linear_four_commits` | Bisect finds first bad commit via script in linear history |
+| `bisect_run_skip_exit_125` | `bisect run` exit 125 skips a candidate and still finds the first bad commit |
+| `bisect_run_all_skips_leave_state_until_reset` | Skipping every candidate errors; `--json` reports `invalid_input`; `bisect reset` clears state |
 | `cli_version_prints_crate_version` | `astvcs --version` prints `CARGO_PKG_VERSION` (integration) |
 | `bisect_run_releases_lock_for_nested_astvcs` | Bisect script runs nested `astvcs status` without lock error |
 | `merge_remote_tracking_ref` | `merge origin/main` after remote ref update (unit, `src/store/repo.rs`) |
