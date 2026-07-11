@@ -143,6 +143,7 @@ Materialization uses trivia-aware unparsing (see **Working tree materialization*
 
 1. Parse old and new sources into graphs.
 2. Align children between old and new using hash-anchor passes on wide sibling lists (`old.len() * new.len() > 48`), otherwise the original full-list LCS path:
+   - **Wide-list id pass**: LCS on structural `(kind, payload)` keys per child (not bare content-addressed `NodeId`), so duplicate punctuation tokens align by list position rather than shared hash identity.
    - **Id pass**: `lcs_pairs` on the full sibling `NodeId` sequence (wide lists) or the same on narrow lists; duplicate content-addressed tokens align by subsequence position, not bucket zip.
    - **Key pass** (wide): in-order zip within each `(NodeKind, payload, child_count)` bucket; **role pass** (wide): same for `(NodeKind, child_count)`.
    - **Bounded LCS**: when the unmatched cross-product is at most 48, run full-list role then key LCS on the remainder (same anchor semantics as before).

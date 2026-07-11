@@ -66,7 +66,15 @@ pub fn diff_graphs_detailed(old: &AstGraph, new: &AstGraph) -> DetailedDiffResul
         parent_old: None,
         parent_new: None,
     });
-    diff_subtree(old, new, old.root, new.root, &mut mutations, &mut alignment);
+    diff_subtree(
+        old,
+        new,
+        old.root,
+        new.root,
+        None,
+        &mut mutations,
+        &mut alignment,
+    );
     if old.root_trailing_trivia != new.root_trailing_trivia {
         mutations.push(Mutation::SetRootTrailingTrivia {
             trailing: new.root_trailing_trivia.clone(),
@@ -125,6 +133,16 @@ fn insert_anchor_new(children: &[NodeId], index: usize) -> Option<NodeId> {
     children.get(index + 1).copied()
 }
 
+fn child_struct_keys(graph: &AstGraph, children: &[NodeId]) -> Vec<(NodeKind, String)> {
+    children
+        .iter()
+        .map(|id| {
+            let node = graph.get(id).unwrap();
+            (node.kind.clone(), node.payload.clone())
+        })
+        .collect()
+}
+
 fn sibling_occurrence_before(children: &[NodeId], index: usize) -> u32 {
     children
         .get(index)
@@ -133,7 +151,6 @@ fn sibling_occurrence_before(children: &[NodeId], index: usize) -> u32 {
 }
 
 /// Map a new-graph sibling index to an insert anchor in the old parent's child list.
-/// Prefer the next sibling that already exists in the old graph; otherwise scan forward
 /// over pending inserts to the next matched sibling present in the old graph. When the
 /// immediate next sibling is new-only and no later matched anchor exists, keep the new
 /// sibling id so apply can position the insert relative to later mutations in the batch.
@@ -338,7 +355,15 @@ fn apply_role_match(
             before: insert_anchor_new(new_children, ni),
         });
     }
-    diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
+    diff_subtree(
+        old,
+        new,
+        old_children[oi],
+        new_children[ni],
+        Some(old_node_id),
+        out,
+        alignment,
+    );
     diff_child_trivia(
         old,
         new,
@@ -386,7 +411,15 @@ fn apply_key_match(
                 before: insert_anchor_new(new_children, ni),
             });
         }
-        diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
+        diff_subtree(
+            old,
+            new,
+            old_children[oi],
+            new_children[ni],
+            Some(old_node_id),
+            out,
+            alignment,
+        );
         diff_child_trivia(
             old,
             new,
@@ -432,6 +465,7 @@ fn diff_subtree(
     new: &AstGraph,
     old_id: NodeId,
     new_id: NodeId,
+    context_parent_old: Option<NodeId>,
     out: &mut Vec<Mutation>,
     alignment: &mut Vec<AlignEdge>,
 ) {
@@ -454,13 +488,13 @@ fn diff_subtree(
             out.push(Mutation::RenameIdentifier {
                 node_id: old_id,
                 new_name: new_node.payload.clone(),
-                parent: old.parent_of(&old_id),
+                parent: context_parent_old,
             });
         } else {
             out.push(Mutation::EditPayload {
                 node_id: old_id,
                 new_payload: new_node.payload.clone(),
-                parent: old.parent_of(&old_id),
+                parent: context_parent_old,
             });
         }
         return;
@@ -564,7 +598,7 @@ fn diff_children(
                 parent_old: Some(old_node_id),
                 parent_new: Some(new_node_id),
             });
-            diff_subtree(old, new, *id, *id, out, alignment);
+            diff_subtree(old, new, *id, *id, Some(old_node_id), out, alignment);
             if new_children.contains(id) {
                 diff_child_trivia(old, new, old_node_id, new_node_id, *id, *id, out);
             }
@@ -591,7 +625,9 @@ fn diff_children(
     let wide_list = old_children.len() * new_children.len() > crate::diff::align::LCS_THRESHOLD;
 
     if wide_list {
-        for (oi, ni) in lcs_pairs(&old_children, &new_children) {
+        let old_struct = child_struct_keys(old, &old_children);
+        let new_struct = child_struct_keys(new, &new_children);
+        for (oi, ni) in lcs_pairs(&old_struct, &new_struct) {
             matched_old[oi] = true;
             matched_new[ni] = true;
             alignment.push(AlignEdge {
@@ -602,7 +638,15 @@ fn diff_children(
                 parent_old: Some(old_node_id),
                 parent_new: Some(new_node_id),
             });
-            diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
+            diff_subtree(
+                old,
+                new,
+                old_children[oi],
+                new_children[ni],
+                Some(old_node_id),
+                out,
+                alignment,
+            );
             diff_child_trivia(
                 old,
                 new,
@@ -713,7 +757,15 @@ fn diff_children(
                 parent_old: Some(old_node_id),
                 parent_new: Some(new_node_id),
             });
-            diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
+            diff_subtree(
+                old,
+                new,
+                old_children[oi],
+                new_children[ni],
+                Some(old_node_id),
+                out,
+                alignment,
+            );
             diff_child_trivia(
                 old,
                 new,
@@ -793,7 +845,15 @@ fn diff_children(
                 before: insert_anchor_new(&new_children, ni),
             });
         }
-        diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
+        diff_subtree(
+            old,
+            new,
+            old_children[oi],
+            new_children[ni],
+            Some(old_node_id),
+            out,
+            alignment,
+        );
         diff_child_trivia(
             old,
             new,
@@ -836,7 +896,15 @@ fn diff_children(
                 oi.abs_diff(ni)
             ));
         }
-        diff_subtree(old, new, *old_child, new_child, out, alignment);
+        diff_subtree(
+            old,
+            new,
+            *old_child,
+            new_child,
+            Some(old_node_id),
+            out,
+            alignment,
+        );
         diff_child_trivia(
             old,
             new,

@@ -708,6 +708,73 @@ fn disjoint_body_edits_merge_across_languages() {
     }
 }
 
+#[test]
+fn merge_shared_literal_and_multi_element_arglist_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    let base = "fn f() {\n    call(1, 2);\n    let x = 1;\n}\n";
+    fs::write(dir.path().join("calls.rs"), base).unwrap();
+    repo.commit("base").unwrap();
+
+    repo.create_branch("left", None).unwrap();
+    repo.checkout_branch("left").unwrap();
+    fs::write(
+        dir.path().join("calls.rs"),
+        "fn f() {\n    call(1, 2, 3, 4);\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    repo.commit("extend call list").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    fs::write(
+        dir.path().join("calls.rs"),
+        "fn f() {\n    call(1, 2);\n    let x = 2;\n}\n",
+    )
+    .unwrap();
+    repo.commit("change x").unwrap();
+
+    let merged = repo.merge_branch("left", "merge").unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    let text = match &files["calls.rs"].content {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        other => panic!("expected ast, got {other:?}"),
+    };
+    assert!(text.contains("call(1, 2, 3, 4)") || text.contains("call(1,2,3,4)"));
+    assert!(text.contains("x = 2"));
+    parse_source("calls.rs", &text).expect("merged source must parse");
+
+    let dir2 = TempDir::new().unwrap();
+    let repo2 = Repo::init_with_identity(dir2.path()).unwrap();
+    fs::write(
+        dir2.path().join("calls.rs"),
+        "fn configure() {\n    setup(3, 4, 5, 6);\n}\n",
+    )
+    .unwrap();
+    repo2.commit("base").unwrap();
+    repo2.create_branch("left", None).unwrap();
+    repo2.checkout_branch("left").unwrap();
+    fs::write(
+        dir2.path().join("calls.rs"),
+        "fn configure() {\n    setup(3, 4, 5, 6, 7, 8);\n}\n",
+    )
+    .unwrap();
+    repo2.commit("append args").unwrap();
+    repo2.checkout_branch("main").unwrap();
+    fs::write(
+        dir2.path().join("calls.rs"),
+        "fn configure() {\n    setup(3, 4, 5, 6);\n}\n\nfn unrelated() {}\n",
+    )
+    .unwrap();
+    repo2.commit("unrelated").unwrap();
+    let merged2 = repo2.merge_branch("left", "merge append").unwrap();
+    let text2 = match &repo2.load_state_files(&merged2).unwrap()["calls.rs"].content {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        other => panic!("expected ast, got {other:?}"),
+    };
+    assert!(text2.contains("7, 8") || text2.contains("7,8"));
+    parse_source("calls.rs", &text2).expect("merged append must parse");
+}
+
 fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n")
 }

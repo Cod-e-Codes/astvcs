@@ -376,13 +376,21 @@ impl AstGraph {
         let ref_count = self.child_reference_count(node_id);
 
         if ref_count > 1 {
-            let parent = scope_parent
-                .or_else(|| self.parents.get(&node_id).copied())
-                .ok_or_else(|| {
-                    format!(
-                        "cannot edit shared node {node_id} without parent scope ({ref_count} references)"
-                    )
-                })?;
+            let parent = scope_parent.ok_or_else(|| {
+                format!(
+                    "cannot edit shared node {node_id} without parent scope ({ref_count} references)"
+                )
+            })?;
+            if !self
+                .nodes
+                .get(&parent)
+                .map(|n| n.children.contains(&node_id))
+                .unwrap_or(false)
+            {
+                return Err(format!(
+                    "edit parent {parent} does not reference shared node {node_id}"
+                ));
+            }
             self.nodes.insert(new_id, new_node);
             self.migrate_child_trivia(parent, node_id, new_id);
             self.splice_children(

@@ -836,9 +836,6 @@ fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutati
         if omit_shared_punctuation_insert(rm, left, right) {
             continue;
         }
-        if combined.iter().any(|m| mutations_merge_equivalent(m, rm)) {
-            continue;
-        }
         combined.push(rm.clone());
     }
     combined
@@ -972,6 +969,55 @@ mod tests {
                 "missing internal comma in {text:?}"
             );
         }
+    }
+
+    #[test]
+    fn shared_literal_edit_does_not_corrupt_unrelated_call_arg() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn f() {\n    call(1, 2);\n    let x = 1;\n}\n";
+        let left_s = "fn f() {\n    call(1, 2, 3, 4);\n    let x = 1;\n}\n";
+        let right_s = "fn f() {\n    call(1, 2);\n    let x = 2;\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(text.contains("call(1, 2, 3, 4)") || text.contains("call(1,2,3,4)"));
+        assert!(text.contains("x = 2"));
+        assert!(!text.contains("x = 1"));
+    }
+
+    #[test]
+    fn shared_literal_merge_commutes_head_and_incoming_order() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn f() {\n    call(1, 2);\n    let x = 1;\n}\n";
+        let feature_s = "fn f() {\n    call(1, 2, 3, 4);\n    let x = 1;\n}\n";
+        let head_s = "fn f() {\n    call(1, 2);\n    let x = 2;\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let feature = parse_rust(feature_s).unwrap();
+        let head = parse_rust(head_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(head),
+            &FileContent::Ast(feature),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(text.contains("call(1, 2, 3, 4)") || text.contains("call(1,2,3,4)"));
+        assert!(text.contains("x = 2"));
     }
 
     #[test]

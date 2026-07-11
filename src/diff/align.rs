@@ -51,7 +51,7 @@ pub fn pair_in_order_by_key<T: Eq + Hash + Clone>(old: &[T], new: &[T]) -> Vec<(
 
 /// Pair old and new indices sharing the same `NodeId`, matching duplicates in list order.
 /// Content-addressed ids can repeat among siblings (e.g. two `,` tokens).
-/// Wide sibling lists use `lcs_pairs` on the full child sequence instead; this helper
+/// Wide sibling lists use `lcs_pairs` on structural `(kind, payload)` keys per child.
 /// remains for unit tests and narrow remainders.
 #[allow(dead_code)]
 pub fn pair_equal_node_ids<T: Eq + Hash + Clone>(old: &[T], new: &[T]) -> Vec<(usize, usize)> {
