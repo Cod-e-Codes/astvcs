@@ -29,8 +29,10 @@
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync |
 | `shallow_clone_has_fewer_timeline_entries_than_full_clone` | `--depth` on clone limits timeline entries |
+| `full_fetch_deepens_shallow_clone` | Full fetch downloads missing shallow history and clears boundaries |
 | `merge_base_fails_on_shallow_clone_with_incomplete_history` | Shallow history blocks merge-base and merge |
-| `shallow_clone_fetches_fewer_timeline_entries_than_full_clone` | Unit shallow vs full clone (unit, `network/sync.rs`) |
+| `shallow_clone_fetches_fewer_timeline_entries_than_full_clone` | Unit shallow vs full clone (`network/sync.rs`) |
+| `full_fetch_deepens_shallow_clone` | Unit and integration: full fetch downloads missing shallow history |
 | `merge_base_fails_on_shallow_repo_when_lca_missing` | Shallow merge-base error (unit, `network/sync.rs`) |
 | `serve_requires_token_for_mutations`, `serve_read_requires_token_by_default`, `serve_public_read_allows_anonymous_get`, `serve_put_returns_503_when_advisory_lock_held`, `serve_concurrent_reads_during_writes` | HTTP serve bearer auth and concurrent reads (unit, `network/serve.rs`) |
 | `http_transport_sends_bearer_token`, `remote_token_roundtrip` | Client bearer token and remotes.json storage (unit, `network/transport.rs`, `network/remote.rs`) |

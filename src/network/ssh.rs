@@ -250,14 +250,13 @@ impl SshSession {
     pub fn get_ancestry(
         &self,
         tip: &StateId,
-        depth: usize,
+        depth: Option<usize>,
     ) -> Result<crate::store::AncestryResult, String> {
-        let resp = self.request(
-            "GET",
-            &self.api_path(&format!("/timeline/{tip}/ancestry?depth={depth}")),
-            None,
-            HashMap::new(),
-        )?;
+        let path = match depth {
+            Some(limit) => format!("/timeline/{tip}/ancestry?depth={limit}"),
+            None => format!("/timeline/{tip}/ancestry"),
+        };
+        let resp = self.request("GET", &self.api_path(&path), None, HashMap::new())?;
         let bytes = decode_response_body(&resp, &format!("ancestry {tip}"))?;
         let parsed: AncestryResponse = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         Ok(crate::store::AncestryResult {

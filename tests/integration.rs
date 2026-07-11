@@ -4043,6 +4043,50 @@ fn shallow_clone_has_fewer_timeline_entries_than_full_clone() {
 }
 
 #[test]
+fn full_fetch_deepens_shallow_clone() {
+    let upstream = TempDir::new().unwrap();
+    let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();
+    for (i, content) in ["v1\n", "v2\n", "v3\n", "v4\n", "v5\n"].iter().enumerate() {
+        fs::write(upstream.path().join("note.txt"), content).unwrap();
+        upstream_repo.commit(&format!("v{}", i + 1)).unwrap();
+    }
+    let full_count = fs::read_dir(upstream.path().join(".astvcs/timeline"))
+        .unwrap()
+        .count();
+
+    let shallow_dir = TempDir::new().unwrap();
+    let out = run_astvcs(
+        None,
+        &[
+            "clone",
+            "--depth",
+            "2",
+            upstream.path().to_str().unwrap(),
+            shallow_dir.path().to_str().unwrap(),
+        ],
+    );
+    assert_astvcs_ok(&out, "shallow clone");
+    let shallow_count = fs::read_dir(shallow_dir.path().join(".astvcs/timeline"))
+        .unwrap()
+        .count();
+    assert_eq!(shallow_count, 3);
+
+    let out = run_astvcs(Some(shallow_dir.path()), &["fetch", "origin"]);
+    assert_astvcs_ok(&out, "full fetch");
+
+    let deepened_count = fs::read_dir(shallow_dir.path().join(".astvcs/timeline"))
+        .unwrap()
+        .count();
+    assert_eq!(deepened_count, full_count);
+
+    let shallow_json = fs::read_to_string(shallow_dir.path().join(".astvcs/shallow.json")).unwrap();
+    assert_eq!(shallow_json.trim(), "[]");
+
+    let out = run_astvcs(Some(shallow_dir.path()), &["log"]);
+    assert_astvcs_ok(&out, "log after full fetch");
+}
+
+#[test]
 fn merge_base_fails_on_shallow_clone_with_incomplete_history() {
     let upstream = TempDir::new().unwrap();
     let upstream_repo = Repo::init_with_identity(upstream.path()).unwrap();

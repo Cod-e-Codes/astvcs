@@ -21,44 +21,16 @@ fn collect_missing_states(
     tip: &StateId,
     depth: Option<usize>,
 ) -> Result<MissingStates, String> {
-    if let Some(limit) = depth {
-        let ancestry = transport.get_ancestry(tip, limit)?;
-        let mut missing = Vec::new();
-        for id in ancestry.states.iter().rev() {
-            if !local.has_timeline(id) {
-                missing.push(id.clone());
-            }
-        }
-        return Ok(MissingStates {
-            states: missing,
-            shallow_boundary: ancestry.shallow_boundary,
-        });
-    }
-
+    let ancestry = transport.get_ancestry(tip, depth)?;
     let mut missing = Vec::new();
-    let mut queue = VecDeque::new();
-    let mut seen = HashSet::new();
-    queue.push_back(tip.clone());
-
-    while let Some(id) = queue.pop_front() {
-        if !seen.insert(id.clone()) {
-            continue;
-        }
-        if local.has_timeline(&id) {
-            continue;
-        }
-        let entry = transport.get_timeline(&id)?;
-        missing.push(id.clone());
-        for parent in entry.parents.iter().chain(entry.parent.iter()) {
-            if !seen.contains(parent) && !local.has_timeline(parent) {
-                queue.push_back(parent.clone());
-            }
+    for id in ancestry.states.iter().rev() {
+        if !local.has_timeline(id) {
+            missing.push(id.clone());
         }
     }
-    missing.reverse();
     Ok(MissingStates {
         states: missing,
-        shallow_boundary: None,
+        shallow_boundary: ancestry.shallow_boundary,
     })
 }
 
@@ -512,6 +484,35 @@ mod tests {
         assert!(shallow_count < full_count);
         assert_eq!(shallow_count, 3);
         assert!(shallow_repo.load_shallow_boundaries().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn full_fetch_deepens_shallow_clone() {
+        let upstream = TempDir::new().unwrap();
+        let upstream_repo = init_with_commit(upstream.path(), "v1");
+        commit_file(&upstream_repo, upstream.path(), "hello.txt", "v2\n", "v2");
+        commit_file(&upstream_repo, upstream.path(), "hello.txt", "v3\n", "v3");
+        commit_file(&upstream_repo, upstream.path(), "hello.txt", "v4\n", "v4");
+        commit_file(&upstream_repo, upstream.path(), "hello.txt", "v5\n", "v5");
+        let full_count = timeline_count(&upstream_repo);
+
+        let shallow_dir = TempDir::new().unwrap();
+        let (shallow_repo, _) = clone_repo(
+            upstream.path().to_str().unwrap(),
+            shallow_dir.path(),
+            None,
+            Some(2),
+            false,
+        )
+        .unwrap();
+        assert_eq!(timeline_count(&shallow_repo), 3);
+        assert_eq!(shallow_repo.load_shallow_boundaries().unwrap().len(), 1);
+
+        fetch(&shallow_repo, "origin", Some("main"), None, false).unwrap();
+
+        assert_eq!(timeline_count(&shallow_repo), full_count);
+        assert!(shallow_repo.load_shallow_boundaries().unwrap().is_empty());
+        shallow_repo.history(full_count).unwrap();
     }
 
     #[test]

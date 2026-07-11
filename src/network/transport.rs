@@ -245,14 +245,22 @@ impl Transport {
         }
     }
 
-    pub fn get_ancestry(&self, tip: &StateId, depth: usize) -> Result<AncestryResult, String> {
+    pub fn get_ancestry(
+        &self,
+        tip: &StateId,
+        depth: Option<usize>,
+    ) -> Result<AncestryResult, String> {
         match self {
-            Self::File(repo) => timeline_ancestry(tip, Some(depth), |id| {
-                map_repo(repo.load_timeline_entry(id))
-            }),
+            Self::File(repo) => {
+                timeline_ancestry(tip, depth, |id| map_repo(repo.load_timeline_entry(id)))
+            }
             Self::Ssh(session) => session.get_ancestry(tip, depth),
             Self::Http { client, .. } => {
-                let url = self.http_url(&format!("/timeline/{tip}/ancestry?depth={depth}"))?;
+                let path = match depth {
+                    Some(limit) => format!("/timeline/{tip}/ancestry?depth={limit}"),
+                    None => format!("/timeline/{tip}/ancestry"),
+                };
+                let url = self.http_url(&path)?;
                 let resp = self
                     .authorize_request(client.get(&url))
                     .send()

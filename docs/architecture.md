@@ -334,6 +334,7 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `checkout_tag_detached` | `checkout --state <tagname>` detached at tagged state |
 | `tag_fetch_push_between_repos` | Tags sync on fetch/push between file remotes |
 | `shallow_clone_has_fewer_timeline_entries_than_full_clone` | `--depth` limits timeline entries vs full clone |
+| `full_fetch_deepens_shallow_clone` | Full fetch (no `--depth`) downloads missing history and clears shallow boundaries |
 | `merge_base_fails_on_shallow_clone_with_incomplete_history` | Shallow tips block merge-base and merge |
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_preserves_unstashed_tracked_files` | `stash pop` leaves tracked files outside the stash manifest on disk |
