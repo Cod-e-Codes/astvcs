@@ -1118,6 +1118,14 @@ fn network_file_remote_fetch_push_and_clone() {
         upstream_repo.head_state().unwrap(),
         Repo::open(clone_dir.path()).unwrap().head_state().unwrap()
     );
+
+    let fsck = run_astvcs(Some(upstream.path()), &["fsck"]);
+    assert_astvcs_ok(&fsck, "fsck upstream after push");
+    assert!(
+        String::from_utf8_lossy(&fsck.stdout).contains("repository ok"),
+        "push target should pass fsck: {}",
+        String::from_utf8_lossy(&fsck.stdout)
+    );
 }
 
 #[test]

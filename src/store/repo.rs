@@ -2861,6 +2861,20 @@ impl Repo {
         Ok(())
     }
 
+    /// Advance a branch ref from network sync. When `branch` is the checked-out branch,
+    /// rewrite `index.json` from the new tip without materializing the working tree.
+    pub(crate) fn advance_branch_ref_unlocked(
+        &self,
+        branch: &str,
+        state_id: &StateId,
+    ) -> RepoResult<()> {
+        self.write_branch_ref_unlocked(branch, state_id)?;
+        if self.head_branch_unlocked()?.as_deref() == Some(branch) {
+            self.repair_index_from_head_unlocked(state_id)?;
+        }
+        Ok(())
+    }
+
     pub fn read_remote_ref(&self, remote: &str, branch: &str) -> RepoResult<Option<StateId>> {
         let _lock = self.repo_lock()?;
         self.read_remote_ref_unlocked(remote, branch)

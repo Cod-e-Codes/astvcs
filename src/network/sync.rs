@@ -516,6 +516,35 @@ mod tests {
     }
 
     #[test]
+    fn push_advances_index_on_head_branch_without_materializing() {
+        let upstream = TempDir::new().unwrap();
+        let upstream_repo = init_with_commit(upstream.path(), "v1");
+
+        let client_dir = TempDir::new().unwrap();
+        let (client_repo, _) = clone_repo(
+            upstream.path().to_str().unwrap(),
+            client_dir.path(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        crate::store::set_identity(&client_repo, "Test User", "test@example.com", false).unwrap();
+        commit_file(&client_repo, client_dir.path(), "hello.txt", "v2\n", "v2");
+        push(&client_repo, "origin", Some("main"), false, false, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(upstream.path().join("hello.txt")).unwrap(),
+            "hello\n",
+            "push should not materialize the server working tree"
+        );
+        let report = upstream_repo
+            .fsck(crate::store::FsckOptions::default())
+            .unwrap();
+        assert!(report.is_clean(), "{}", report.format_output());
+    }
+
+    #[test]
     fn merge_base_fails_on_shallow_repo_when_lca_missing() {
         let upstream = TempDir::new().unwrap();
         let upstream_repo = init_with_commit(upstream.path(), "root");

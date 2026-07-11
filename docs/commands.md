@@ -224,7 +224,7 @@ Remote URLs may be a local repository path, a `file://` URL, an `http://` or `ht
 
 **HTTPS serve.** Pass `--tls-cert` and `--tls-key` together with PEM files to listen on HTTPS instead of HTTP. Both flags are required when either is set. Startup logs `https://` or `http://` accordingly.
 
-**Serve concurrency.** Multiple clients can read simultaneously (`GET`/`HEAD` on blobs, states, timeline, refs, config, and shallow ancestry). `PUT` uploads serialize and take advisory `repo.lock` per operation; if local CLI holds the lock, the server returns HTTP 503 with body `repository locked`. Reads do not block local CLI commands on the same repository.
+**Serve concurrency.** Multiple clients can read simultaneously (`GET`/`HEAD` on blobs, states, timeline, refs, config, and shallow ancestry). `PUT` uploads serialize and take advisory `repo.lock` per operation; if local CLI holds the lock, the server returns HTTP 503 with body `repository locked`. Reads do not block local CLI commands on the same repository. When a `PUT` advances `refs/heads/<branch>` and that branch is the server's checked-out branch, `index.json` is rewritten from the new tip (metadata only; the working tree is not materialized). `fsck` checks `index.json` against HEAD, not working-tree drift after push.
 
 **HTTPS remotes.** The client validates TLS certificates via rustls (default). Self-signed or otherwise untrusted certificates fail closed unless you pass `--insecure` on `fetch`, `push`, `pull`, or `clone`. `--insecure` skips certificate verification and is intended for local development only. It does not apply to SSH remotes.
 

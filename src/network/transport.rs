@@ -358,7 +358,7 @@ impl Transport {
                 {
                     return Err(format!("non-fast-forward update for refs/heads/{branch}"));
                 }
-                map_repo(repo.write_branch_ref(branch, state_id))
+                map_repo(repo.advance_branch_ref_unlocked(branch, state_id))
             }
             Self::Ssh(session) => session.set_ref(branch, state_id, force),
             Self::Http { client, .. } => {

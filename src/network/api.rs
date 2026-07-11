@@ -228,7 +228,7 @@ fn handle_ref(
             {
                 return api_response(409, b"non-fast-forward update rejected".to_vec());
             }
-            match map_repo(repo.write_branch_ref(branch, &state_id)) {
+            match map_repo(repo.advance_branch_ref_unlocked(branch, &state_id)) {
                 Ok(()) => api_response(200, b"ok".to_vec()),
                 Err(e) => api_response(500, e.into_bytes()),
             }
