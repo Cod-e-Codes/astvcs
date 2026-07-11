@@ -47,11 +47,13 @@ pub struct ScanOptions {
 }
 
 /// Options for `commit_with_options`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommitOptions {
     pub scan: ScanOptions,
     /// Skip client hooks (`pre-commit`, `commit-msg`).
     pub no_verify: bool,
+    /// Restrict legacy whole-tree commit to these paths (HEAD paths absent from the set are removed).
+    pub only_paths: Option<HashSet<String>>,
 }
 
 impl ScanOptions {
@@ -2270,7 +2272,10 @@ impl Repo {
             }
             new_files
         } else {
-            let (working_files, mut scan_cache, _) = self.scan_working(&head, scan_opts)?;
+            let (mut working_files, mut scan_cache, _) = self.scan_working(&head, scan_opts)?;
+            if let Some(only) = &opts.only_paths {
+                working_files.retain(|p| only.contains(p));
+            }
 
             let mut new_files = head_files.clone();
             for path in &working_files {

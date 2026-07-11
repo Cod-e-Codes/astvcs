@@ -4192,6 +4192,127 @@ fn import_git_snapshot_from_subprocess() {
 }
 
 #[test]
+fn import_git_ignores_stray_untracked_files() {
+    if !git_available() {
+        eprintln!("skip import_git_ignores_stray_untracked_files: git not on PATH");
+        return;
+    }
+
+    let parent = TempDir::new().unwrap();
+    let repo_root = parent.path().join("in-place");
+    fs::create_dir_all(&repo_root).unwrap();
+
+    assert_astvcs_ok(&run_git(&repo_root, &["init"]), "git init");
+    fs::write(repo_root.join("f.txt"), "from git\n").unwrap();
+    assert_astvcs_ok(&run_git(&repo_root, &["add", "f.txt"]), "git add");
+    assert_astvcs_ok(
+        &run_git(&repo_root, &["commit", "-m", "git baseline"]),
+        "git commit",
+    );
+    fs::write(
+        repo_root.join("stray.txt"),
+        "totally unrelated stray file, never touched git\n",
+    )
+    .unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(None, &["init", repo_root.to_str().unwrap()]),
+        "astvcs init",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(&repo_root),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Import Test",
+                "--email",
+                "import@test.example",
+            ],
+        ),
+        "identity set",
+    );
+
+    let import = run_astvcs(
+        Some(&repo_root),
+        &["import-git", ".", "-m", "import in-place with stray file"],
+    );
+    assert_astvcs_ok(&import, "import-git in-place");
+
+    let astvcs_repo = Repo::open(&repo_root).unwrap();
+    let history = astvcs_repo.history(5).unwrap();
+    assert_eq!(history[0].message, "import in-place with stray file");
+    let files = astvcs_repo.load_state_files(&history[0].id).unwrap();
+    assert_eq!(files.len(), 1, "manifest should contain only git paths");
+    assert!(files.contains_key("f.txt"));
+    assert!(!files.contains_key("stray.txt"));
+}
+
+#[test]
+fn import_git_does_not_commit_skipped_binary_stray() {
+    if !git_available() {
+        eprintln!("skip import_git_does_not_commit_skipped_binary_stray: git not on PATH");
+        return;
+    }
+
+    let parent = TempDir::new().unwrap();
+    let git_dir = parent.path().join("git-repo");
+    fs::create_dir_all(&git_dir).unwrap();
+
+    assert_astvcs_ok(&run_git(&git_dir, &["init"]), "git init");
+    fs::write(git_dir.join("hello.txt"), "hello from git\n").unwrap();
+    assert_astvcs_ok(&run_git(&git_dir, &["add", "hello.txt"]), "git add");
+    assert_astvcs_ok(
+        &run_git(&git_dir, &["commit", "-m", "git baseline"]),
+        "git commit",
+    );
+
+    let astvcs_dir = parent.path().join("astvcs-repo");
+    fs::create_dir_all(&astvcs_dir).unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(None, &["init", astvcs_dir.to_str().unwrap()]),
+        "astvcs init",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(
+            Some(&astvcs_dir),
+            &[
+                "identity",
+                "set",
+                "--name",
+                "Import Test",
+                "--email",
+                "import@test.example",
+            ],
+        ),
+        "identity set",
+    );
+
+    let mut binary = vec![0u8, 1, 2, 3];
+    binary.extend_from_slice(b"stray binary never in git");
+    fs::write(astvcs_dir.join("stray.bin"), &binary).unwrap();
+
+    let import = run_astvcs(
+        Some(&astvcs_dir),
+        &[
+            "import-git",
+            git_dir.to_str().unwrap(),
+            "-m",
+            "Imported git snapshot",
+        ],
+    );
+    assert_astvcs_ok(&import, "import-git");
+
+    let repo = Repo::open(&astvcs_dir).unwrap();
+    let history = repo.history(5).unwrap();
+    let files = repo.load_state_files(&history[0].id).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(files.contains_key("hello.txt"));
+    assert!(!files.contains_key("stray.bin"));
+}
+
+#[test]
 fn cli_diff_view_writes_html_with_alignment() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();

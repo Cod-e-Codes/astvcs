@@ -288,7 +288,7 @@ tests/
 
 ## Interoperability
 
-`import-git` is a one-way migration aid: it reads a local git repository via the `git` CLI and imports the **HEAD tree snapshot** into an astvcs repository as a single commit. It uses `git rev-parse`, `git ls-tree -r HEAD`, and `git cat-file` subprocess calls only (no libgit2). UTF-8 text paths are written to the working tree and committed with normal `commit` semantics (author identity required). NUL-containing or invalid UTF-8 blobs are skipped with `warning:` on stderr. Symlinks (git mode `120000`) are imported when the target is valid UTF-8. Submodule entries (mode `160000`) are skipped with a warning. The astvcs tree is synced to the git snapshot: paths tracked at astvcs HEAD but absent from git HEAD are removed from disk before commit. If the target repository has no `.astvcs` directory, `import-git` runs `init` first.
+`import-git` is a one-way migration aid: it reads a local git repository via the `git` CLI and imports the **HEAD tree snapshot** into an astvcs repository as a single commit. It uses `git rev-parse`, `git ls-tree -r HEAD`, and `git cat-file` subprocess calls only (no libgit2). UTF-8 text paths are written to the working tree and committed with normal `commit` semantics (author identity required). The import commit includes only paths read from git HEAD; unrelated files on disk are not swept in. NUL-containing or invalid UTF-8 blobs are skipped with `warning:` on stderr and are not committed even when a same-named file exists on disk. Symlinks (git mode `120000`) are imported when the target is valid UTF-8. Submodule entries (mode `160000`) are skipped with a warning. The astvcs tree is synced to the git snapshot: paths tracked at astvcs HEAD but absent from git HEAD are removed from disk before commit. If the target repository has no `.astvcs` directory, `import-git` runs `init` first.
 
 **Non-goals (v1 and beyond for full git parity):**
 
@@ -393,6 +393,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `incremental_scan_finds_new_file_in_changed_dir` | Incremental walk discovers new files when directory metadata changes (unit, `store/walk.rs`) |
 | `verified_detects_content_change_with_unchanged_stat` | Byte digest catches content edits when metadata is stale (unit, `store/scan_cache.rs`) |
 | `import_git_snapshot_from_subprocess` | `import-git` reads local git HEAD via subprocess; one commit with import message |
+| `import_git_ignores_stray_untracked_files` | `import-git` commits only git HEAD paths; stray untracked files on disk are excluded |
+| `import_git_does_not_commit_skipped_binary_stray` | `import-git` does not commit unrelated binary files left on disk |
 | `parse_ls_tree_line_*` | `git ls-tree` line parsing (unit, `store/git_import.rs`) |
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

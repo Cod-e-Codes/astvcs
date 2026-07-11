@@ -611,6 +611,7 @@ fn run(cli: Cli) -> RepoResult<()> {
                 CommitOptions {
                     scan: ScanOptions { full_scan },
                     no_verify,
+                    ..CommitOptions::default()
                 },
             )?;
             if outcome.created {
@@ -1110,6 +1111,11 @@ fn run(cli: Cli) -> RepoResult<()> {
                 ));
             }
             let repo = Repo::open(&root)?;
+            let git_path = if git_path.is_absolute() {
+                git_path
+            } else {
+                root.join(git_path)
+            };
             let message = message.unwrap_or_else(|| "Import from git HEAD".into());
             let outcome = import_git_snapshot(&repo, &git_path, &message)?;
             if outcome.created {

@@ -147,8 +147,14 @@ pub fn import_git_snapshot(
     repo.save_staging_unlocked(&staging)
         .map_err(|e| e.to_string())?;
 
-    repo.commit_with_options(message, CommitOptions::default())
-        .map_err(|e| e.to_string())
+    repo.commit_with_options(
+        message,
+        CommitOptions {
+            only_paths: Some(imported_paths),
+            ..CommitOptions::default()
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn import_blob_file(repo_root: &Path, git_path: &Path, entry: &GitTreeEntry) -> Result<(), String> {

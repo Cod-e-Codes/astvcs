@@ -105,6 +105,8 @@
 | `moved_function_reports_move_not_delete_insert` | Intra-file reposition avoids delete+insert (unit) |
 | `commit_without_identity_fails_with_actionable_error` | Commit without identity configured |
 | `import_git_snapshot_from_subprocess` | `import-git` reads local git HEAD; file content and log message match |
+| `import_git_ignores_stray_untracked_files` | `import-git` commits only git HEAD paths; stray untracked files on disk are excluded |
+| `import_git_does_not_commit_skipped_binary_stray` | `import-git` does not commit unrelated binary files left on disk |
 | `identity_set_and_read_roundtrip_via_repo_open` | Repository identity config round-trip |
 | `identity_recorded_on_commit_merge_and_revert` | Author metadata on commit, merge, and revert states |
 | `identity_does_not_change_content_addressed_state_id` | Manifest id remains `hash_manifest`; commit id is separate metadata hash |
