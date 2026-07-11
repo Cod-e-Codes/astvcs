@@ -20,7 +20,7 @@ User-facing boundaries (in scope vs out of scope) are summarized in the [README 
 
 **Staging index.** `.astvcs/staging.json` holds staged path entries (`blob_id`, `content_kind`, `mode`, or `deleted: true`). `index.json` remains the HEAD baseline (last committed manifest). After the first `add`, `commit` snapshots staged paths only; empty staging with pending working-tree changes errors with `nothing staged; use astvcs add`. Repositories that never run `add` keep legacy whole-tree `commit` behavior. `status` uses git-style two-column labels (staged vs HEAD, unstaged vs effective index). `diff` without flags shows unstaged changes; `diff --staged` shows staged vs HEAD. `merge` and `cherry-pick` refuse when staging is non-empty.
 
-**Stash.** `.astvcs/stash/` stores numbered JSON entries (`{ id, message, base_state_id, created_at, manifest }`) and an optional `stack.json` listing stash ids (newest at index 0). `stash push` writes changed paths as content-addressed blobs, saves the entry, then materializes HEAD (clearing staging). `stash apply` / `stash pop` three-way merge only paths in the stash manifest onto current HEAD and write results to the working tree only; other tracked files are left unchanged; conflicts abort without side effects; `pop` drops the entry on success.
+**Stash.** `.astvcs/stash/` stores numbered JSON entries (`{ id, message, base_state_id, created_at, manifest }`) and an optional `stack.json` listing stash ids (newest at index 0). `stash push` writes changed paths as content-addressed blobs, saves the entry, then materializes HEAD (clearing staging). `stash apply` / `stash pop` three-way merge only paths in the stash manifest onto current HEAD and write results to the working tree only; other tracked files are left unchanged; conflicts abort without side effects; `pop` drops the entry on success. `stash drop` and `stash clear` remove entries from the stack and delete their JSON files without applying changes or requiring a clean working tree.
 
 **Rebase.** `.astvcs/rebase-state.json` records an in-progress linear rebase (`branch`, `upstream`, `onto`, `original_tip`, `current_head`, `remaining`, `conflicted`). `rebase <upstream>` collects single-parent commits from the branch tip down to the merge base with upstream (exclusive), oldest first, and replays each onto `current_head` via the same three-way merge planner as `merge` (`plan_three_way_unlocked`). Replay conflicts materialize the partial merge to disk without conflict markers; `rebase --abort` restores `original_tip`. v1 has no interactive rebase editor.
 
@@ -341,6 +341,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `stash_pop_restores_files` | `stash pop` restores stashed file content to disk |
 | `stash_pop_preserves_unstashed_tracked_files` | `stash pop` leaves tracked files outside the stash manifest on disk |
 | `stash_pop_conflict_keeps_entry` | Conflicting `stash pop` aborts and keeps the stash entry |
+| `stash_drop_discards_without_applying` | `stash drop` removes the entry without restoring stashed files |
+| `stash_clear_removes_all_entries` | `stash clear` empties the stack without applying changes |
 | `rebase_linear_success` | Feature branch commits replayed onto updated main |
 | `rebase_conflict_abort_restores` | Replay conflict then `rebase --abort` restores tip and disk |
 | `rebase_conflict_continue` | `--resolve` on `rebase --continue` finishes replay |

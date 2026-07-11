@@ -439,18 +439,54 @@ impl Repo {
         scan_cache::invalidate_scan_cache(&astvcs).map_err(RepoError::from_message)?;
 
         if pop {
-            stack.ids.remove(index);
-            save_stack(&astvcs, &stack).map_err(RepoError::from_message)?;
-            let path = entry_path(&astvcs, stash_id);
-            if path.is_file() {
-                fs::remove_file(&path).map_err(|e| RepoError::from_io("remove stash entry", e))?;
-            }
+            remove_stash_at(&astvcs, &mut stack, index)?;
             trace::notice(format!("stash pop: removed stash@{{{index}}}"));
         } else {
             trace::notice(format!("stash apply: applied stash@{{{index}}}"));
         }
         Ok(())
     }
+
+    pub fn stash_drop(&self, index: usize) -> RepoResult<()> {
+        let _lock = self.repo_lock()?;
+        let astvcs = self.astvcs_dir();
+        let mut stack = load_stack(&astvcs).map_err(RepoError::from_message)?;
+        remove_stash_at(&astvcs, &mut stack, index)?;
+        trace::notice(format!("stash drop: removed stash@{{{index}}}"));
+        Ok(())
+    }
+
+    pub fn stash_clear(&self) -> RepoResult<usize> {
+        let _lock = self.repo_lock()?;
+        let astvcs = self.astvcs_dir();
+        let stack = load_stack(&astvcs).map_err(RepoError::from_message)?;
+        let count = stack.ids.len();
+        for id in &stack.ids {
+            let path = entry_path(&astvcs, *id);
+            if path.is_file() {
+                fs::remove_file(&path).map_err(|e| RepoError::from_io("remove stash entry", e))?;
+            }
+        }
+        save_stack(&astvcs, &StashStack { ids: vec![] }).map_err(RepoError::from_message)?;
+        if count > 0 {
+            trace::notice(format!("stash clear: removed {count} entries"));
+        }
+        Ok(count)
+    }
+}
+
+fn remove_stash_at(astvcs: &Path, stack: &mut StashStack, index: usize) -> RepoResult<StashId> {
+    let stash_id = *stack
+        .ids
+        .get(index)
+        .ok_or_else(|| RepoError::invalid_input(format!("stash@{{{index}}} not found")))?;
+    stack.ids.remove(index);
+    save_stack(astvcs, stack).map_err(RepoError::from_message)?;
+    let path = entry_path(astvcs, stash_id);
+    if path.is_file() {
+        fs::remove_file(&path).map_err(|e| RepoError::from_io("remove stash entry", e))?;
+    }
+    Ok(stash_id)
 }
 
 #[cfg(test)]
@@ -484,5 +520,43 @@ mod tests {
         save_entry(&astvcs, &entry).unwrap();
         let loaded = load_entry(&astvcs, 0).unwrap();
         assert_eq!(loaded, entry);
+    }
+
+    #[test]
+    fn stash_drop_and_clear_remove_entries_without_apply() {
+        use crate::store::Repo;
+
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init_with_identity(dir.path()).unwrap();
+        fs::write(dir.path().join("note.txt"), "base\n").unwrap();
+        repo.commit("init").unwrap();
+
+        fs::write(dir.path().join("note.txt"), "stash one\n").unwrap();
+        repo.stash_push(None, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(repo.stash_list().unwrap().len(), 1);
+
+        repo.stash_drop(0).unwrap();
+        assert!(repo.stash_list().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "base\n"
+        );
+
+        fs::write(dir.path().join("note.txt"), "stash two\n").unwrap();
+        repo.stash_push(None, false).unwrap();
+        fs::write(dir.path().join("note.txt"), "stash three\n").unwrap();
+        repo.stash_push(None, false).unwrap();
+        assert_eq!(repo.stash_list().unwrap().len(), 2);
+
+        assert_eq!(repo.stash_clear().unwrap(), 2);
+        assert!(repo.stash_list().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "base\n"
+        );
     }
 }

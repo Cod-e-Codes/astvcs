@@ -3247,6 +3247,74 @@ fn stash_pop_conflict_keeps_entry() {
 }
 
 #[test]
+fn stash_drop_discards_without_applying() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "base\n").unwrap();
+    repo.commit("init").unwrap();
+    fs::write(dir.path().join("note.txt"), "stashed\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "push"]),
+        "stash push",
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "base\n"
+    );
+
+    let drop = run_astvcs(Some(dir.path()), &["stash", "drop"]);
+    assert_astvcs_ok(&drop, "stash drop");
+    let msg = String::from_utf8_lossy(&drop.stdout);
+    assert!(msg.contains("Dropped stash@{0}"), "{msg}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "base\n"
+    );
+
+    let list = run_astvcs(Some(dir.path()), &["stash", "list"]);
+    assert_astvcs_ok(&list, "stash list");
+    assert!(String::from_utf8_lossy(&list.stdout).trim().is_empty());
+}
+
+#[test]
+fn stash_clear_removes_all_entries() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("note.txt"), "base\n").unwrap();
+    repo.commit("init").unwrap();
+
+    fs::write(dir.path().join("note.txt"), "one\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "push"]),
+        "stash push one",
+    );
+    fs::write(dir.path().join("note.txt"), "two\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["stash", "push"]),
+        "stash push two",
+    );
+
+    let list = run_astvcs(Some(dir.path()), &["stash", "list"]);
+    assert_astvcs_ok(&list, "stash list before clear");
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(stdout.contains("stash@{0}:"), "{stdout}");
+    assert!(stdout.contains("stash@{1}:"), "{stdout}");
+
+    let clear = run_astvcs(Some(dir.path()), &["stash", "clear"]);
+    assert_astvcs_ok(&clear, "stash clear");
+    let msg = String::from_utf8_lossy(&clear.stdout);
+    assert!(msg.contains("Cleared 2 stash(es)"), "{msg}");
+
+    let list = run_astvcs(Some(dir.path()), &["stash", "list"]);
+    assert_astvcs_ok(&list, "stash list after clear");
+    assert!(String::from_utf8_lossy(&list.stdout).trim().is_empty());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+        "base\n"
+    );
+}
+
+#[test]
 fn tag_create_and_list() {
     let dir = TempDir::new().unwrap();
     let repo = Repo::init_with_identity(dir.path()).unwrap();

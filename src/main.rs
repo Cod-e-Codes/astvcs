@@ -411,6 +411,13 @@ enum StashAction {
         #[arg(default_value = "0")]
         index: usize,
     },
+    /// Discard a stash entry without applying it (default index 0).
+    Drop {
+        #[arg(default_value = "0")]
+        index: usize,
+    },
+    /// Discard all stash entries.
+    Clear,
 }
 
 #[derive(Subcommand)]
@@ -1048,6 +1055,16 @@ fn run(cli: Cli) -> RepoResult<()> {
                 StashAction::Apply { index } => {
                     repo.stash_apply(index)?;
                     println!("Applied stash@{{{index}}}");
+                }
+                StashAction::Drop { index } => {
+                    repo.stash_drop(index)?;
+                    println!("Dropped stash@{{{index}}}");
+                }
+                StashAction::Clear => {
+                    let count = repo.stash_clear()?;
+                    if count > 0 {
+                        println!("Cleared {count} stash(es)");
+                    }
                 }
             }
         }

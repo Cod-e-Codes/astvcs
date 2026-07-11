@@ -72,6 +72,8 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | `stash list` | List stashes (`stash@{n}`; 0 is newest) |
 | `stash pop [index]` | Apply stash (default `0`) and remove entry on success |
 | `stash apply [index]` | Apply stash without removing the entry |
+| `stash drop [index]` | Discard a stash entry without applying it (default `0`) |
+| `stash clear` | Discard all stash entries |
 | `push <remote> [--branch <name>] [--force] [--no-verify] [--insecure]` | Upload missing objects; fast-forward remote branch; upload local tags missing on remote |
 | `clone <url> [path] [--token <token>] [--depth <N>] [--insecure]` | Clone a remote repository (default path: `.`); HTTP token stored in `origin` remote config |
 | `serve [--bind <addr>] [--port <n>] [--token <token>] [--public-read] [--tls-cert <path>] [--tls-key <path>]` | Serve the repository over HTTP or HTTPS (default `127.0.0.1:9421`); token from `--token` or `ASTVCS_SERVE_TOKEN` |
@@ -137,7 +139,7 @@ Hard reset to the current tip still materializes (repairs drift between disk and
 
 `stash push` captures the working-tree diff against HEAD (disk is source of truth; staged content already on disk is included). By default only tracked paths (HEAD manifest entries and tracked deletions) are stashed; pass `-u` / `--include-untracked` to include untracked files from the working-tree scan. Errors with `no local changes to stash` when nothing differs. After saving, astvcs materializes HEAD to disk (clears staging) so the tree is clean for checkout.
 
-`stash apply` and `stash pop` three-way merge only paths listed in the stash manifest (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write results to the working tree only (`index.json` stays at HEAD). Other tracked files are left unchanged. Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict`, labels current HEAD and the stashed change, omits unsupported `--resolve` guidance, and leaves the working tree and stash unchanged. `pop` removes the entry only on full success.
+`stash apply` and `stash pop` three-way merge only paths listed in the stash manifest (`base` = stash `base_state_id`, `left` = current HEAD, `right` = stashed manifest) and write results to the working tree only (`index.json` stays at HEAD). Other tracked files are left unchanged. Refuses when the working tree is dirty (same message as merge). On any path conflict, aborts with `merge would conflict`, labels current HEAD and the stashed change, omits unsupported `--resolve` guidance, and leaves the working tree and stash unchanged. `pop` removes the entry only on full success. `stash drop` removes one entry from the stack and deletes its JSON file without touching the working tree. `stash clear` removes every entry the same way.
 
 Default push message: `WIP on <branch>: <head-short>` (first 8 hex chars of HEAD state id).
 
