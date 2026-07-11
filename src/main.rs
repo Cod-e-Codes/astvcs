@@ -4,7 +4,8 @@ use astvcs::network::{
 };
 use astvcs::store::{
     ChangeColumn, CommitOptions, FileStatus, FsckOptions, Repo, RepoError, RepoResult, ScanOptions,
-    configured_identity, import_git_snapshot, parse_merge_resolutions, set_identity,
+    clear_identity, configured_identity, import_git_snapshot, parse_merge_resolutions,
+    set_identity,
 };
 use astvcs::trace;
 use clap::{Args, Parser, Subcommand};
@@ -253,6 +254,12 @@ enum IdentityAction {
         #[arg(long)]
         email: String,
         /// Write to global identity config instead of the repository.
+        #[arg(long)]
+        global: bool,
+    },
+    /// Remove configured author identity from repository or global config.
+    Clear {
+        /// Clear global identity from ~/.astvcs/config.json instead of the repository.
         #[arg(long)]
         global: bool,
     },
@@ -906,6 +913,14 @@ fn run(cli: Cli) -> RepoResult<()> {
                         println!("Set global author identity to {name} <{email}>");
                     } else {
                         println!("Set repository author identity to {name} <{email}>");
+                    }
+                }
+                IdentityAction::Clear { global } => {
+                    clear_identity(&repo, global)?;
+                    if global {
+                        println!("Cleared global author identity");
+                    } else {
+                        println!("Cleared repository author identity");
                     }
                 }
             }

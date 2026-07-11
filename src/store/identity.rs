@@ -148,7 +148,6 @@ pub fn set_identity(repo: &Repo, name: &str, email: &str, global: bool) -> RepoR
     }
 }
 
-#[allow(dead_code)]
 pub fn clear_identity(repo: &Repo, global: bool) -> RepoResult<()> {
     let _lock = repo.repo_lock()?;
     let config = IdentityConfig::default();
@@ -163,7 +162,55 @@ pub fn clear_identity(repo: &Repo, global: bool) -> RepoResult<()> {
 mod tests {
     use super::*;
     use crate::store::Repo;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static IDENTITY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct AuthorEnvGuard {
+        saved: [(&'static str, Option<OsString>); 2],
+    }
+
+    impl AuthorEnvGuard {
+        fn clear() -> Self {
+            let names = ["ASTVCS_AUTHOR_NAME", "ASTVCS_AUTHOR_EMAIL"];
+            let mut saved = [(names[0], None), (names[1], None)];
+            for i in 0..names.len() {
+                saved[i].1 = std::env::var_os(names[i]);
+                unsafe {
+                    std::env::remove_var(names[i]);
+                }
+            }
+            Self { saved }
+        }
+
+        fn set(name_email: [(&'static str, &str); 2]) -> Self {
+            let mut saved = [("ASTVCS_AUTHOR_NAME", None), ("ASTVCS_AUTHOR_EMAIL", None)];
+            for (i, (name, value)) in name_email.into_iter().enumerate() {
+                saved[i].1 = std::env::var_os(name);
+                unsafe {
+                    std::env::set_var(name, value);
+                }
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for AuthorEnvGuard {
+        fn drop(&mut self) {
+            for (name, old) in self.saved.iter_mut() {
+                match old.take() {
+                    Some(value) => unsafe {
+                        std::env::set_var(name, value);
+                    },
+                    None => unsafe {
+                        std::env::remove_var(name);
+                    },
+                }
+            }
+        }
+    }
 
     fn setup_identity(repo: &Repo) {
         set_identity(repo, "Test User", "test@example.com", false).unwrap();
@@ -182,6 +229,7 @@ mod tests {
 
     #[test]
     fn env_overrides_repo_config() {
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
         let dir = TempDir::new().unwrap();
         let repo = Repo::init(dir.path()).unwrap();
         setup_identity(&repo);
@@ -206,5 +254,140 @@ mod tests {
             err.kind,
             super::super::error::RepoErrorKind::MissingIdentity
         );
+    }
+
+    #[test]
+    fn clear_repo_removes_author_preserves_other_config() {
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init(dir.path()).unwrap();
+        setup_identity(&repo);
+        let config_path = repo.astvcs_dir().join("config.json");
+        let before: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert!(before.get("author").is_some());
+        assert!(before.get("default_branch").is_some());
+        assert!(before.get("format_version").is_some());
+
+        clear_identity(&repo, false).unwrap();
+
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert!(after.get("author").is_none());
+        assert_eq!(after.get("default_branch"), before.get("default_branch"));
+        assert_eq!(after.get("format_version"), before.get("format_version"));
+        assert!(configured_identity(&repo, false).unwrap().is_none());
+    }
+
+    #[test]
+    fn clear_repo_falls_through_to_global_identity() {
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::clear();
+        let home = TempDir::new().unwrap();
+        let repo_dir = TempDir::new().unwrap();
+        #[cfg(windows)]
+        let home_var = "USERPROFILE";
+        #[cfg(not(windows))]
+        let home_var = "HOME";
+        let saved_home = std::env::var_os(home_var);
+        unsafe {
+            std::env::set_var(home_var, home.path());
+        }
+
+        let repo = Repo::init(repo_dir.path()).unwrap();
+        set_identity(&repo, "Repo User", "repo@example.com", false).unwrap();
+        set_identity(&repo, "Global User", "global@example.com", true).unwrap();
+        clear_identity(&repo, false).unwrap();
+
+        assert!(configured_identity(&repo, false).unwrap().is_none());
+        let id = resolve_author_identity(&repo).unwrap();
+        assert_eq!(id.name, "Global User");
+        assert_eq!(id.email, "global@example.com");
+
+        match saved_home {
+            Some(value) => unsafe {
+                std::env::set_var(home_var, value);
+            },
+            None => unsafe {
+                std::env::remove_var(home_var);
+            },
+        }
+    }
+
+    #[test]
+    fn clear_global_leaves_repo_identity() {
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::clear();
+        let home = TempDir::new().unwrap();
+        let repo_dir = TempDir::new().unwrap();
+        #[cfg(windows)]
+        let home_var = "USERPROFILE";
+        #[cfg(not(windows))]
+        let home_var = "HOME";
+        let saved_home = std::env::var_os(home_var);
+        unsafe {
+            std::env::set_var(home_var, home.path());
+        }
+
+        let repo = Repo::init(repo_dir.path()).unwrap();
+        set_identity(&repo, "Repo User", "repo@example.com", false).unwrap();
+        set_identity(&repo, "Global User", "global@example.com", true).unwrap();
+        clear_identity(&repo, true).unwrap();
+
+        let repo_id = configured_identity(&repo, false).unwrap().unwrap();
+        assert_eq!(repo_id.name, "Repo User");
+        assert_eq!(repo_id.email, "repo@example.com");
+        assert!(configured_identity(&repo, true).unwrap().is_none());
+        let id = resolve_author_identity(&repo).unwrap();
+        assert_eq!(id.name, "Repo User");
+
+        match saved_home {
+            Some(value) => unsafe {
+                std::env::set_var(home_var, value);
+            },
+            None => unsafe {
+                std::env::remove_var(home_var);
+            },
+        }
+    }
+
+    #[test]
+    fn clear_repo_does_not_unset_env() {
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::set([
+            ("ASTVCS_AUTHOR_NAME", "Env User"),
+            ("ASTVCS_AUTHOR_EMAIL", "env@example.com"),
+        ]);
+
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init(dir.path()).unwrap();
+        set_identity(&repo, "Repo User", "repo@example.com", false).unwrap();
+        clear_identity(&repo, false).unwrap();
+
+        assert_eq!(std::env::var("ASTVCS_AUTHOR_NAME").unwrap(), "Env User");
+        assert_eq!(
+            std::env::var("ASTVCS_AUTHOR_EMAIL").unwrap(),
+            "env@example.com"
+        );
+        let id = resolve_author_identity(&repo).unwrap();
+        assert_eq!(id.name, "Env User");
+        assert_eq!(id.email, "env@example.com");
+    }
+
+    #[test]
+    fn clear_does_not_rewrite_existing_timeline_author() {
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::clear();
+        let dir = TempDir::new().unwrap();
+        let repo = Repo::init(dir.path()).unwrap();
+        set_identity(&repo, "Commit Author", "commit@example.com", false).unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let state_id = repo.commit("first").unwrap().state_id;
+
+        set_identity(&repo, "New Author", "new@example.com", false).unwrap();
+        clear_identity(&repo, false).unwrap();
+
+        let entry = repo.load_timeline_entry(&state_id).unwrap();
+        assert_eq!(entry.author_name, "Commit Author");
+        assert_eq!(entry.author_email, "commit@example.com");
     }
 }

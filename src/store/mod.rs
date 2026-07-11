@@ -39,7 +39,8 @@ pub use error::{RepoError, RepoErrorKind, RepoResult};
 pub use git_import::import_git_snapshot;
 pub use history::{AncestryResult, ancestors, merge_base, timeline_ancestry, walk_history};
 pub use identity::{
-    AuthorIdentity, IdentityConfig, configured_identity, resolve_author_identity, set_identity,
+    AuthorIdentity, IdentityConfig, clear_identity, configured_identity, resolve_author_identity,
+    set_identity,
 };
 pub use manifest::{FileMode, ManifestEntry, ManifestMap, hash_commit, hash_manifest};
 pub use merge_resolve::{

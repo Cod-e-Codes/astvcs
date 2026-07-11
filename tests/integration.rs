@@ -2167,6 +2167,32 @@ fn identity_set_and_read_roundtrip_via_repo_open() {
 }
 
 #[test]
+fn identity_clear_repo_drops_override() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init(dir.path()).unwrap();
+    set_identity(&repo, "Repo Only", "repo@example.com", false).unwrap();
+
+    let clear = run_astvcs(Some(dir.path()), &["identity", "clear"]);
+    assert_astvcs_ok(&clear, "identity clear");
+    let msg = String::from_utf8_lossy(&clear.stdout);
+    assert!(msg.contains("Cleared repository author identity"), "{msg}");
+
+    let repo2 = Repo::open(dir.path()).unwrap();
+    assert!(configured_identity(&repo2, false).unwrap().is_none());
+
+    let config_path = dir.path().join(".astvcs").join("config.json");
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert!(config.get("author").is_none());
+    assert!(config.get("default_branch").is_some());
+
+    let get = run_astvcs(Some(dir.path()), &["identity", "get"]);
+    assert!(!get.status.success());
+    let err = String::from_utf8_lossy(&get.stderr);
+    assert!(err.contains("author identity not configured"), "{err}");
+}
+
+#[test]
 fn identity_recorded_on_commit_merge_and_revert() {
     let dir = TempDir::new().unwrap();
     let repo = Repo::init_with_identity(dir.path()).unwrap();

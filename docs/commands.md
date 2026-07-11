@@ -21,8 +21,9 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | Command | Description |
 |---------|-------------|
 | `init [path]` | Create a new repository (default path: `.`) |
-| `identity get [--global]` | Show configured author name and email (repository or global config) |
+| `identity get [--global]` | Show configured author name and email (repository or global config only; does not show environment overrides) |
 | `identity set --name <name> --email <email> [--global]` | Set author identity for future commits, merges, and reverts |
+| `identity clear [--global]` | Remove the `author` field from repository or global `config.json` without changing other keys. Does not unset `ASTVCS_AUTHOR_*` environment variables or rewrite author metadata on existing commits. After a repository clear, `identity get` reports no repo identity even when global config or env vars still apply to `commit`. |
 | `status [--full-scan]` | Git-style two-column status: staged vs HEAD (`M `, `A `, `D `, `R `) and unstaged vs effective index (` M`, ` A`, ` D`, `??`). Combined `MM` when both. Clean tree: `nothing to commit, working tree clean`. Renames show as `R old -> new`. AST-capable paths stored as text blobs show ` (text fallback)` on the path line. Incremental scan is used by default; pass `--full-scan` to walk every directory. |
 | `add [-u\|--update] [-A\|--all] <paths...>` | Stage paths for commit. `-u`: tracked modifications and deletions only. `-A`: all changes including untracked. Directory paths recurse. |
 | `diff [path]` | Unstaged diff (working tree vs staging overlay or HEAD). Every semantic edit is shown with compact intent labels; repeated formatting-only intents are aggregated. Path renames print `(rename)` or `(rename with edits)`. Binary paths show `(binary file - content diff omitted)`. AST-capable text fallback paths show `(text fallback - structural diff unavailable)` and a `parse mode:` intent when storage kind differs. |
