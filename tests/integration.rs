@@ -21,6 +21,14 @@ fn run_astvcs(repo: Option<&Path>, args: &[&str]) -> std::process::Output {
     cmd.args(args).output().expect("spawn astvcs")
 }
 
+fn run_astvcs_in(cwd: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(astvcs_bin())
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("spawn astvcs")
+}
+
 fn assert_astvcs_ok(out: &std::process::Output, step: &str) {
     assert!(
         out.status.success(),
@@ -1892,6 +1900,65 @@ fn cli_fsck_clean_repository() {
     assert_astvcs_ok(&out, "fsck clean");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("fsck: repository ok"), "{stdout}");
+}
+
+#[test]
+fn checkout_rejects_empty_timeline_manifest() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("only.txt"), "v1\n").unwrap();
+    repo.commit("c1").unwrap();
+    let commit_id = repo.head_state().unwrap();
+
+    let timeline_path = dir
+        .path()
+        .join(".astvcs/timeline")
+        .join(format!("{commit_id}.json"));
+    let mut timeline: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&timeline_path).unwrap()).unwrap();
+    timeline["manifest"] = serde_json::json!({});
+    fs::write(
+        &timeline_path,
+        serde_json::to_string_pretty(&timeline).unwrap(),
+    )
+    .unwrap();
+    for entry in fs::read_dir(dir.path().join(".astvcs/states")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.file_name().unwrap()
+            != "0000000000000000000000000000000000000000000000000000000000000000.json"
+        {
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    let checkout = run_astvcs(
+        Some(dir.path()),
+        &["checkout", "--state", &commit_id, "--force"],
+    );
+    assert!(!checkout.status.success());
+    let stderr = String::from_utf8_lossy(&checkout.stderr);
+    assert!(stderr.contains("manifest missing or empty"), "{stderr}");
+
+    let fsck = run_astvcs(Some(dir.path()), &["fsck"]);
+    assert!(!fsck.status.success());
+    let stdout = String::from_utf8_lossy(&fsck.stdout);
+    assert!(stdout.contains("missing state manifest"), "{stdout}");
+}
+
+#[test]
+fn commands_discover_repo_from_subdirectory() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::create_dir_all(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub/inner.txt"), "hello\n").unwrap();
+
+    let add = run_astvcs_in(dir.path().join("sub").as_path(), &["add", "inner.txt"]);
+    assert_astvcs_ok(&add, "add from subdirectory");
+
+    let status = run_astvcs_in(dir.path().join("sub").as_path(), &["status"]);
+    assert_astvcs_ok(&status, "status from subdirectory");
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("inner.txt"), "{stdout}");
 }
 
 #[test]

@@ -17,6 +17,7 @@ use crate::store::identity::{AuthorIdentity, resolve_author_identity};
 use crate::store::lock::{self, RepoLockGuard};
 use crate::store::manifest::{FileMode, ManifestEntry, ManifestMap, hash_commit, hash_manifest};
 use crate::store::merge_resolve::{MergeResolution, apply_merge_resolutions};
+use crate::store::reachability::ROOT_STATE_ID;
 use crate::store::scan_cache::{self, ScanCache};
 use crate::store::staging::{
     STAGING_FILE, StagedEntry, StagingIndex, clear_staging_entries, load_staging, save_staging,
@@ -446,14 +447,31 @@ impl Repo {
     }
 
     pub fn open(path: impl AsRef<Path>) -> RepoResult<Self> {
-        let root = path.as_ref().to_path_buf();
-        if !root.join(ASTVCS_DIR).is_dir() {
-            return Err(RepoError::not_found(format!(
-                "not an astvcs repository: {}",
-                root.display()
-            )));
-        }
+        let start = path.as_ref();
+        let root = Self::discover_root(start).ok_or_else(|| {
+            RepoError::not_found(format!("not an astvcs repository: {}", start.display()))
+        })?;
         Ok(Self { root })
+    }
+
+    /// Walk upward from `path` until a directory containing `.astvcs/` is found.
+    pub fn discover_root(path: &Path) -> Option<PathBuf> {
+        let start = if path.as_os_str().is_empty() || path == Path::new(".") {
+            std::env::current_dir().ok()?
+        } else if path.is_file() {
+            path.parent()?.to_path_buf()
+        } else {
+            path.to_path_buf()
+        };
+        let mut current = start;
+        loop {
+            if current.join(ASTVCS_DIR).is_dir() {
+                return Some(current);
+            }
+            if !current.pop() {
+                return None;
+            }
+        }
     }
 
     /// Initialize a repository and set default author identity (for tests and tooling).
@@ -782,7 +800,9 @@ impl Repo {
             .join("states")
             .join(format!("{state_id}.json"));
         if path.exists() {
-            return read_json(&path);
+            let manifest: ManifestMap = read_json(&path)?;
+            ensure_non_empty_manifest(state_id, &manifest)?;
+            return Ok(manifest);
         }
         let entry = self.load_timeline_entry_unlocked(state_id)?;
         if entry.files.is_some() {
@@ -791,8 +811,11 @@ impl Repo {
             ));
         }
         if let Some(files) = entry.files {
-            return self.migrate_inline_files(&files);
+            let manifest = self.migrate_inline_files(&files)?;
+            ensure_non_empty_manifest(state_id, &manifest)?;
+            return Ok(manifest);
         }
+        ensure_non_empty_manifest(state_id, &entry.manifest)?;
         Ok(entry.manifest)
     }
 
@@ -2940,6 +2963,15 @@ impl Repo {
     }
 }
 
+fn ensure_non_empty_manifest(state_id: &StateId, manifest: &ManifestMap) -> RepoResult<()> {
+    if !manifest.is_empty() || state_id == ROOT_STATE_ID {
+        return Ok(());
+    }
+    Err(RepoError::integrity_check(format!(
+        "state {state_id}: manifest missing or empty"
+    )))
+}
+
 pub(crate) fn normalize_repo_path(raw: &str) -> RepoResult<String> {
     let path = raw.replace('\\', "/");
     if path.is_empty() || path.contains("..") {
@@ -3299,6 +3331,48 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let repo = Repo::init_with_identity(dir.path()).unwrap();
         (dir, repo)
+    }
+
+    #[test]
+    fn discover_root_finds_parent_repository() {
+        let dir = TempDir::new().unwrap();
+        Repo::init(dir.path()).unwrap();
+        let sub = dir.path().join("nested/sub");
+        fs::create_dir_all(&sub).unwrap();
+        let root = Repo::discover_root(&sub).unwrap();
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+        let repo = Repo::open(&sub).unwrap();
+        assert_eq!(
+            repo.root_path().canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn load_manifest_rejects_empty_non_root_state() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("only.txt"), "v1\n").unwrap();
+        let id = repo.commit("c1").unwrap().state_id;
+        let timeline_path = repo
+            .astvcs_dir()
+            .join("timeline")
+            .join(format!("{id}.json"));
+        let mut timeline: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&timeline_path).unwrap()).unwrap();
+        timeline["manifest"] = serde_json::json!({});
+        fs::write(
+            &timeline_path,
+            serde_json::to_string_pretty(&timeline).unwrap(),
+        )
+        .unwrap();
+        let err = repo.load_manifest(&id).unwrap_err();
+        assert!(
+            err.to_string().contains("manifest missing or empty"),
+            "{err}"
+        );
     }
 
     #[test]

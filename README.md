@@ -62,7 +62,7 @@ cargo build --release
 .\target\release\astvcs.exe log
 ```
 
-Use `--repo <path>` to target another directory. Pass `--details` for structural diagnostics, `-v` / `--verbose` for those details plus operational `notice:` lines on stderr, or `--json` for structured JSON errors on failure.
+Use `--repo <path>` to target another directory (parent directories are searched when `.astvcs` is not at that path). Pass `--details` for structural diagnostics, `-v` / `--verbose` for those details plus operational `notice:` lines on stderr, or `--json` for structured JSON errors on failure.
 
 Run all example fixtures non-interactively: `.\examples\run-demos.ps1`.
 

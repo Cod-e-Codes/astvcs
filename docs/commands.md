@@ -11,7 +11,7 @@ Detailed behavior for reset modes, hooks, network sync, stash, rebase, and relat
 | Flag | Description |
 |------|-------------|
 | `--version` | Print crate version and exit |
-| `--repo <path>` | Repository root (default: current directory) |
+| `--repo <path>` | Repository root (default: current directory; walks parent directories to find `.astvcs` when missing at the given path) |
 | `-v`, `--verbose` | Print operational `notice:` detail to stderr (also forces a full working-tree scan) |
 | `--details` | Show state IDs, node IDs, raw mutations, and complete conflict diagnostics without enabling operational notices |
 | `--json` | On failure, print a structured JSON error object on stderr instead of `error: …` |

@@ -25,6 +25,10 @@ Run the verify script after substantive changes:
 powershell -File .cursor/skills/astvcs-develop/scripts/verify.ps1
 ```
 
+```bash
+bash .cursor/skills/astvcs-develop/scripts/verify.sh
+```
+
 Or run steps manually:
 
 ```powershell
