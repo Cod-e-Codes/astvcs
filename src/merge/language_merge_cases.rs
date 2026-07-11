@@ -241,11 +241,11 @@ pub fn language_merge_cases() -> &'static [LanguageMergeCase] {
         LanguageMergeCase {
             label: "css-same-rule",
             path: "calc.css",
-            base: ".box {\n    color: red;\n    background: blue;\n}\n",
-            left: ".box {\n    color: green;\n    background: blue;\n}\n",
-            right: ".box {\n    color: red;\n    background: yellow;\n}\n",
-            left_markers: &["green"],
-            right_markers: &["yellow"],
+            base: ".box {\n    margin-top: 10px;\n    padding-bottom: 20px;\n}\n",
+            left: ".box {\n    margin-top: 11px;\n    padding-bottom: 20px;\n}\n",
+            right: ".box {\n    margin-top: 10px;\n    padding-bottom: 19px;\n}\n",
+            left_markers: &["11px"],
+            right_markers: &["19px"],
             forbidden: &[],
         },
     ];

@@ -802,6 +802,11 @@ fn edit_roundtrip_preserves_structure_across_languages() {
             "body { color: red; }\n",
             "body { color: blue; }\n",
         ),
+        (
+            "calc.css",
+            ".box { margin-top: 10px; padding-bottom: 20px; }\n",
+            ".box { margin-top: 11px; padding-bottom: 20px; }\n",
+        ),
     ];
     for (path, before, after) in cases {
         assert_edit_roundtrip(path, before, after);

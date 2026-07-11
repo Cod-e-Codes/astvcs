@@ -18,6 +18,7 @@
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
 | `disjoint_body_edits_merge_across_languages` | Every AST frontend: disjoint edits merge to parseable source via `merge_branch` (integration) |
 | `disjoint_body_edits_merge_across_languages` | Shared fixtures: `merge_files` round-trip per AST frontend (unit, `merge/language_merge_cases.rs`) |
+| `css_dimension_literals_roundtrip` | CSS `10px`/`11px` parse, diff, and merge in one rule block (unit, `frontend/treesitter.rs`) |
 | `merge_disjoint_edits_across_languages_via_repo` | Same fixtures through commit, branch, and `merge_branch` (unit, `store/repo.rs`) |
 | `branch_merge_with_merge_base` | LCA and branch merge |
 | `cli_branch_remove_guardrails` | Branch remove: checked-out, last branch, not found, recreate name |

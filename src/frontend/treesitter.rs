@@ -82,6 +82,34 @@ fn last_leaf_end_byte(mut node: TsNode) -> usize {
     }
 }
 
+fn composite_leaf_span(ts_node: TsNode, source: &str) -> Option<String> {
+    if ts_node.child_count() == 0 || !ts_node.is_named() {
+        return None;
+    }
+    if !matches!(
+        ts_node.kind(),
+        "integer_value"
+            | "float_value"
+            | "plain_value"
+            | "color_value"
+            | "universal_value"
+            | "string_value"
+    ) {
+        return None;
+    }
+    let span = source[ts_node.start_byte()..ts_node.end_byte()].to_string();
+    if span.is_empty() || span.len() > 64 {
+        return None;
+    }
+    if span
+        .chars()
+        .any(|c| c.is_whitespace() || c == '{' || c == '}' || c == '<' || c == '>')
+    {
+        return None;
+    }
+    Some(span)
+}
+
 fn translate(
     source: &str,
     ts_node: TsNode,
@@ -93,6 +121,13 @@ fn translate(
     } else {
         NodeKind::Token
     };
+
+    if let Some(span) = composite_leaf_span(ts_node, source) {
+        let node = Node::leaf(kind, span);
+        let node_id = node.id;
+        nodes.insert(node_id, node);
+        return Ok(node_id);
+    }
 
     let payload = if ts_node.child_count() == 0 {
         source[ts_node.start_byte()..ts_node.end_byte()].to_string()
@@ -249,6 +284,45 @@ mod tests {
         let src = "<!DOCTYPE html><html><body><p>hi</p></body></html>\n";
         let graph = parse_language(SourceLanguage::Html, src).unwrap();
         graph.validate().unwrap();
+    }
+
+    #[test]
+    fn css_dimension_literals_roundtrip() {
+        use crate::diff::diff_graphs;
+        use crate::graph::Mutation;
+        use crate::unparser::unparse;
+
+        let base = ".box {\n    margin-top: 10px;\n    padding-bottom: 20px;\n}\n";
+        let left = ".box {\n    margin-top: 11px;\n    padding-bottom: 20px;\n}\n";
+        let right = ".box {\n    margin-top: 10px;\n    padding-bottom: 19px;\n}\n";
+        let b = parse_source("calc.css", base).unwrap();
+        let l = parse_source("calc.css", left).unwrap();
+        let r = parse_source("calc.css", right).unwrap();
+        assert_eq!(unparse(&b), base);
+        assert_eq!(unparse(&l), left);
+        assert_eq!(unparse(&r), right);
+        let left_diff = diff_graphs(&b, &l);
+        assert!(
+            left_diff.mutations.iter().any(
+                |m| matches!(m, Mutation::EditPayload { new_payload, .. } if new_payload == "11px")
+            ),
+            "expected margin edit: {:?}",
+            left_diff.mutations
+        );
+        let merged = crate::merge::merge_files(
+            &crate::frontend::FileContent::Ast(b),
+            &crate::frontend::FileContent::Ast(l),
+            &crate::frontend::FileContent::Ast(r),
+        );
+        let crate::merge::MergeOutcome::Merged(crate::frontend::FileContent::Ast(g)) = merged
+        else {
+            panic!("expected merge, got {merged:?}");
+        };
+        let text = unparse(&g);
+        assert!(text.contains("11px"), "{text}");
+        assert!(text.contains("19px"), "{text}");
+        assert!(!text.contains("10px"), "{text}");
+        assert!(!text.contains("20px"), "{text}");
     }
 
     #[test]

@@ -137,7 +137,7 @@ When an AST-capable path is stored as a text blob on either HEAD or the working 
 
 Extension detection uses the substring after the last `.` in the path (case-sensitive). A file named `types.d.ts` is treated as `.ts`, not a separate extension.
 
-Materialization uses trivia-aware unparsing (see **Working tree materialization** above): leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte.
+Materialization uses trivia-aware unparsing (see **Working tree materialization** above): leading gaps before each child are stored at parse time and replayed on output. When a named tree-sitter node spans past its last leaf (common in Go blocks), the gap before the next sibling is taken from the previous sibling's rightmost leaf end byte, not the named node's extended end byte. CSS compact value nodes (for example `integer_value` for `10px`) are flattened to single leaf nodes with the full source span as payload so sibling dimensions do not collide on content-addressed `NodeId` and trivia keys.
 
 ## Structural diff
 
