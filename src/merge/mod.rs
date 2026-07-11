@@ -712,14 +712,16 @@ fn touches_same_insert_site(a: &Mutation, b: &Mutation) -> bool {
             Mutation::InsertSubtree {
                 parent: p1,
                 before: b1,
+                before_occurrence: o1,
                 ..
             },
             Mutation::InsertSubtree {
                 parent: p2,
                 before: b2,
+                before_occurrence: o2,
                 ..
             },
-        ) => p1 == p2 && b1 == b2,
+        ) => p1 == p2 && b1 == b2 && o1 == o2,
         (
             Mutation::DeleteSubtree { node_id: n1, .. },
             Mutation::DeleteSubtree { node_id: n2, .. },
@@ -737,28 +739,25 @@ fn mutations_merge_equivalent(a: &Mutation, b: &Mutation) -> bool {
     if a == b {
         return true;
     }
-    match (a, b) {
+    matches!(
+        (a, b),
         (
             Mutation::InsertSubtree {
                 parent: p1,
                 before: b1,
+                before_occurrence: bo1,
                 node: n1,
                 ..
             },
             Mutation::InsertSubtree {
                 parent: p2,
                 before: b2,
+                before_occurrence: bo2,
                 node: n2,
                 ..
             },
-        ) if p1 == p2 && n1.kind == n2.kind && n1.payload == n2.payload => {
-            if b1 == b2 {
-                return true;
-            }
-            is_punctuation_token_insert(a) && is_punctuation_token_insert(b)
-        }
-        _ => false,
-    }
+        ) if p1 == p2 && n1.kind == n2.kind && n1.payload == n2.payload && b1 == b2 && bo1 == bo2
+    )
 }
 
 fn is_punctuation_token_insert(mutation: &Mutation) -> bool {
@@ -778,11 +777,21 @@ fn is_punctuation_token_insert(mutation: &Mutation) -> bool {
         && !node.payload.is_empty()
 }
 
-fn parent_has_punctuation_token_insert(mutations: &[Mutation], parent: NodeId) -> bool {
+fn punctuation_insert_at(
+    mutations: &[Mutation],
+    parent: NodeId,
+    before: Option<NodeId>,
+    before_occurrence: Option<u32>,
+) -> bool {
     mutations.iter().any(|m| {
         matches!(
             m,
-            Mutation::InsertSubtree { parent: p, .. } if *p == parent
+            Mutation::InsertSubtree {
+                parent: p,
+                before: b,
+                before_occurrence: o,
+                ..
+            } if *p == parent && *b == before && *o == before_occurrence
         ) && is_punctuation_token_insert(m)
     })
 }
@@ -792,14 +801,20 @@ fn omit_shared_punctuation_insert(
     left: &[Mutation],
     right: &[Mutation],
 ) -> bool {
-    let Mutation::InsertSubtree { parent, .. } = mutation else {
+    let Mutation::InsertSubtree {
+        parent,
+        before,
+        before_occurrence,
+        ..
+    } = mutation
+    else {
         return false;
     };
     if !is_punctuation_token_insert(mutation) {
         return false;
     }
-    parent_has_punctuation_token_insert(left, *parent)
-        && parent_has_punctuation_token_insert(right, *parent)
+    punctuation_insert_at(left, *parent, *before, *before_occurrence)
+        && punctuation_insert_at(right, *parent, *before, *before_occurrence)
 }
 
 /// Apply side-unique mutations only; shared equivalent edits are omitted (not applied twice).
@@ -914,6 +929,54 @@ mod tests {
     use super::*;
     use crate::diff::diff_graphs;
     use crate::frontend::parse_rust;
+
+    #[test]
+    fn wide_arglist_prepend_and_append_merge_roundtrip() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn setup() {\n    call(1, 2, 3, 4, 5, 6, 7, 8);\n}\n";
+        let left_s = "fn setup() {\n    call(0, 1, 2, 3, 4, 5, 6, 7, 8);\n}\n";
+        let right_s = "fn setup() {\n    call(1, 2, 3, 4, 5, 6, 7, 8, 9);\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let mut left_only = base.clone();
+        left_only
+            .apply_batch(&diff_graphs(&base, &left).mutations)
+            .unwrap();
+        assert_eq!(unparse(&left_only), unparse(&left));
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(text.contains("0, 1") || text.contains("0,1"));
+        assert!(text.contains("8, 9") || text.contains("8,9"));
+    }
+
+    #[test]
+    fn identical_literal_siblings_disjoint_edits_conflict() {
+        let base_s = "fn demo() {\n    let v = vec![0, 0, 0, 0, 0];\n}\n";
+        let left_s = "fn demo() {\n    let v = vec![1, 0, 0, 0, 0];\n}\n";
+        let right_s = "fn demo() {\n    let v = vec![0, 0, 0, 0, 2];\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        assert!(
+            matches!(outcome, MergeOutcome::Conflict(_)),
+            "content-addressed literals cannot distinguish first vs last zero: {outcome:?}"
+        );
+    }
 
     #[test]
     fn move_subtree_and_sibling_payload_edit_merge() {

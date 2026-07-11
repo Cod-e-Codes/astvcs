@@ -191,6 +191,7 @@ impl AstGraph {
             Mutation::InsertSubtree {
                 parent,
                 before,
+                before_occurrence,
                 node,
                 descendants,
                 trivia,
@@ -205,7 +206,7 @@ impl AstGraph {
                 self.splice_children(
                     *parent,
                     |children| {
-                        insert_child_before(children, node.id, *before);
+                        insert_child_before(children, node.id, *before, *before_occurrence);
                         Ok(())
                     },
                     &mut cascades,
@@ -269,7 +270,7 @@ impl AstGraph {
                     self.splice_children(
                         target_parent,
                         |children| {
-                            insert_child_before(children, *node_id, *before);
+                            insert_child_before(children, *node_id, *before, None);
                             Ok(())
                         },
                         &mut cascades,
@@ -554,10 +555,25 @@ fn child_occurrence_at(children: &[NodeId], child: NodeId) -> u32 {
     children[..index].iter().filter(|c| **c == child).count() as u32
 }
 
-fn insert_child_before(children: &mut Vec<NodeId>, node_id: NodeId, before: Option<NodeId>) {
-    let idx = before
-        .and_then(|anchor| children.iter().position(|c| *c == anchor))
-        .unwrap_or(children.len());
+fn insert_child_before(
+    children: &mut Vec<NodeId>,
+    node_id: NodeId,
+    before: Option<NodeId>,
+    before_occurrence: Option<u32>,
+) {
+    let idx = match before {
+        None => children.len(),
+        Some(anchor) => {
+            let occ = before_occurrence.unwrap_or(0) as usize;
+            children
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| **c == anchor)
+                .nth(occ)
+                .map(|(i, _)| i)
+                .unwrap_or(children.len())
+        }
+    };
     children.insert(idx, node_id);
 }
 
@@ -571,7 +587,7 @@ fn reposition_child(
         .position(|c| *c == node_id)
         .ok_or_else(|| format!("move: node not in parent children: {node_id}"))?;
     children.remove(current);
-    insert_child_before(children, node_id, before);
+    insert_child_before(children, node_id, before, None);
     Ok(())
 }
 
@@ -608,12 +624,14 @@ pub fn remap_mutation(mutation: &Mutation, table: &HashMap<NodeId, NodeId>) -> M
         Mutation::InsertSubtree {
             parent,
             before,
+            before_occurrence,
             node,
             descendants,
             trivia,
         } => Mutation::InsertSubtree {
             parent: redirect_map(*parent, table),
             before: before.map(|id| redirect_map(id, table)),
+            before_occurrence: *before_occurrence,
             node: node.clone(),
             descendants: descendants.clone(),
             trivia: trivia
@@ -714,6 +732,7 @@ mod tests {
         g.apply(&Mutation::InsertSubtree {
             parent: block_id,
             before: None,
+            before_occurrence: None,
             node: z.clone(),
             descendants: vec![z.clone()],
             trivia: vec![],

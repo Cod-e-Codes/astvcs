@@ -10,6 +10,9 @@ pub enum Mutation {
     InsertSubtree {
         parent: NodeId,
         before: Option<NodeId>,
+        /// Which occurrence of `before` under `parent` to insert ahead of (0-based).
+        /// When `before` is None, ignored. When `before_occurrence` is None, uses the first match.
+        before_occurrence: Option<u32>,
         node: Node,
         descendants: Vec<Node>,
         trivia: Vec<TriviaRecord>,

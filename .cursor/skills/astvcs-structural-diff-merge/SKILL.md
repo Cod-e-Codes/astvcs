@@ -30,8 +30,8 @@ metadata:
 - Trivia-only edits use `SetTrivia` / `SetRootTrailingTrivia`. Same-id nodes still recurse into children; the reorder path diffs child trivia after `ReorderChildren`.
 - Trailing comment text often lives in leading trivia before the next sibling token, not in the comment node payload.
 - `diff_graphs` stays mutation-only for merge. `diff_graphs_detailed` shares the same recursion and records `AlignEdge` / `AlignMethod` for the HTML viewer (`src/diff/view.rs`, `diff --view`). Do not invent confidence scores; label the pass that produced each match.
-- `pair_equal_node_ids` must pair duplicate content-addressed sibling ids in list order (e.g. multiple `,` tokens under `parameters`). A single-index map drops duplicates and emits phantom punctuation inserts on wide sibling lists (`7×7 > LCS_THRESHOLD`).
-- `InsertSubtree` `before` anchors use `resolve_insert_before_in_old`: prefer the next sibling already in the old parent, else scan forward over pending inserts to the next matched old-graph sibling (parameter lists before `)`), else fall back to the new-graph next sibling id (trailing expression inserts). `MoveNode` / `MoveSubtree` keep `insert_anchor_new` (new-graph next sibling).
+- `pair_equal_node_ids` documents list-order zip for duplicate ids; wide sibling lists use `lcs_pairs` on the full child sequence so prepend/append shifts do not mis-pair commas.
+- `InsertSubtree` `before` anchors use `resolve_insert_before_in_old` with `before_occurrence` for duplicate content-addressed siblings: prefer the next matched old-graph sibling (scanning past pending inserts), else fall back to the new-graph next sibling id. `MoveNode` / `MoveSubtree` keep `insert_anchor_new`.
 - After alignment changes, run `workflow_demo_prepend_and_disjoint_merge`, `identity_demo_payload_edit_disjoint_merge_and_conflict`, `trailing_comment_and_literal_edit_merge`, and `cli_diff_view_writes_html_with_alignment`.
 
 ### Intent changes
@@ -49,7 +49,7 @@ metadata:
 - `plan_merge` correlates paths through `detect_path_renames` per side before per-file `merge_path`.
 - `MoveSubtree`/`MoveNode` are disjoint from payload edits on the same `node_id` during merge.
 - Disjoint sibling payload edits under the same parent should merge when they touch different nodes.
-- Identical mutations on both branches (byte-for-byte equal) must not report overlap via `SameIntent`. Omit shared merge-equivalent mutations from the combined apply batch (do not apply even once). Also omit punctuation-only `InsertSubtree` token inserts when both branches emitted any under the same parent (covers side-unique phantom commas, e.g. JSON array alignment).
+- Identical mutations on both branches (byte-for-byte equal) must not report overlap via `SameIntent`. Omit shared merge-equivalent mutations from the combined apply batch (do not apply even once). Punctuation `InsertSubtree` mutations are merge-equivalent only when parent, payload, `before`, and `before_occurrence` match; omit shared phantom commas only at the same insert site.
 - Shared fixtures for every AST frontend live in `src/merge/language_merge_cases.rs`; extend them when adding a language or changing merge overlap rules.
 - Conflicting `SetTrivia` on the same slot should report a structural conflict.
 - Do not write conflict markers into the working tree.

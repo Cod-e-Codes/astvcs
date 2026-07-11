@@ -1,4 +1,4 @@
-use crate::diff::align::{fingerprint_bucket_pairs, pair_equal_node_ids, pair_in_order_by_key};
+use crate::diff::align::{fingerprint_bucket_pairs, pair_in_order_by_key};
 use crate::diff::lcs::lcs_pairs;
 use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
 use crate::trace;
@@ -125,21 +125,34 @@ fn insert_anchor_new(children: &[NodeId], index: usize) -> Option<NodeId> {
     children.get(index + 1).copied()
 }
 
+fn sibling_occurrence_before(children: &[NodeId], index: usize) -> u32 {
+    children
+        .get(index)
+        .map(|id| children[..index].iter().filter(|c| **c == *id).count() as u32)
+        .unwrap_or(0)
+}
+
 /// Map a new-graph sibling index to an insert anchor in the old parent's child list.
 /// Prefer the next sibling that already exists in the old graph; otherwise scan forward
 /// over pending inserts to the next matched sibling present in the old graph. When the
 /// immediate next sibling is new-only and no later matched anchor exists, keep the new
 /// sibling id so apply can position the insert relative to later mutations in the batch.
+/// Returns `(before, before_occurrence)` so duplicate content-addressed anchors resolve
+/// to the intended list position.
 fn resolve_insert_before_in_old(
     old_parent_children: &[NodeId],
     new_children: &[NodeId],
     matched_new: &[bool],
     new_index: usize,
-) -> Option<NodeId> {
+) -> (Option<NodeId>, Option<u32>) {
     if let Some(&next) = new_children.get(new_index + 1)
+        && matched_new.get(new_index + 1).copied().unwrap_or(false)
         && old_parent_children.contains(&next)
     {
-        return Some(next);
+        return (
+            Some(next),
+            Some(sibling_occurrence_before(new_children, new_index + 1)),
+        );
     }
     for j in (new_index + 1)..new_children.len() {
         if !matched_new[j] {
@@ -147,10 +160,16 @@ fn resolve_insert_before_in_old(
         }
         let anchor = new_children[j];
         if old_parent_children.contains(&anchor) {
-            return Some(anchor);
+            return (
+                Some(anchor),
+                Some(sibling_occurrence_before(new_children, j)),
+            );
         }
     }
-    new_children.get(new_index + 1).copied()
+    if let Some(&next) = new_children.get(new_index + 1) {
+        return (Some(next), None);
+    }
+    (None, None)
 }
 
 fn child_occurrence_at(children: &[NodeId], child: NodeId) -> u32 {
@@ -465,9 +484,16 @@ fn diff_subtree(
             .iter()
             .position(|c| *c == new_id)
             .unwrap_or(0);
+        let (before, before_occurrence) = resolve_insert_before_in_old(
+            &old.get(&old_parent).unwrap().children,
+            &new_parent_children,
+            &vec![true; new_parent_children.len()],
+            index,
+        );
         out.push(Mutation::InsertSubtree {
             parent: old_parent,
-            before: insert_anchor_new(&new_parent_children, index),
+            before,
+            before_occurrence,
             node: top,
             descendants,
             trivia: insert_trivia(new, parent, new_id, old_parent),
@@ -563,7 +589,7 @@ fn diff_children(
     let wide_list = old_children.len() * new_children.len() > crate::diff::align::LCS_THRESHOLD;
 
     if wide_list {
-        for (oi, ni) in pair_equal_node_ids(&old_children, &new_children) {
+        for (oi, ni) in lcs_pairs(&old_children, &new_children) {
             matched_old[oi] = true;
             matched_new[ni] = true;
             alignment.push(AlignEdge {
@@ -904,14 +930,12 @@ fn diff_children(
             });
             let descendants = new.collect_subtree(*new_child);
             let top = new.get(new_child).unwrap().clone();
+            let (before, before_occurrence) =
+                resolve_insert_before_in_old(&old_children, &new_children, &matched_new, ni);
             out.push(Mutation::InsertSubtree {
                 parent: old_node_id,
-                before: resolve_insert_before_in_old(
-                    &old_children,
-                    &new_children,
-                    &matched_new,
-                    ni,
-                ),
+                before,
+                before_occurrence,
                 node: top,
                 descendants,
                 trivia: insert_trivia(new, new_node_id, *new_child, old_node_id),

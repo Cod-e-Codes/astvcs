@@ -143,7 +143,7 @@ Materialization uses trivia-aware unparsing (see **Working tree materialization*
 
 1. Parse old and new sources into graphs.
 2. Align children between old and new using hash-anchor passes on wide sibling lists (`old.len() * new.len() > 48`), otherwise the original full-list LCS path:
-   - **Id pass**: `HashMap` lookup pairing equal `NodeId` values (each id is unique per graph).
+   - **Id pass**: `lcs_pairs` on the full sibling `NodeId` sequence (wide lists) or the same on narrow lists; duplicate content-addressed tokens align by subsequence position, not bucket zip.
    - **Key pass** (wide): in-order zip within each `(NodeKind, payload, child_count)` bucket; **role pass** (wide): same for `(NodeKind, child_count)`.
    - **Bounded LCS**: when the unmatched cross-product is at most 48, run full-list role then key LCS on the remainder (same anchor semantics as before).
    - **Fingerprint pass**: hash buckets of preorder structure signatures; pair when bucket size is 1 on each side.
@@ -183,7 +183,7 @@ Mutations locate children by `node_id`, not stored indices.
 
 1. Find the lowest common ancestor on the timeline (`merge-base`).
 2. Per-path three-way logic: add/add, delete on one side, modify/delete (keeps the modification), unchanged sides short-circuit inside `merge_files`.
-3. Overlap detection uses edit intents, ancestor checks (a deletion covering an edit inside its subtree), and precise insert-site checks. Mutations that are merge-equivalent on both branches are not overlapping; shared mutations are omitted from the combined apply batch rather than applied once or twice. Merge still omits side-unique punctuation-only `InsertSubtree` token inserts when both branches emitted any under the same parent (JSON array alignment). Sibling payload edits under the same parent merge when they touch different nodes. Disjoint structural edits apply in one batch with redirect rebasing. Text merges use disjoint line edits. `src/merge/language_merge_cases.rs` holds per-language disjoint-edit fixtures exercised across every AST frontend.
+3. Overlap detection uses edit intents, ancestor checks (a deletion covering an edit inside its subtree), and precise insert-site checks. Mutations that are merge-equivalent on both branches are not overlapping; shared mutations are omitted from the combined apply batch rather than applied once or twice. Punctuation `InsertSubtree` mutations merge-equate only when parent, payload, `before`, and `before_occurrence` match; shared phantom commas at the same site are omitted from the combined batch. Sibling payload edits under the same parent merge when they touch different nodes. Disjoint structural edits apply in one batch with redirect rebasing. Text merges use disjoint line edits. `src/merge/language_merge_cases.rs` holds per-language disjoint-edit fixtures exercised across every AST frontend.
 
 Failed merges roll back atomically: HEAD, branch tips, working tree, and `index.json` are unchanged. Focused conflict output lists paths, both sides' intents, and overlap reasons. Merge and pull include `--resolve` syntax; rebase includes `rebase --continue --resolve`; revert labels the reverted parent and current HEAD; cherry-pick and stash omit unsupported resolution flags. Repeated overlap examples are limited per path with an omitted count. `--details` restores state IDs, raw mutations from each side, and every overlapping pair (same node, deletion covering a nested edit, same insert site, or same intent). Use `merge --dry-run` to preview, and `diff --base --left --right` to inspect both sides.
 
@@ -392,7 +392,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `identical_reparse_with_duplicate_sibling_node_ids_is_empty` | Three-parameter Rust reparse emits no phantom comma diff (unit, `diff/ast_diff.rs`) |
 | `disjoint_body_edits_do_not_emit_phantom_comma_inserts` | Body-only edits do not diff phantom parameter commas (unit, `diff/ast_diff.rs`) |
 | `parameter_count_change_diff_applies_roundtrip` | Adding a parameter diffs and applies to valid source (unit, `diff/ast_diff.rs`) |
-| `calc_left_diff_applies_parseable` | Expression tail insert (`+ 1`) applies to parseable Rust (unit, `diff/ast_diff.rs`) |
+| `wide_arglist_prepend_and_append_merge_roundtrip` | Prepend + append on the same wide arg list merge to parseable Rust (unit, `merge/mod.rs`) |
+| `identical_literal_siblings_disjoint_edits_conflict` | First vs last identical literal edits conflict safely (unit, `merge/mod.rs`) |
 | `equal_node_id_pairs_duplicate_siblings_in_order` | Duplicate sibling `NodeId` alignment pairs in list order (unit, `diff/align.rs`) |
 | `process_calc_disjoint_edits_merge_valid_rust` | Disjoint body edits in a multi-param function merge to valid, parseable Rust (unit, `merge/language_merge_cases.rs`) |
 | `merge_disjoint_edits_across_languages_via_repo` | Full repo commit/branch/merge path for every AST frontend (unit, `store/repo.rs`) |
