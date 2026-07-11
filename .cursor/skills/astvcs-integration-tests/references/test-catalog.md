@@ -121,6 +121,8 @@
 | `structured_errors_match_plain_messages_and_kinds` | `RepoError.kind`, `--json` stderr, plain string parity |
 | `incremental_status_reuses_unchanged_file_reads` | Incremental scan skips unchanged content reads; touched file alone re-read (unit) |
 | `incremental_scan_reuses_unchanged_paths` | Incremental walk reuses cached path stats (unit) |
+| `incremental_scan_finds_new_file_in_deep_nested_dir` | Incremental walk finds new files in nested dirs when ancestor metadata is unchanged (unit) |
+| `add_all_from_deep_subdirectory_stages_new_file` | `add -A .` from a nested cwd stages new files after commit (integration) |
 | `partial_commit_only_stages_paths` | Staged commit snapshots only added paths |
 | `cli_add_dot_stages_tracked_changes` | `add .` and `add -A .` stage repository-root paths |
 | `status_shows_staged_and_unstaged_columns` | Git-style `MM` / `M ` status columns |

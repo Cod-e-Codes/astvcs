@@ -1962,6 +1962,29 @@ fn commands_discover_repo_from_subdirectory() {
 }
 
 #[test]
+fn add_all_from_deep_subdirectory_stages_new_file() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::create_dir_all(dir.path().join("x/y/z")).unwrap();
+    fs::write(dir.path().join("root.txt"), "root\n").unwrap();
+    fs::write(dir.path().join("x/y/z/deep.txt"), "deep\n").unwrap();
+
+    let repo = Repo::open(dir.path()).unwrap();
+    repo.add(&[".".into()], false, true).unwrap();
+    repo.commit("base").unwrap();
+
+    fs::write(dir.path().join("x/y/z/newdeep.txt"), "new\n").unwrap();
+    let nested = dir.path().join("x/y/z");
+    let add = run_astvcs_in(nested.as_path(), &["add", "-A", "."]);
+    assert_astvcs_ok(&add, "add -A . from deep subdirectory");
+
+    let status = run_astvcs_in(nested.as_path(), &["status"]);
+    assert_astvcs_ok(&status, "status from deep subdirectory");
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("newdeep.txt"), "{stdout}");
+}
+
+#[test]
 fn cli_fsck_detects_corruption() {
     let dir = TempDir::new().unwrap();
     Repo::init_with_identity(dir.path()).unwrap();

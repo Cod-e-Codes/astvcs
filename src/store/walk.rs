@@ -147,6 +147,14 @@ fn scan_working_full(root: &Path, head_state_id: &str) -> Result<(ScanReport, Sc
     Ok((ScanReport { files, skipped }, new_cache))
 }
 
+fn has_cached_descendant_dirs(cached_dirs: &HashMap<String, DirStat>, rel: &str) -> bool {
+    if rel.is_empty() {
+        return cached_dirs.keys().any(|k| !k.is_empty());
+    }
+    let prefix = format!("{rel}/");
+    cached_dirs.keys().any(|k| k.starts_with(&prefix))
+}
+
 fn scan_working_incremental(
     root: &Path,
     cache: &ScanCache,
@@ -236,6 +244,7 @@ fn scan_working_incremental(
                     dirs_walked_filter.fetch_add(1, Ordering::Relaxed);
                     if let Some(cached) = cached_dirs.get(&rel)
                         && scan_cache::dir_stat_unchanged(cached, &current)
+                        && !has_cached_descendant_dirs(&cached_dirs, &rel)
                     {
                         dirs_pruned_filter.fetch_add(1, Ordering::Relaxed);
                         return false;
@@ -526,6 +535,24 @@ mod tests {
         let (report, _) = scan_working_with_cache(root, Some(&cache), false, &head).unwrap();
         assert!(report.files.contains("pkg/a.rs"));
         assert!(report.files.contains("pkg/b.rs"));
+    }
+
+    #[test]
+    fn incremental_scan_finds_new_file_in_deep_nested_dir() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("x/y/z")).unwrap();
+        fs::write(root.join("root.txt"), "root\n").unwrap();
+        fs::write(root.join("x/y/z/deep.txt"), "deep\n").unwrap();
+
+        let head = "0".repeat(64);
+        let (_, cache) = scan_working_with_cache(root, None, true, &head).unwrap();
+
+        fs::write(root.join("x/y/z/newdeep.txt"), "new\n").unwrap();
+
+        let (report, _) = scan_working_with_cache(root, Some(&cache), false, &head).unwrap();
+        assert!(report.files.contains("x/y/z/deep.txt"));
+        assert!(report.files.contains("x/y/z/newdeep.txt"));
     }
 
     #[test]
