@@ -505,7 +505,11 @@ fn merge_ast(base: &AstGraph, left: &AstGraph, right: &AstGraph) -> MergeOutcome
 
     let mut merged = base.clone();
     let mut combined = left_diff.mutations.clone();
-    combined.extend(right_diff.mutations.clone());
+    for mutation in &right_diff.mutations {
+        if !combined.contains(mutation) {
+            combined.push(mutation.clone());
+        }
+    }
     if let Err(e) = merged.apply_batch(&combined) {
         return MergeOutcome::Conflict(ast_merge_conflict(
             base,
@@ -645,6 +649,9 @@ fn apply_disjoint_edits(base: &str, left_edits: &[TextEdit], right_edits: &[Text
 }
 
 fn overlap_reason(base: &AstGraph, a: &Mutation, b: &Mutation) -> Option<OverlapReason> {
+    if a == b {
+        return None;
+    }
     if are_disjoint_edits(a, b) {
         return None;
     }
@@ -1047,6 +1054,102 @@ mod tests {
                 &FileContent::Ast(right),
             ),
             MergeOutcome::Merged(_)
+        ));
+    }
+
+    #[test]
+    fn identical_mutations_are_not_overlapping() {
+        let base = parse_rust("fn wrap(a: i32) {}\n").unwrap();
+        let extended = parse_rust("fn wrap(a: i32, b: i32) {}\n").unwrap();
+        let diff = diff_graphs(&base, &extended);
+        assert!(!diff.mutations.is_empty());
+        for mutation in &diff.mutations {
+            assert!(
+                overlap_reason(&base, mutation, mutation).is_none(),
+                "identical mutations must not overlap: {mutation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_branch_identical_mutations_merge_cleanly() {
+        let bases = [
+            "fn calc(a: i32, b: i32) {\n    let x = 1;\n    let y = 2;\n}\n",
+            "fn calc(a: i32, b: i32) -> i32 {\n    let x = 1;\n    let y = 2;\n    x + y\n}\n",
+            "fn demo(a: i32, b: i32) {\n    println!(\"{}\", a);\n    println!(\"{}\", b);\n}\n",
+            "fn pair(a: i32, b: i32) -> (i32, i32) {\n    (a, b)\n}\n",
+        ];
+        let edits = [
+            (
+                "fn calc(a: i32, b: i32) {\n    let x = 9;\n    let y = 2;\n}\n",
+                "fn calc(a: i32, b: i32) {\n    let x = 1;\n    let y = 8;\n}\n",
+            ),
+            (
+                "fn calc(a: i32, b: i32) -> i32 {\n    let x = 9;\n    let y = 2;\n    x + y\n}\n",
+                "fn calc(a: i32, b: i32) -> i32 {\n    let x = 1;\n    let y = 8;\n    x + y\n}\n",
+            ),
+            (
+                "fn demo(a: i32, b: i32) {\n    println!(\"x{}\", a);\n    println!(\"{}\", b);\n}\n",
+                "fn demo(a: i32, b: i32) {\n    println!(\"{}\", a);\n    println!(\"y{}\", b);\n}\n",
+            ),
+            (
+                "fn pair(a: i32, b: i32) -> (i32, i32) {\n    (a + 1, b)\n}\n",
+                "fn pair(a: i32, b: i32) -> (i32, i32) {\n    (a, b + 1)\n}\n",
+            ),
+        ];
+        for (base_s, (left_s, right_s)) in bases.iter().zip(edits.iter()) {
+            let base = parse_rust(base_s).unwrap();
+            let left = parse_rust(left_s).unwrap();
+            let right = parse_rust(right_s).unwrap();
+            let left_diff = diff_graphs(&base, &left);
+            let right_diff = diff_graphs(&base, &right);
+            let overlaps = find_overlapping_mutations(&base, &left_diff, &right_diff);
+            let outcome = merge_files(
+                &FileContent::Ast(base),
+                &FileContent::Ast(left),
+                &FileContent::Ast(right),
+            );
+            for (li, lm) in left_diff.mutations.iter().enumerate() {
+                for (ri, rm) in right_diff.mutations.iter().enumerate() {
+                    if lm == rm {
+                        assert!(
+                            overlaps.is_empty()
+                                || overlaps
+                                    .iter()
+                                    .all(|ov| ov.left_index != li || ov.right_index != ri),
+                            "shared identical mutation should not conflict: base={base_s} lm={lm:?}"
+                        );
+                    }
+                }
+            }
+            if let MergeOutcome::Conflict(c) = &outcome {
+                let shared: Vec<_> = left_diff
+                    .mutations
+                    .iter()
+                    .filter(|lm| right_diff.mutations.iter().any(|rm| *lm == rm))
+                    .collect();
+                if !shared.is_empty() {
+                    panic!(
+                        "merge conflict despite identical cross-branch mutations: base={base_s} shared={shared:?} overlap={:?}",
+                        c.overlapping
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn same_intent_different_mutations_still_conflict() {
+        let base = parse_rust("fn foo() {\n    let x = 1;\n}\n").unwrap();
+        let left = parse_rust("fn foo() {\n    let y = 1;\n}\n").unwrap();
+        let right = parse_rust("fn foo() {\n    let z = 1;\n}\n").unwrap();
+        assert!(matches!(
+            merge_files(
+                &FileContent::Ast(base),
+                &FileContent::Ast(left),
+                &FileContent::Ast(right),
+            ),
+            MergeOutcome::Conflict(_)
         ));
     }
 

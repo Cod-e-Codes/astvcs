@@ -26,6 +26,8 @@
 | `config_files_use_ast_frontend` | TOML/YAML/JSON AST path |
 | `merge_conflict_diagnostics_without_side_effects` | Atomic rollback on conflict |
 | `rename_vs_parent_delete_reports_overlap` | Rename vs parent delete overlap report |
+| `identical_mutations_are_not_overlapping` | Byte-identical mutation pairs are not overlapping (unit, `merge/mod.rs`) |
+| `cross_branch_identical_mutations_merge_cleanly` | Shared identical diff artifacts on both branches do not block merge (unit, `merge/mod.rs`) |
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync; push target passes `fsck` after push |
