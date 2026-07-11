@@ -49,17 +49,17 @@ pub fn pair_in_order_by_key<T: Eq + Hash + Clone>(old: &[T], new: &[T]) -> Vec<(
     pairs
 }
 
-/// Pair every old index with the new index holding the same `NodeId`.
-/// NodeIds are unique per graph, so each id appears at most once per sibling list.
-pub fn pair_equal_node_ids<T: Eq + Hash>(old: &[T], new: &[T]) -> Vec<(usize, usize)> {
-    let mut new_index: HashMap<&T, usize> = HashMap::new();
-    for (ni, id) in new.iter().enumerate() {
-        new_index.insert(id, ni);
-    }
+/// Pair old and new indices sharing the same `NodeId`, matching duplicates in list order.
+/// Content-addressed ids can repeat among siblings (e.g. two `,` tokens).
+pub fn pair_equal_node_ids<T: Eq + Hash + Clone>(old: &[T], new: &[T]) -> Vec<(usize, usize)> {
+    let old_buckets = index_buckets(old);
+    let new_buckets = index_buckets(new);
     let mut pairs = Vec::new();
-    for (oi, id) in old.iter().enumerate() {
-        if let Some(&ni) = new_index.get(id) {
-            pairs.push((oi, ni));
+    for (id, old_indices) in &old_buckets {
+        if let Some(new_indices) = new_buckets.get(id) {
+            for (oi, ni) in old_indices.iter().zip(new_indices.iter()) {
+                pairs.push((*oi, *ni));
+            }
         }
     }
     pairs
@@ -147,5 +147,35 @@ mod tests {
         let new = vec![(0, 'a'), (1, 'c'), (2, 'b')];
         let pairs = bounded_lcs_index_pairs(&old, &new);
         assert_eq!(pairs.len(), 2);
+    }
+
+    #[test]
+    fn equal_node_id_pairs_duplicate_siblings_in_order() {
+        let id = 42u32;
+        let old = vec![id, 1, id, 2, id];
+        let new = vec![id, 1, id, 2, id];
+        let mut pairs = pair_equal_node_ids(&old, &new);
+        pairs.sort();
+        assert_eq!(pairs, vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)]);
+    }
+
+    #[test]
+    fn equal_node_id_pairs_uneven_duplicate_counts() {
+        let id = 42u32;
+        let old = vec![id, id, 1];
+        let new = vec![id, 2, 3];
+        let mut pairs = pair_equal_node_ids(&old, &new);
+        pairs.sort();
+        assert_eq!(pairs, vec![(0, 0)]);
+    }
+
+    #[test]
+    fn equal_node_id_pairs_extra_new_duplicate() {
+        let id = 42u32;
+        let old = vec![id, 1];
+        let new = vec![id, id, 2];
+        let mut pairs = pair_equal_node_ids(&old, &new);
+        pairs.sort();
+        assert_eq!(pairs, vec![(0, 0)]);
     }
 }

@@ -32,6 +32,11 @@
 | `rename_vs_parent_delete_reports_overlap` | Rename vs parent delete overlap report |
 | `identical_mutations_are_not_overlapping` | Byte-identical mutation pairs are not overlapping (unit, `merge/mod.rs`) |
 | `cross_branch_identical_mutations_merge_cleanly` | Shared identical diff artifacts on both branches do not block merge (unit, `merge/mod.rs`) |
+| `identical_reparse_with_duplicate_sibling_node_ids_is_empty` | Three-parameter Rust reparse emits no phantom comma diff (unit, `diff/ast_diff.rs`) |
+| `disjoint_body_edits_do_not_emit_phantom_comma_inserts` | Body-only edits do not diff phantom parameter commas (unit, `diff/ast_diff.rs`) |
+| `parameter_count_change_diff_applies_roundtrip` | Adding a parameter diffs and applies to valid source (unit, `diff/ast_diff.rs`) |
+| `calc_left_diff_applies_parseable` | Expression tail insert (`+ 1`) applies to parseable Rust (unit, `diff/ast_diff.rs`) |
+| `equal_node_id_pairs_duplicate_siblings_in_order` | Duplicate sibling `NodeId` alignment pairs in list order (unit, `diff/align.rs`) |
 | `transparency_scan_and_parse_notices` | `-v` notice output |
 | `notices_suppressed_without_verbose` | Default stderr verbosity |
 | `network_file_remote_fetch_push_and_clone` | File remote sync; push target passes `fsck` after push |

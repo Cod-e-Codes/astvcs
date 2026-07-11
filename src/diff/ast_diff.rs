@@ -121,8 +121,36 @@ fn is_payload_editable_leaf(kind: &NodeKind) -> bool {
     )
 }
 
-fn insert_anchor(children: &[NodeId], index: usize) -> Option<NodeId> {
+fn insert_anchor_new(children: &[NodeId], index: usize) -> Option<NodeId> {
     children.get(index + 1).copied()
+}
+
+/// Map a new-graph sibling index to an insert anchor in the old parent's child list.
+/// Prefer the next sibling that already exists in the old graph; otherwise scan forward
+/// over pending inserts to the next matched sibling present in the old graph. When the
+/// immediate next sibling is new-only and no later matched anchor exists, keep the new
+/// sibling id so apply can position the insert relative to later mutations in the batch.
+fn resolve_insert_before_in_old(
+    old_parent_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_new: &[bool],
+    new_index: usize,
+) -> Option<NodeId> {
+    if let Some(&next) = new_children.get(new_index + 1)
+        && old_parent_children.contains(&next)
+    {
+        return Some(next);
+    }
+    for j in (new_index + 1)..new_children.len() {
+        if !matched_new[j] {
+            continue;
+        }
+        let anchor = new_children[j];
+        if old_parent_children.contains(&anchor) {
+            return Some(anchor);
+        }
+    }
+    new_children.get(new_index + 1).copied()
 }
 
 fn child_occurrence_at(children: &[NodeId], child: NodeId) -> u32 {
@@ -288,7 +316,7 @@ fn apply_role_match(
         out.push(Mutation::MoveNode {
             node_id: old_children[oi],
             new_parent: old_node_id,
-            before: insert_anchor(new_children, ni),
+            before: insert_anchor_new(new_children, ni),
         });
     }
     diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
@@ -336,7 +364,7 @@ fn apply_key_match(
             out.push(Mutation::MoveNode {
                 node_id: old_children[oi],
                 new_parent: old_node_id,
-                before: insert_anchor(new_children, ni),
+                before: insert_anchor_new(new_children, ni),
             });
         }
         diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
@@ -439,7 +467,7 @@ fn diff_subtree(
             .unwrap_or(0);
         out.push(Mutation::InsertSubtree {
             parent: old_parent,
-            before: insert_anchor(&new_parent_children, index),
+            before: insert_anchor_new(&new_parent_children, index),
             node: top,
             descendants,
             trivia: insert_trivia(new, parent, new_id, old_parent),
@@ -734,7 +762,7 @@ fn diff_children(
             out.push(Mutation::MoveSubtree {
                 node_id: old_children[oi],
                 new_parent: old_node_id,
-                before: insert_anchor(&new_children, ni),
+                before: insert_anchor_new(&new_children, ni),
             });
         }
         diff_subtree(old, new, old_children[oi], new_children[ni], out, alignment);
@@ -773,7 +801,7 @@ fn diff_children(
             out.push(Mutation::MoveNode {
                 node_id: *old_child,
                 new_parent: old_node_id,
-                before: insert_anchor(&new_children, ni),
+                before: insert_anchor_new(&new_children, ni),
             });
             trace::notice(format!(
                 "diff: structural fallback paired siblings at old[{oi}] new[{ni}] (distance {})",
@@ -818,7 +846,7 @@ fn diff_children(
             out.push(Mutation::MoveNode {
                 node_id: *old_child,
                 new_parent: old_node_id,
-                before: insert_anchor(&new_children, ni),
+                before: insert_anchor_new(&new_children, ni),
             });
             trace::notice(format!(
                 "diff: leaf fallback paired siblings at old[{oi}] new[{ni}] (distance {})",
@@ -878,7 +906,12 @@ fn diff_children(
             let top = new.get(new_child).unwrap().clone();
             out.push(Mutation::InsertSubtree {
                 parent: old_node_id,
-                before: insert_anchor(&new_children, ni),
+                before: resolve_insert_before_in_old(
+                    &old_children,
+                    &new_children,
+                    &matched_new,
+                    ni,
+                ),
                 node: top,
                 descendants,
                 trivia: insert_trivia(new, new_node_id, *new_child, old_node_id),
@@ -1347,6 +1380,80 @@ mod tests {
             "expected LeafFallback match edge: {:?}",
             result.alignment
         );
+    }
+
+    #[test]
+    fn identical_reparse_with_duplicate_sibling_node_ids_is_empty() {
+        let src = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}\n";
+        let a = parse_rust(src).unwrap();
+        let b = parse_rust(src).unwrap();
+        assert!(diff_graphs(&a, &b).mutations.is_empty());
+    }
+
+    #[test]
+    fn disjoint_body_edits_do_not_emit_phantom_comma_inserts() {
+        let base_s = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}\n";
+        let left_s = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}\n";
+        let right_s = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a - 1;\n    z\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let token_inserts = |diff: &DiffResult| {
+            diff.mutations.iter().any(|m| {
+                matches!(
+                    m,
+                    Mutation::InsertSubtree {
+                        node,
+                        ..
+                    } if node.kind == NodeKind::Token && node.payload == ","
+                )
+            })
+        };
+        assert!(!token_inserts(&diff_graphs(&base, &left)));
+        assert!(!token_inserts(&diff_graphs(&base, &right)));
+    }
+
+    #[test]
+    fn identical_reparse_json_array_with_commas_is_empty() {
+        use crate::frontend::parse_source;
+
+        let src = "{\"items\": [1, 2, 3]}\n";
+        let a = parse_source("data.json", src).unwrap();
+        let b = parse_source("data.json", src).unwrap();
+        assert!(diff_graphs(&a, &b).mutations.is_empty());
+    }
+
+    #[test]
+    fn four_parameter_identical_reparse_is_empty() {
+        let src = "fn many(a: i32, b: i32, c: i32, d: i32) -> i32 {\n    a + b + c + d\n}\n";
+        let a = parse_rust(src).unwrap();
+        let b = parse_rust(src).unwrap();
+        assert!(diff_graphs(&a, &b).mutations.is_empty());
+    }
+
+    #[test]
+    fn parameter_count_change_diff_applies_roundtrip() {
+        let old = parse_rust("fn pair(a: i32, b: i32) -> i32 {\n    a + b\n}\n").unwrap();
+        let new = parse_rust("fn pair(a: i32, b: i32, c: i32) -> i32 {\n    a + b\n}\n").unwrap();
+        let diff = diff_graphs(&old, &new);
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
+    }
+
+    #[test]
+    fn calc_left_diff_applies_parseable() {
+        let base_s = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c;\n    let z = y - a;\n    z\n}\n";
+        let left_s = "pub fn process(a: i32, b: i32, c: i32) -> i32 {\n    let x = a + b;\n    let y = x * c + 1;\n    let z = y - a;\n    z\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let mut working = base.clone();
+        working
+            .apply_batch(&diff_graphs(&base, &left).mutations)
+            .unwrap();
+        let text = unparse(&working);
+        parse_rust(&text).expect("applied diff must parse");
+        assert!(text.contains("+ 1") || text.contains("+1"));
     }
 
     #[test]
