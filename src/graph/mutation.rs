@@ -37,10 +37,14 @@ pub enum Mutation {
     RenameIdentifier {
         node_id: NodeId,
         new_name: String,
+        /// Parent whose child list contains `node_id`. Required when the node is shared.
+        parent: Option<NodeId>,
     },
     EditPayload {
         node_id: NodeId,
         new_payload: String,
+        /// Parent whose child list contains `node_id`. Required when the node is shared.
+        parent: Option<NodeId>,
     },
     /// Replace the full child order under `parent`.
     ReorderChildren {
@@ -82,7 +86,7 @@ impl Mutation {
             Self::MoveNode { new_parent, .. } | Self::MoveSubtree { new_parent, .. } => {
                 Some(*new_parent)
             }
-            Self::RenameIdentifier { .. } | Self::EditPayload { .. } => None,
+            Self::RenameIdentifier { parent, .. } | Self::EditPayload { parent, .. } => *parent,
             Self::SetRootTrailingTrivia { .. } => None,
         }
     }

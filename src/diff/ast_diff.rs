@@ -454,11 +454,13 @@ fn diff_subtree(
             out.push(Mutation::RenameIdentifier {
                 node_id: old_id,
                 new_name: new_node.payload.clone(),
+                parent: old.parent_of(&old_id),
             });
         } else {
             out.push(Mutation::EditPayload {
                 node_id: old_id,
                 new_payload: new_node.payload.clone(),
+                parent: old.parent_of(&old_id),
             });
         }
         return;
@@ -883,11 +885,13 @@ fn diff_children(
             out.push(Mutation::RenameIdentifier {
                 node_id: *old_child,
                 new_name: nc.payload.clone(),
+                parent: Some(old_node_id),
             });
         } else {
             out.push(Mutation::EditPayload {
                 node_id: *old_child,
                 new_payload: nc.payload.clone(),
+                parent: Some(old_node_id),
             });
         }
         diff_child_trivia(

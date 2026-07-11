@@ -57,13 +57,16 @@ pub enum EditIntent {
 
 pub fn classify_mutation(base: Option<&AstGraph>, mutation: &Mutation) -> EditIntent {
     match mutation {
-        Mutation::RenameIdentifier { node_id, new_name } => EditIntent::RenameIdentifier {
+        Mutation::RenameIdentifier {
+            node_id, new_name, ..
+        } => EditIntent::RenameIdentifier {
             node_id: *node_id,
             new_name: new_name.clone(),
         },
         Mutation::EditPayload {
             node_id,
             new_payload,
+            ..
         } => {
             let kind = base
                 .and_then(|g| g.get(node_id))

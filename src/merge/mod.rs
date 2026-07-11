@@ -931,6 +931,78 @@ mod tests {
     use crate::frontend::parse_rust;
 
     #[test]
+    fn multi_element_append_merge_preserves_internal_comma() {
+        use crate::unparser::unparse;
+
+        for (i, (base_s, left_s, right_s)) in [
+            (
+                "fn setup() {\n    call(3, 4, 5, 6);\n    let x = 1;\n}\n",
+                "fn setup() {\n    call(3, 4, 5, 6, 7, 8);\n    let x = 1;\n}\n",
+                "fn setup() {\n    call(3, 4, 5, 6);\n    let x = 2;\n}\n",
+            ),
+            (
+                "fn main() {\n    setup(3, 4, 5, 6);\n    let x = 1;\n}\n",
+                "fn main() {\n    setup(3, 4, 5, 6, 7, 8);\n    let x = 1;\n}\n",
+                "fn main() {\n    setup(3, 4, 5, 6);\n    let x = 2;\n}\n",
+            ),
+            (
+                "fn setup() {\n    call(1, 2, 3, 4, 5, 6);\n    let x = 1;\n}\n",
+                "fn setup() {\n    call(1, 2, 3, 4, 5, 6, 7, 8);\n    let x = 1;\n}\n",
+                "fn setup() {\n    call(1, 2, 3, 4, 5, 6);\n    let x = 2;\n}\n",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = parse_rust(base_s).unwrap();
+            let left = parse_rust(left_s).unwrap();
+            let right = parse_rust(right_s).unwrap();
+            let outcome = merge_files(
+                &FileContent::Ast(base.clone()),
+                &FileContent::Ast(left),
+                &FileContent::Ast(right),
+            );
+            let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+                panic!("case {i}: expected clean merge for base={base_s:?}, got {outcome:?}");
+            };
+            let text = unparse(&merged);
+            parse_rust(&text).expect("merged source must parse");
+            assert!(
+                text.contains("7, 8") || text.contains("7,8"),
+                "missing internal comma in {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_element_boundary_list_merge_roundtrip() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn setup() {\n    call(1, 2, 3, 4, 5, 6);\n    let x = 1;\n}\n";
+        let left_s = "fn setup() {\n    call(0, 1, 2, 3, 4, 5, 6, 7, 8);\n    let x = 1;\n}\n";
+        let right_s = "fn setup() {\n    call(1, 2, 3, 4, 5, 6);\n    let x = 2;\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(
+            text.contains("0, 1") || text.contains("0,1"),
+            "missing prepend comma in {text:?}"
+        );
+        assert!(text.contains("7, 8") || text.contains("7,8"));
+        assert!(text.contains("x = 2"));
+    }
+
+    #[test]
     fn wide_arglist_prepend_and_append_merge_roundtrip() {
         use crate::unparser::unparse;
 

@@ -283,14 +283,19 @@ impl AstGraph {
                     self.set_trivia(target_parent, *node_id, dest_occ, leading);
                 }
             }
-            Mutation::RenameIdentifier { node_id, new_name } => {
-                self.edit_payload(*node_id, new_name.clone(), &mut cascades)?;
+            Mutation::RenameIdentifier {
+                node_id,
+                new_name,
+                parent,
+            } => {
+                self.edit_payload(*node_id, new_name.clone(), *parent, &mut cascades)?;
             }
             Mutation::EditPayload {
                 node_id,
                 new_payload,
+                parent,
             } => {
-                self.edit_payload(*node_id, new_payload.clone(), &mut cascades)?;
+                self.edit_payload(*node_id, new_payload.clone(), *parent, &mut cascades)?;
             }
             Mutation::ReorderChildren { parent, new_order } => {
                 self.splice_children(
@@ -329,10 +334,36 @@ impl AstGraph {
         Ok(())
     }
 
+    fn child_reference_count(&self, node_id: NodeId) -> usize {
+        self.nodes
+            .values()
+            .flat_map(|n| n.children.iter())
+            .filter(|c| **c == node_id)
+            .count()
+    }
+
+    fn migrate_child_trivia(&mut self, parent: NodeId, old_child: NodeId, new_child: NodeId) {
+        let slots: Vec<TriviaSlot> = self
+            .trivia
+            .keys()
+            .filter(|slot| slot.parent == parent && slot.child == old_child)
+            .copied()
+            .collect();
+        for slot in slots {
+            if let Some(leading) = self.trivia.remove(&slot) {
+                self.trivia.insert(
+                    TriviaSlot::before_child(parent, new_child, slot.occurrence),
+                    leading,
+                );
+            }
+        }
+    }
+
     fn edit_payload(
         &mut self,
         node_id: NodeId,
         new_payload: String,
+        scope_parent: Option<NodeId>,
         cascades: &mut Vec<(NodeId, NodeId)>,
     ) -> Result<(), String> {
         let node = self
@@ -342,6 +373,31 @@ impl AstGraph {
             .clone();
         let new_node = Node::new(node.kind.clone(), new_payload, node.children.clone());
         let new_id = new_node.id;
+        let ref_count = self.child_reference_count(node_id);
+
+        if ref_count > 1 {
+            let parent = scope_parent
+                .or_else(|| self.parents.get(&node_id).copied())
+                .ok_or_else(|| {
+                    format!(
+                        "cannot edit shared node {node_id} without parent scope ({ref_count} references)"
+                    )
+                })?;
+            self.nodes.insert(new_id, new_node);
+            self.migrate_child_trivia(parent, node_id, new_id);
+            self.splice_children(
+                parent,
+                |children| {
+                    if let Some(pos) = children.iter().position(|c| *c == node_id) {
+                        children[pos] = new_id;
+                    }
+                    Ok(())
+                },
+                cascades,
+            )?;
+            return Ok(());
+        }
+
         self.nodes.remove(&node_id);
         self.nodes.insert(new_id, new_node);
         self.rekey_trivia_node(node_id, new_id);
@@ -666,16 +722,23 @@ pub fn remap_mutation(mutation: &Mutation, table: &HashMap<NodeId, NodeId>) -> M
             new_parent: redirect_map(*new_parent, table),
             before: before.map(|id| redirect_map(id, table)),
         },
-        Mutation::RenameIdentifier { node_id, new_name } => Mutation::RenameIdentifier {
+        Mutation::RenameIdentifier {
+            node_id,
+            new_name,
+            parent,
+        } => Mutation::RenameIdentifier {
             node_id: redirect_map(*node_id, table),
             new_name: new_name.clone(),
+            parent: parent.map(|id| redirect_map(id, table)),
         },
         Mutation::EditPayload {
             node_id,
             new_payload,
+            parent,
         } => Mutation::EditPayload {
             node_id: redirect_map(*node_id, table),
             new_payload: new_payload.clone(),
+            parent: parent.map(|id| redirect_map(id, table)),
         },
         Mutation::ReorderChildren { parent, new_order } => Mutation::ReorderChildren {
             parent: redirect_map(*parent, table),
@@ -744,11 +807,50 @@ mod tests {
     }
 
     #[test]
+    fn edit_payload_copy_on_write_shared_literal() {
+        use crate::frontend::parse_rust;
+        use crate::unparser::unparse;
+
+        let src = "fn demo() {\n    call(1, 2);\n    let x = 1;\n}\n";
+        let mut g = parse_rust(src).unwrap();
+        let one_id = g
+            .nodes
+            .values()
+            .find(|n| n.kind == NodeKind::Literal && n.payload == "1")
+            .unwrap()
+            .id;
+
+        let let_parent = g
+            .nodes
+            .values()
+            .find(|n| {
+                n.children.contains(&one_id)
+                    && n.children
+                        .iter()
+                        .any(|c| g.get(c).map(|x| x.payload == "x").unwrap_or(false))
+            })
+            .unwrap()
+            .id;
+
+        g.apply(&Mutation::EditPayload {
+            node_id: one_id,
+            new_payload: "2".into(),
+            parent: Some(let_parent),
+        })
+        .unwrap();
+        g.validate().unwrap();
+        let out = unparse(&g);
+        assert!(out.contains("call(1, 2)"));
+        assert!(out.contains("x = 2"));
+    }
+
+    #[test]
     fn rename_cascades_upward() {
-        let (mut g, _, _, x_id) = sample_graph();
+        let (mut g, block_a_id, _, x_id) = sample_graph();
         g.apply(&Mutation::RenameIdentifier {
             node_id: x_id,
             new_name: "renamed".into(),
+            parent: Some(block_a_id),
         })
         .unwrap();
         assert!(g.nodes.values().any(|n| n.payload == "renamed"));
