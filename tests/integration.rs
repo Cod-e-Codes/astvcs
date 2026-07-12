@@ -2056,12 +2056,49 @@ fn checkout_rejects_empty_timeline_manifest() {
     );
     assert!(!checkout.status.success());
     let stderr = String::from_utf8_lossy(&checkout.stderr);
-    assert!(stderr.contains("manifest missing or empty"), "{stderr}");
+    assert!(
+        stderr.contains("timeline entry metadata does not match commit id"),
+        "{stderr}"
+    );
 
     let fsck = run_astvcs(Some(dir.path()), &["fsck"]);
     assert!(!fsck.status.success());
     let stdout = String::from_utf8_lossy(&fsck.stdout);
-    assert!(stdout.contains("missing state manifest"), "{stdout}");
+    assert!(
+        stdout.contains("timeline entry metadata does not match commit id"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn empty_tree_commit_allows_add_status_and_followup_commit() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("realfile.txt"), "content\n").unwrap();
+    repo.commit("base").unwrap();
+    fs::remove_file(dir.path().join("realfile.txt")).unwrap();
+    repo.add(&["realfile.txt".into()], false, false).unwrap();
+    repo.commit("commit deletion").unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["status"]),
+        "status on empty tree",
+    );
+
+    fs::write(dir.path().join("other.txt"), "recreate\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["add", "-A", "."]),
+        "add after empty tree commit",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "add other"]),
+        "commit after empty tree",
+    );
+
+    let out = run_astvcs(Some(dir.path()), &["log"]);
+    assert_astvcs_ok(&out, "log after empty tree recovery");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("add other"), "{stdout}");
 }
 
 #[test]

@@ -795,27 +795,34 @@ impl Repo {
     }
 
     pub(crate) fn load_manifest_unlocked(&self, state_id: &StateId) -> RepoResult<ManifestMap> {
-        let path = self
+        let direct_path = self
             .astvcs_dir()
             .join("states")
             .join(format!("{state_id}.json"));
-        if path.exists() {
-            let manifest: ManifestMap = read_json(&path)?;
-            ensure_non_empty_manifest(state_id, &manifest)?;
-            return Ok(manifest);
+        if direct_path.is_file() {
+            return read_json(&direct_path);
         }
         let entry = self.load_timeline_entry_unlocked(state_id)?;
-        if entry.files.is_some() {
+        verify_timeline_commit_id(state_id, &entry)?;
+        if let Some(files) = entry.files {
             trace::warn(format!(
                 "state {state_id}: migrating legacy inline files to blob storage"
             ));
+            return self.migrate_inline_files(&files);
         }
-        if let Some(files) = entry.files {
-            let manifest = self.migrate_inline_files(&files)?;
-            ensure_non_empty_manifest(state_id, &manifest)?;
-            return Ok(manifest);
+        let manifest_id = hash_manifest(&entry.manifest);
+        let states_path = self
+            .astvcs_dir()
+            .join("states")
+            .join(format!("{manifest_id}.json"));
+        if states_path.is_file() {
+            return read_json(&states_path);
         }
-        ensure_non_empty_manifest(state_id, &entry.manifest)?;
+        if entry.manifest.is_empty() && state_id != ROOT_STATE_ID {
+            return Err(RepoError::integrity_check(format!(
+                "state {state_id}: missing manifest file states/{manifest_id}.json"
+            )));
+        }
         Ok(entry.manifest)
     }
 
@@ -3026,12 +3033,24 @@ impl Repo {
     }
 }
 
-fn ensure_non_empty_manifest(state_id: &StateId, manifest: &ManifestMap) -> RepoResult<()> {
-    if !manifest.is_empty() || state_id == ROOT_STATE_ID {
+fn verify_timeline_commit_id(state_id: &StateId, entry: &TimelineEntry) -> RepoResult<()> {
+    if state_id == ROOT_STATE_ID {
+        return Ok(());
+    }
+    let manifest_id = hash_manifest(&entry.manifest);
+    let expected = hash_commit(
+        &manifest_id,
+        &entry.parents,
+        &entry.message,
+        &entry.timestamp,
+        &entry.author_name,
+        &entry.author_email,
+    );
+    if expected == *state_id {
         return Ok(());
     }
     Err(RepoError::integrity_check(format!(
-        "state {state_id}: manifest missing or empty"
+        "state {state_id}: timeline entry metadata does not match commit id (expected {expected})"
     )))
 }
 
@@ -3415,7 +3434,7 @@ mod tests {
     }
 
     #[test]
-    fn load_manifest_rejects_empty_non_root_state() {
+    fn load_manifest_rejects_corrupt_timeline_manifest() {
         let (dir, repo) = sample_repo();
         fs::write(dir.path().join("only.txt"), "v1\n").unwrap();
         let id = repo.commit("c1").unwrap().state_id;
@@ -3433,8 +3452,32 @@ mod tests {
         .unwrap();
         let err = repo.load_manifest(&id).unwrap_err();
         assert!(
-            err.to_string().contains("manifest missing or empty"),
+            err.to_string()
+                .contains("timeline entry metadata does not match commit id"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn legitimate_empty_tree_commit_roundtrip() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("realfile.txt"), "content\n").unwrap();
+        repo.commit("base").unwrap();
+        fs::remove_file(dir.path().join("realfile.txt")).unwrap();
+        repo.add(&["realfile.txt".into()], false, false).unwrap();
+        repo.commit("commit deletion").unwrap();
+
+        repo.status_unlocked(ScanOptions::default()).unwrap();
+        fs::write(dir.path().join("other.txt"), "recreate\n").unwrap();
+        repo.add(&[".".into()], false, true).unwrap();
+        repo.commit("add other").unwrap();
+
+        let head = repo.head_state_unlocked().unwrap();
+        let files = repo.load_state_files_unlocked(&head).unwrap();
+        assert!(files.contains_key("other.txt"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("other.txt")).unwrap(),
+            "recreate\n"
         );
     }
 

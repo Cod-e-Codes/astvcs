@@ -8,7 +8,7 @@ User-facing boundaries (in scope vs out of scope) are summarized in the [README 
 
 ## Repository model
 
-**States.** Each `commit` writes a content-addressed manifest (`states/{manifest_id}.json`, where `manifest_id = hash_manifest(manifest)`) and a timeline entry with a distinct commit id (`timeline/{commit_id}.json`). Commit ids hash manifest content plus parents and metadata so parallel branches that reach identical trees keep separate messages and ancestry. Refs and `HEAD` point at commit ids. Merge states have two parents. Identical file content is stored once in the blob store; manifests hold only `path -> blob hash`. Committing with no file changes is a no-op. Manifest load rejects an empty manifest for any state other than the root empty state; `checkout`, `fsck`, and other readers surface that as an integrity error instead of materializing an empty tree.
+**States.** Each `commit` writes a content-addressed manifest (`states/{manifest_id}.json`, where `manifest_id = hash_manifest(manifest)`) and a timeline entry with a distinct commit id (`timeline/{commit_id}.json`). Commit ids hash manifest content plus parents and metadata so parallel branches that reach identical trees keep separate messages and ancestry. Refs and `HEAD` point at commit ids. Merge states have two parents. Identical file content is stored once in the blob store; manifests hold only `path -> blob hash`. Committing with no file changes is a no-op. A commit may legitimately have an empty manifest when every tracked file was deleted. Manifest load verifies that each timeline entry's manifest, parents, and metadata hash to the commit id on disk; a wiped or inconsistent inline manifest is rejected as corruption while a consistent empty tree is accepted. When the inline manifest is empty, load also requires the matching `states/{manifest_id}.json` file.
 
 **Repository discovery.** `Repo::open` and the default `--repo` path walk parent directories until `.astvcs/` is found, so commands work from subdirectories of the repository root without passing an explicit root path.
 
@@ -375,7 +375,8 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `reachable_includes_manifest_id_when_distinct_from_commit` | Reachability records manifest ids separately from commit ids (`store/reachability.rs`) |
 | `fsck_clean_repository`, `fsck_repair_fixes_index_inconsistency`, `fsck_repair_refuses_ambiguous_head`, `fsck_prune_refs_removes_dangling_ref` | Healthy repo, index repair, ambiguous HEAD refusal, dangling ref prune (unit) |
 | `cli_fsck_clean_repository`, `cli_fsck_detects_corruption`, `cli_fsck_repair_fixes_index_inconsistency`, `cli_fsck_repair_refuses_ambiguous_head`, `cli_fsck_repair_leaves_missing_blob`, `cli_fsck_prune_refs_removes_dangling_ref` | fsck clean, corruption detection, repair, and prune-refs (integration) |
-| `checkout_rejects_empty_timeline_manifest` | `checkout` and `fsck` fail when a non-root timeline entry has an empty manifest |
+| `checkout_rejects_empty_timeline_manifest` | `checkout` and `fsck` fail when a non-root timeline entry's inline manifest was wiped without updating commit metadata |
+| `empty_tree_commit_allows_add_status_and_followup_commit` | Deleting every tracked file, committing, then `add`/`commit` new content works on the empty tree |
 | `commands_discover_repo_from_subdirectory` | `add` and `status` from a subdirectory without `--repo` |
 | `cli_gc_dry_run_and_prune` | gc dry-run reports blobs and history; `--prune` deletes unreachable blobs (integration) |
 | `path_rename_status_and_diff_integration` | Path rename in `status` (`R old -> new`) and `diff` (`RenamePath` intent) |
