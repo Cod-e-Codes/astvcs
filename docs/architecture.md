@@ -142,7 +142,7 @@ Materialization uses trivia-aware unparsing (see **Working tree materialization*
 ## Structural diff
 
 1. Parse old and new sources into graphs.
-2. Align children between old and new using hash-anchor passes on wide sibling lists (`old.len() * new.len() > 48`), otherwise the original full-list LCS path:
+2. Align children between old and new. When sibling `NodeId` sequences are equal (identical reparse or unchanged list), pair by index and recurse without LCS. Otherwise use hash-anchor passes on wide sibling lists (`old.len() * new.len() > 48`), or the full-list LCS path:
    - **Wide-list id pass**: LCS on structural `(kind, payload)` keys per child (not bare content-addressed `NodeId`), so duplicate punctuation tokens align by list position rather than shared hash identity.
    - **Id pass**: `lcs_pairs` on the full sibling `NodeId` sequence (wide lists) or the same on narrow lists; duplicate content-addressed tokens are then **re-paired by ordinal position** (first comma to first comma, and so on) so LCS subsequence skew does not leave a phantom separator unmatched.
    - **Key pass** (wide): in-order zip within each `(NodeKind, payload, child_count)` bucket; **role pass** (wide): same for `(NodeKind, child_count)`.

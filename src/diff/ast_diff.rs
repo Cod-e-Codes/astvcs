@@ -776,6 +776,22 @@ fn diff_children(
     let old_children = old.get(&old_node_id).unwrap().children.clone();
     let new_children = new.get(&new_node_id).unwrap().children.clone();
 
+    if old_children == new_children {
+        for &id in &old_children {
+            alignment.push(AlignEdge {
+                old_id: Some(id),
+                new_id: Some(id),
+                kind: AlignKind::Match,
+                method: Some(AlignMethod::Id),
+                parent_old: Some(old_node_id),
+                parent_new: Some(new_node_id),
+            });
+            diff_subtree(old, new, id, id, Some(old_node_id), out, alignment);
+            diff_child_trivia(old, new, old_node_id, new_node_id, id, id, out);
+        }
+        return;
+    }
+
     if same_id_multiset(&old_children, &new_children) && old_children != new_children {
         out.push(Mutation::ReorderChildren {
             parent: old_node_id,
