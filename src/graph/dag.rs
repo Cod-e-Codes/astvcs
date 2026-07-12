@@ -641,6 +641,7 @@ fn insert_child_before(
                 .filter(|(_, c)| **c == anchor)
                 .nth(occ)
                 .map(|(i, _)| i)
+                .or_else(|| children.iter().rposition(|c| *c == anchor))
                 .unwrap_or(children.len())
         }
     };

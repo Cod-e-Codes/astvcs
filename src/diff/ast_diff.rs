@@ -2,6 +2,7 @@ use crate::diff::align::{fingerprint_bucket_pairs, pair_in_order_by_key};
 use crate::diff::lcs::lcs_pairs;
 use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
 use crate::trace;
+use std::collections::{HashMap, HashSet};
 
 /// How a sibling pair is aligned across old and new graphs.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -150,6 +151,155 @@ fn sibling_occurrence_before(children: &[NodeId], index: usize) -> u32 {
         .unwrap_or(0)
 }
 
+fn sibling_occurrence_in_old(old_parent_children: &[NodeId], anchor: NodeId) -> u32 {
+    let index = old_parent_children
+        .iter()
+        .rposition(|c| *c == anchor)
+        .unwrap_or(old_parent_children.len());
+    sibling_occurrence_before(old_parent_children, index)
+}
+
+fn closing_brace_in_children(old: &AstGraph, children: &[NodeId]) -> Option<(usize, NodeId)> {
+    children.iter().enumerate().rev().find_map(|(i, id)| {
+        old.get(id)
+            .filter(|n| n.kind == NodeKind::Token && n.payload == "}")
+            .map(|_| (i, *id))
+    })
+}
+
+/// Content-addressed punctuation can make LCS pair the wrong comma occurrence. When the old
+/// list already has a separator after the previous matched sibling, skip the phantom insert.
+fn is_redundant_list_separator_insert(
+    old_parent_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_new: &[bool],
+    new_index: usize,
+    node: &crate::graph::Node,
+) -> bool {
+    if node.kind != NodeKind::Token {
+        return false;
+    }
+    match node.payload.as_str() {
+        "," | ";" => {}
+        _ => return false,
+    }
+    let id = node.id;
+    let old_count = old_parent_children.iter().filter(|c| **c == id).count();
+    if old_count == 0 {
+        return false;
+    }
+    let prev_matched = new_index > 0 && matched_new.get(new_index - 1).copied().unwrap_or(false);
+    if !prev_matched {
+        return false;
+    }
+    let new_ordinal = new_children[..=new_index]
+        .iter()
+        .filter(|c| **c == id)
+        .count();
+    new_ordinal <= old_count
+}
+
+/// Re-pair content-addressed siblings by ordinal position when LCS pairs the wrong occurrence.
+fn repair_occurrence_aware_matches(
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_old: &mut [bool],
+    matched_new: &mut [bool],
+) {
+    let mut old_counts: HashMap<NodeId, usize> = HashMap::new();
+    let mut new_counts: HashMap<NodeId, usize> = HashMap::new();
+    for id in old_children {
+        *old_counts.entry(*id).or_default() += 1;
+    }
+    for id in new_children {
+        *new_counts.entry(*id).or_default() += 1;
+    }
+
+    let mut seen = HashSet::new();
+    for id in old_children.iter().chain(new_children.iter()) {
+        if !seen.insert(*id) {
+            continue;
+        }
+        let old_n = *old_counts.get(id).unwrap_or(&0);
+        let new_n = *new_counts.get(id).unwrap_or(&0);
+        if old_n <= 1 && new_n <= 1 {
+            continue;
+        }
+
+        let old_idx: Vec<usize> = old_children
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c == *id)
+            .map(|(i, _)| i)
+            .collect();
+        let new_idx: Vec<usize> = new_children
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c == *id)
+            .map(|(i, _)| i)
+            .collect();
+
+        for &oi in &old_idx {
+            matched_old[oi] = false;
+        }
+        for &ni in &new_idx {
+            matched_new[ni] = false;
+        }
+        for k in 0..old_idx.len().min(new_idx.len()) {
+            matched_old[old_idx[k]] = true;
+            matched_new[new_idx[k]] = true;
+        }
+    }
+}
+
+fn ordered_matched_sibling_pairs(
+    old_children: &[NodeId],
+    new_children: &[NodeId],
+    matched_old: &[bool],
+    matched_new: &[bool],
+) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    let mut seen = HashSet::new();
+    for id in old_children {
+        if !seen.insert(*id) {
+            continue;
+        }
+        let old_idx: Vec<usize> = old_children
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| **c == *id && matched_old[*i])
+            .map(|(i, _)| i)
+            .collect();
+        let new_idx: Vec<usize> = new_children
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| **c == *id && matched_new[*i])
+            .map(|(i, _)| i)
+            .collect();
+        for k in 0..old_idx.len().min(new_idx.len()) {
+            pairs.push((old_idx[k], new_idx[k]));
+        }
+    }
+    pairs.sort_by_key(|(oi, _)| *oi);
+    pairs
+}
+
+fn is_list_element_kind(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Parameter
+            | NodeKind::Field
+            | NodeKind::Declaration
+            | NodeKind::Statement
+            | NodeKind::Expression
+            | NodeKind::Literal
+    )
+}
+
+fn is_list_separator_token(node: &crate::graph::Node) -> bool {
+    node.kind == NodeKind::Token && matches!(node.payload.as_str(), "," | ";")
+}
+
 /// Map a new-graph sibling index to an insert anchor in the old parent's child list.
 /// over pending inserts to the next matched sibling present in the old graph. When the
 /// immediate next sibling is new-only and no later matched anchor exists, keep the new
@@ -157,36 +307,75 @@ fn sibling_occurrence_before(children: &[NodeId], index: usize) -> u32 {
 /// Returns `(before, before_occurrence)` so duplicate content-addressed anchors resolve
 /// to the intended list position.
 fn resolve_insert_before_in_old(
+    old: &AstGraph,
+    new: &AstGraph,
     old_parent_children: &[NodeId],
     new_children: &[NodeId],
     matched_new: &[bool],
     new_index: usize,
+    new_child: &crate::graph::Node,
 ) -> (Option<NodeId>, Option<u32>) {
-    if let Some(&next) = new_children.get(new_index + 1)
+    if is_list_separator_token(new_child)
+        && let Some(&next) = new_children.get(new_index + 1)
+        && !matched_new.get(new_index + 1).copied().unwrap_or(false)
+        && new
+            .get(&next)
+            .is_some_and(|n| is_list_element_kind(&n.kind))
+    {
+        return (Some(next), None);
+    }
+
+    let (before, before_occurrence) = if let Some(&next) = new_children.get(new_index + 1)
         && matched_new.get(new_index + 1).copied().unwrap_or(false)
         && old_parent_children.contains(&next)
     {
-        return (
+        (
             Some(next),
-            Some(sibling_occurrence_before(new_children, new_index + 1)),
+            Some(sibling_occurrence_in_old(old_parent_children, next)),
+        )
+    } else {
+        let mut resolved = (None, None);
+        for j in (new_index + 1)..new_children.len() {
+            if !matched_new[j] {
+                continue;
+            }
+            let anchor = new_children[j];
+            if old_parent_children.contains(&anchor) {
+                resolved = (
+                    Some(anchor),
+                    Some(sibling_occurrence_in_old(old_parent_children, anchor)),
+                );
+                break;
+            }
+        }
+        if resolved.0.is_none() {
+            if let Some(&next) = new_children.get(new_index + 1) {
+                (Some(next), None)
+            } else {
+                (None, None)
+            }
+        } else {
+            resolved
+        }
+    };
+
+    let anchor_is_comma = before.is_some_and(|anchor| {
+        old.get(&anchor)
+            .is_some_and(|n| n.kind == NodeKind::Token && n.payload == ",")
+    });
+    let inserting_field = new_child.kind == NodeKind::Field
+        || new_child.kind == NodeKind::Declaration
+        || new_child.kind == NodeKind::Statement;
+    if inserting_field
+        && anchor_is_comma
+        && let Some((i, brace)) = closing_brace_in_children(old, old_parent_children)
+    {
+        return (
+            Some(brace),
+            Some(sibling_occurrence_before(old_parent_children, i)),
         );
     }
-    for j in (new_index + 1)..new_children.len() {
-        if !matched_new[j] {
-            continue;
-        }
-        let anchor = new_children[j];
-        if old_parent_children.contains(&anchor) {
-            return (
-                Some(anchor),
-                Some(sibling_occurrence_before(new_children, j)),
-            );
-        }
-    }
-    if let Some(&next) = new_children.get(new_index + 1) {
-        return (Some(next), None);
-    }
-    (None, None)
+    (before, before_occurrence)
 }
 
 fn child_occurrence_at(children: &[NodeId], child: NodeId) -> u32 {
@@ -521,10 +710,13 @@ fn diff_subtree(
             .position(|c| *c == new_id)
             .unwrap_or(0);
         let (before, before_occurrence) = resolve_insert_before_in_old(
+            old,
+            new,
             &old.get(&old_parent).unwrap().children,
             &new_parent_children,
             &vec![true; new_parent_children.len()],
             index,
+            &top,
         );
         out.push(Mutation::InsertSubtree {
             parent: old_parent,
@@ -749,6 +941,16 @@ fn diff_children(
         for (oi, ni) in lcs_pairs(&old_children, &new_children) {
             matched_old[oi] = true;
             matched_new[ni] = true;
+        }
+        repair_occurrence_aware_matches(
+            &old_children,
+            &new_children,
+            &mut matched_old,
+            &mut matched_new,
+        );
+        for (oi, ni) in
+            ordered_matched_sibling_pairs(&old_children, &new_children, &matched_old, &matched_new)
+        {
             alignment.push(AlignEdge {
                 old_id: Some(old_children[oi]),
                 new_id: Some(new_children[ni]),
@@ -990,6 +1192,7 @@ fn diff_children(
         }
     }
 
+    let mut pending_inserts = Vec::new();
     for (ni, new_child) in new_children.iter().enumerate() {
         if !matched_new[ni] {
             alignment.push(AlignEdge {
@@ -1002,17 +1205,37 @@ fn diff_children(
             });
             let descendants = new.collect_subtree(*new_child);
             let top = new.get(new_child).unwrap().clone();
-            let (before, before_occurrence) =
-                resolve_insert_before_in_old(&old_children, &new_children, &matched_new, ni);
-            out.push(Mutation::InsertSubtree {
-                parent: old_node_id,
-                before,
-                before_occurrence,
-                node: top,
-                descendants,
-                trivia: insert_trivia(new, new_node_id, *new_child, old_node_id),
-            });
+            if is_redundant_list_separator_insert(
+                &old_children,
+                &new_children,
+                &matched_new,
+                ni,
+                &top,
+            ) {
+                continue;
+            }
+            pending_inserts.push((ni, top, descendants));
         }
+    }
+    pending_inserts.sort_by_key(|(ni, top, _)| (is_list_separator_token(top), *ni));
+    for (ni, top, descendants) in pending_inserts {
+        let (before, before_occurrence) = resolve_insert_before_in_old(
+            old,
+            new,
+            &old_children,
+            &new_children,
+            &matched_new,
+            ni,
+            &top,
+        );
+        out.push(Mutation::InsertSubtree {
+            parent: old_node_id,
+            before,
+            before_occurrence,
+            node: top,
+            descendants,
+            trivia: insert_trivia(new, new_node_id, new_children[ni], old_node_id),
+        });
     }
 }
 
@@ -1525,6 +1748,20 @@ mod tests {
         let a = parse_rust(src).unwrap();
         let b = parse_rust(src).unwrap();
         assert!(diff_graphs(&a, &b).mutations.is_empty());
+    }
+
+    #[test]
+    fn struct_field_append_diff_applies_roundtrip() {
+        let old = parse_rust("pub struct Config {\n    pub host: String,\n    pub port: u16,\n}\n")
+            .unwrap();
+        let new = parse_rust(
+            "pub struct Config {\n    pub host: String,\n    pub port: u16,\n    pub timeout: u64,\n}\n",
+        )
+        .unwrap();
+        let diff = diff_graphs(&old, &new);
+        let mut working = old.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&new));
     }
 
     #[test]

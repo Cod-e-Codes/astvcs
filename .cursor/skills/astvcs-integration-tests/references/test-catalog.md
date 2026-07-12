@@ -35,9 +35,11 @@
 | `identical_reparse_with_duplicate_sibling_node_ids_is_empty` | Three-parameter Rust reparse emits no phantom comma diff (unit, `diff/ast_diff.rs`) |
 | `disjoint_body_edits_do_not_emit_phantom_comma_inserts` | Body-only edits do not diff phantom parameter commas (unit, `diff/ast_diff.rs`) |
 | `parameter_count_change_diff_applies_roundtrip` | Adding a parameter diffs and applies to valid source (unit, `diff/ast_diff.rs`) |
+| `struct_field_append_diff_applies_roundtrip` | Appending a struct field diffs and applies to valid Rust (unit, `diff/ast_diff.rs`) |
 | `calc_left_diff_applies_parseable` | Expression tail insert (`+ 1`) applies to parseable Rust (unit, `diff/ast_diff.rs`) |
 | `wide_arglist_prepend_and_append_merge_roundtrip` | Prepend + append on the same wide arg list merge to parseable Rust (unit, `merge/mod.rs`) |
-| `complex_struct_field_and_body_disjoint_merge_roundtrip` | Struct field insert + function body edits on separate branches merge without hang (unit, `merge/mod.rs`) |
+| `complex_struct_field_and_body_disjoint_merge_roundtrip` | Struct field insert + function body edits on separate branches merge to parseable Rust (unit, `merge/mod.rs`) |
+| `complex_struct_field_with_println_and_iflet_validate_merge_roundtrip` | Struct field + `println!` / `if let` validate body edits merge to parseable Rust (unit, `merge/mod.rs`) |
 | `identical_literal_siblings_disjoint_edits_conflict` | First vs last identical literal edits conflict safely (unit, `merge/mod.rs`) |
 | `equal_node_id_pairs_duplicate_siblings_in_order` | Duplicate sibling `NodeId` alignment pairs in list order (unit, `diff/align.rs`) |
 | `transparency_scan_and_parse_notices` | `-v` notice output |

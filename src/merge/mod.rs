@@ -1565,12 +1565,42 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn complex_struct_field_and_body_disjoint_merge_roundtrip() {
+    fn assert_disjoint_struct_field_merge(
+        base: &str,
+        feature: &str,
+        main: &str,
+        extra_checks: &[&str],
+    ) {
         use crate::frontend::parse_rust;
         use crate::unparser::unparse;
 
-        const BASE: &str = r#"pub struct Config {
+        let base = parse_rust(base).unwrap();
+        let left = parse_rust(feature).unwrap();
+        let right = parse_rust(main).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let text = match outcome {
+            MergeOutcome::Merged(FileContent::Ast(g)) => {
+                g.validate().expect("merged graph valid");
+                unparse(&g)
+            }
+            MergeOutcome::Conflict(c) => panic!("unexpected conflict: {}", c.message),
+            other => panic!("unexpected outcome: {other:?}"),
+        };
+        parse_rust(&text).expect("merged source must parse as rust");
+        assert!(text.contains("pub timeout: u64"), "{text}");
+        for needle in extra_checks {
+            assert!(text.contains(needle), "{text}");
+        }
+    }
+
+    #[test]
+    fn complex_struct_field_and_body_disjoint_merge_roundtrip() {
+        assert_disjoint_struct_field_merge(
+            r#"pub struct Config {
     pub host: String,
     pub port: u16,
 }
@@ -1578,8 +1608,8 @@ mod tests {
 pub fn connect(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
-"#;
-        const FEATURE: &str = r#"pub struct Config {
+"#,
+            r#"pub struct Config {
     pub host: String,
     pub port: u16,
     pub timeout: u64,
@@ -1588,8 +1618,8 @@ pub fn connect(cfg: &Config) -> Result<(), String> {
 pub fn connect(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
-"#;
-        const MAIN: &str = r#"pub struct Config {
+"#,
+            r#"pub struct Config {
     pub host: String,
     pub port: u16,
 }
@@ -1605,23 +1635,57 @@ pub fn connect(cfg: &Config) -> Result<(), String> {
     validate(cfg)?;
     Ok(())
 }
-"#;
-
-        let base = parse_rust(BASE).unwrap();
-        let left = parse_rust(FEATURE).unwrap();
-        let right = parse_rust(MAIN).unwrap();
-        let outcome = merge_files(
-            &FileContent::Ast(base),
-            &FileContent::Ast(left),
-            &FileContent::Ast(right),
+"#,
+            &["validate", "validate(cfg)?"],
         );
-        let text = match outcome {
-            MergeOutcome::Merged(FileContent::Ast(g)) => unparse(&g),
-            MergeOutcome::Conflict(c) => panic!("unexpected conflict: {}", c.message),
-            other => panic!("unexpected outcome: {other:?}"),
-        };
-        assert!(text.contains("timeout"), "{text}");
-        assert!(text.contains("validate"), "{text}");
-        assert!(text.contains("validate(cfg)?"), "{text}");
+    }
+
+    #[test]
+    fn complex_struct_field_with_println_and_iflet_validate_merge_roundtrip() {
+        assert_disjoint_struct_field_merge(
+            r#"pub struct Config {
+    pub host: String,
+    pub port: u16,
+}
+
+pub fn connect(cfg: &Config) -> Result<(), String> {
+    println!("Connecting to {}:{}", cfg.host, cfg.port);
+    Ok(())
+}
+"#,
+            r#"pub struct Config {
+    pub host: String,
+    pub port: u16,
+    pub timeout: u64,
+}
+
+pub fn connect(cfg: &Config) -> Result<(), String> {
+    println!("Connecting to {}:{}", cfg.host, cfg.port);
+    Ok(())
+}
+"#,
+            r#"pub struct Config {
+    pub host: String,
+    pub port: u16,
+}
+
+pub fn connect(cfg: &Config) -> Result<(), String> {
+    println!("Connecting to {}:{}", cfg.host, cfg.port);
+    if let Err(e) = validate(cfg) {
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn validate(cfg: &Config) -> Result<(), String> {
+    if cfg.port == 0 {
+        Err("Invalid port".to_string())
+    } else {
+        Ok(())
+    }
+}
+"#,
+            &["validate", "if let Err(e) = validate(cfg)"],
+        );
     }
 }
