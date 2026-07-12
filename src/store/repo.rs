@@ -818,11 +818,6 @@ impl Repo {
         if states_path.is_file() {
             return read_json(&states_path);
         }
-        if entry.manifest.is_empty() && state_id != ROOT_STATE_ID {
-            return Err(RepoError::integrity_check(format!(
-                "state {state_id}: missing manifest file states/{manifest_id}.json"
-            )));
-        }
         Ok(entry.manifest)
     }
 
@@ -3455,6 +3450,37 @@ mod tests {
             err.to_string()
                 .contains("timeline entry metadata does not match commit id"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn load_empty_manifest_falls_back_to_timeline_when_states_dedup_missing() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("realfile.txt"), "content\n").unwrap();
+        repo.commit("base").unwrap();
+        fs::remove_file(dir.path().join("realfile.txt")).unwrap();
+        repo.add(&["realfile.txt".into()], false, false).unwrap();
+        let empty_id = repo.commit("commit deletion").unwrap().state_id;
+
+        let manifest_id = hash_manifest(&ManifestMap::new());
+        let states_path = repo
+            .astvcs_dir()
+            .join("states")
+            .join(format!("{manifest_id}.json"));
+        assert!(states_path.is_file());
+        fs::remove_file(&states_path).unwrap();
+
+        let manifest = repo.load_manifest(&empty_id).unwrap();
+        assert!(manifest.is_empty());
+
+        fs::write(dir.path().join("other.txt"), "recreate\n").unwrap();
+        repo.add(&[".".into()], false, true).unwrap();
+        repo.commit("add other").unwrap();
+        let head = repo.head_state_unlocked().unwrap();
+        assert!(
+            repo.load_state_files_unlocked(&head)
+                .unwrap()
+                .contains_key("other.txt")
         );
     }
 

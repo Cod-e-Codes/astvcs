@@ -247,13 +247,34 @@ mod tests {
 
     #[test]
     fn missing_identity_errors() {
-        let dir = TempDir::new().unwrap();
-        let repo = Repo::init(dir.path()).unwrap();
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::clear();
+        let home = TempDir::new().unwrap();
+        let repo_dir = TempDir::new().unwrap();
+        #[cfg(windows)]
+        let home_var = "USERPROFILE";
+        #[cfg(not(windows))]
+        let home_var = "HOME";
+        let saved_home = std::env::var_os(home_var);
+        unsafe {
+            std::env::set_var(home_var, home.path());
+        }
+
+        let repo = Repo::init(repo_dir.path()).unwrap();
         let err = resolve_author_identity(&repo).unwrap_err();
         assert_eq!(
             err.kind,
             super::super::error::RepoErrorKind::MissingIdentity
         );
+
+        match saved_home {
+            Some(value) => unsafe {
+                std::env::set_var(home_var, value);
+            },
+            None => unsafe {
+                std::env::remove_var(home_var);
+            },
+        }
     }
 
     #[test]

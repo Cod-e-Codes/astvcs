@@ -2102,6 +2102,40 @@ fn empty_tree_commit_allows_add_status_and_followup_commit() {
 }
 
 #[test]
+fn empty_tree_loads_from_timeline_when_states_dedup_missing() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("realfile.txt"), "content\n").unwrap();
+    repo.commit("base").unwrap();
+    fs::remove_file(dir.path().join("realfile.txt")).unwrap();
+    repo.add(&["realfile.txt".into()], false, false).unwrap();
+    repo.commit("commit deletion").unwrap();
+
+    let manifest_id = astvcs::store::hash_manifest(&Default::default());
+    let states_path = dir
+        .path()
+        .join(".astvcs/states")
+        .join(format!("{manifest_id}.json"));
+    assert!(states_path.is_file());
+    fs::remove_file(&states_path).unwrap();
+
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["status"]),
+        "status after removing empty states dedup",
+    );
+
+    fs::write(dir.path().join("other.txt"), "recreate\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["add", "-A", "."]),
+        "add after removing empty states dedup",
+    );
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "add other"]),
+        "commit after removing empty states dedup",
+    );
+}
+
+#[test]
 fn commands_discover_repo_from_subdirectory() {
     let dir = TempDir::new().unwrap();
     Repo::init_with_identity(dir.path()).unwrap();
