@@ -37,6 +37,7 @@ Or run steps manually:
 
 ```bash
 cargo test
+cargo test --test props --test history_smoke --test diff_git
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --release
 ```

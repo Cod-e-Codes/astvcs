@@ -427,5 +427,14 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `import_git_ignores_stray_untracked_files` | `import-git` commits only git HEAD paths; stray untracked files on disk are excluded |
 | `import_git_does_not_commit_skipped_binary_stray` | `import-git` does not commit unrelated binary files left on disk |
 | `parse_ls_tree_line_*` | `git ls-tree` line parsing (unit, `store/git_import.rs`) |
+| `merge_disjoint_literal_deltas_are_deterministic_and_parseable` | Proptest: random disjoint `calc.rs` literal edits merge deterministically and re-parse (proptest, `tests/props.rs`) |
+| `ast_snapshot_roundtrip_preserves_semantics`, `blob_store_ast_roundtrip_preserves_semantics` | Proptest: `AstGraph` snapshot and blob store roundtrips preserve semantics (`tests/props.rs`) |
+| `merge_commutes_for_disjoint_calc_edits`, `checkout_roundtrip_leaves_working_tree_unchanged` | Metamorphic merge and checkout oracles (`tests/props.rs`) |
+| `history_smoke_seeded_repo` | Seeded random repo driver: commit, branch, checkout, merge, gc, repack, fsck (`tests/history_smoke.rs`) |
+| `history_long_random_repo` | Long random history (`#[ignore]`; `HISTORY_SEED`, `HISTORY_OPS`, `tests/history_smoke.rs`) |
+| `git_and_astvcs_disjoint_calc_edits_diverge` | Differential: astvcs merges disjoint function-body edits where Git text merge conflicts (`tests/diff_git.rs`, requires `git` on PATH) |
+| `git_and_astvcs_same_line_edits_both_conflict`, `git_and_astvcs_rename_with_body_edit_both_merge` | Differential agreement cases (`tests/diff_git.rs`) |
+
+**Property and history harnesses.** `tests/props.rs` and `tests/history_smoke.rs` share helpers in `tests/common/`. Override proptest case count with `PROPTEST_CASES` (default 64).
 
 Run `cargo test`, then `cargo clippy --all-targets --all-features -- -D warnings`. Fixture walkthroughs in `examples/README.md` mirror several integration tests.

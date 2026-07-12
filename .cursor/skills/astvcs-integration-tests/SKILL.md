@@ -104,6 +104,9 @@ assert!(out.status.success());
 ```bash
 cargo test <new_test_name>
 cargo test
+cargo test --test props --test history_smoke --test diff_git
 ```
+
+For property tests, `PROPTEST_CASES` overrides the default 64 cases. For the long history driver: `cargo test history_long -- --ignored` with optional `HISTORY_SEED` and `HISTORY_OPS`.
 
 For CLI-heavy tests, also run the documented fixture commands from [examples/README.md](../../../examples/README.md).

@@ -49,5 +49,7 @@ tree-sitter-zig = "1.1.2"
 zstd = "0.13.3"
 
 [dev-dependencies]
+proptest = "1.11.0"
+rand = "0.10.2"
 rcgen = "0.14.8"
 tempfile = "3.27.0"

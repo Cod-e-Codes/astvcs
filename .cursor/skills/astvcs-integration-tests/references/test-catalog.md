@@ -159,3 +159,8 @@
 | `ssh_session_sends_bearer_token` | SSH transport sends bearer token in protocol headers (unit, `network/ssh.rs`) |
 | `insecure_client_accepts_self_signed_cert` | HTTPS transport with `--insecure` accepts self-signed serve cert (unit, `network/transport.rs`) |
 | `validate_tls_config_requires_both_or_neither` | `--tls-cert` and `--tls-key` must be paired (unit, `network/serve.rs`) |
+| `merge_disjoint_literal_deltas_are_deterministic_and_parseable` | Proptest disjoint literal merges on `calc.rs` (`tests/props.rs`) |
+| `history_smoke_seeded_repo` | Seeded random repo driver with periodic `fsck` (`tests/history_smoke.rs`) |
+| `history_long_random_repo` | Long random history (`#[ignore]`; `HISTORY_SEED`, `HISTORY_OPS`) |
+| `git_and_astvcs_disjoint_calc_edits_diverge` | astvcs merges disjoint body edits where Git text merge conflicts (`tests/diff_git.rs`) |
+| `git_and_astvcs_same_line_edits_both_conflict` | Git and astvcs both conflict on same-line edits (`tests/diff_git.rs`) |
