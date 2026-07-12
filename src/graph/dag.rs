@@ -464,7 +464,13 @@ impl AstGraph {
 
         let mut current_old = old_id;
         let mut current_new = new_id;
+        let mut visited_ancestors = std::collections::HashSet::new();
         while let Some(ancestor) = self.parents.get(&current_old).copied() {
+            if !visited_ancestors.insert(ancestor) {
+                return Err(format!(
+                    "parent cycle while cascading id change from {old_id} to {new_id} at {ancestor}"
+                ));
+            }
             let ancestor_node = self
                 .nodes
                 .get(&ancestor)
@@ -656,29 +662,27 @@ fn reposition_child(
 }
 
 pub fn redirect(id: NodeId, table: &[(NodeId, NodeId)]) -> NodeId {
-    let mut current = id;
-    loop {
-        let mut changed = false;
-        for (old, new) in table {
-            if current == *old {
-                current = *new;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    current
+    redirect_follow(id, |current| {
+        table
+            .iter()
+            .find_map(|(old, new)| (current == *old).then_some(*new))
+    })
 }
 
 pub fn redirect_map(id: NodeId, table: &HashMap<NodeId, NodeId>) -> NodeId {
+    redirect_follow(id, |current| {
+        table.get(&current).copied().filter(|new| *new != current)
+    })
+}
+
+fn redirect_follow(id: NodeId, mut next: impl FnMut(NodeId) -> Option<NodeId>) -> NodeId {
     let mut current = id;
-    loop {
-        match table.get(&current) {
-            Some(new) if *new != current => current = *new,
-            _ => break,
+    let mut seen = std::collections::HashSet::new();
+    while let Some(new) = next(current) {
+        if new == current || !seen.insert(current) {
+            break;
         }
+        current = new;
     }
     current
 }
@@ -862,6 +866,19 @@ mod tests {
         })
         .unwrap();
         assert!(g.nodes.values().any(|n| n.payload == "renamed"));
+    }
+
+    #[test]
+    fn redirect_follows_chain_without_cycling() {
+        let a = NodeId::from_parts("a", "", &[]);
+        let b = NodeId::from_parts("b", "", &[]);
+        let c = NodeId::from_parts("c", "", &[]);
+        assert_eq!(redirect(a, &[(a, b), (b, c)]), c);
+        assert_eq!(redirect(a, &[(a, b), (b, a)]), a);
+        let mut table = HashMap::new();
+        table.insert(a, b);
+        table.insert(b, a);
+        assert_eq!(redirect_map(a, &table), a);
     }
 
     #[test]

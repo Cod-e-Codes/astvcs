@@ -1564,4 +1564,64 @@ mod tests {
             PathMergeTrackedOutcome::Keep(t) if t.mode == FileMode::Executable
         ));
     }
+
+    #[test]
+    fn complex_struct_field_and_body_disjoint_merge_roundtrip() {
+        use crate::frontend::parse_rust;
+        use crate::unparser::unparse;
+
+        const BASE: &str = r#"pub struct Config {
+    pub host: String,
+    pub port: u16,
+}
+
+pub fn connect(cfg: &Config) -> Result<(), String> {
+    Ok(())
+}
+"#;
+        const FEATURE: &str = r#"pub struct Config {
+    pub host: String,
+    pub port: u16,
+    pub timeout: u64,
+}
+
+pub fn connect(cfg: &Config) -> Result<(), String> {
+    Ok(())
+}
+"#;
+        const MAIN: &str = r#"pub struct Config {
+    pub host: String,
+    pub port: u16,
+}
+
+fn validate(cfg: &Config) -> Result<(), String> {
+    if cfg.host.is_empty() {
+        return Err("host required".into());
+    }
+    Ok(())
+}
+
+pub fn connect(cfg: &Config) -> Result<(), String> {
+    validate(cfg)?;
+    Ok(())
+}
+"#;
+
+        let base = parse_rust(BASE).unwrap();
+        let left = parse_rust(FEATURE).unwrap();
+        let right = parse_rust(MAIN).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let text = match outcome {
+            MergeOutcome::Merged(FileContent::Ast(g)) => unparse(&g),
+            MergeOutcome::Conflict(c) => panic!("unexpected conflict: {}", c.message),
+            other => panic!("unexpected outcome: {other:?}"),
+        };
+        assert!(text.contains("timeout"), "{text}");
+        assert!(text.contains("validate"), "{text}");
+        assert!(text.contains("validate(cfg)?"), "{text}");
+    }
 }
