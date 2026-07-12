@@ -980,7 +980,7 @@ impl Repo {
             }
         } else {
             for raw in paths {
-                let rel = normalize_repo_path(raw)?;
+                let rel = self.resolve_add_pathspec(raw)?;
                 if rel.is_empty() || rel == "." {
                     candidates.extend(working_files.iter().cloned());
                     candidates.extend(head_files.keys().cloned());
@@ -1032,7 +1032,70 @@ impl Repo {
                 targets.insert(path);
             }
         }
+
+        if !paths.is_empty() {
+            let mut unmatched: Vec<String> = Vec::new();
+            for raw in paths {
+                let rel = self.resolve_add_pathspec(raw)?;
+                if !self.pathspec_matches(&rel, head_files, working_files) {
+                    unmatched.push(raw.clone());
+                }
+            }
+            if !unmatched.is_empty() {
+                let message = if unmatched.len() == 1 {
+                    format!("pathspec '{}' did not match any files", unmatched[0])
+                } else {
+                    format!(
+                        "pathspecs did not match any files: {}",
+                        unmatched.join(", ")
+                    )
+                };
+                return Err(RepoError::invalid_input(message));
+            }
+        }
+
         Ok(targets)
+    }
+
+    fn resolve_add_pathspec(&self, raw: &str) -> RepoResult<String> {
+        if raw == "." || raw == "./" {
+            return Ok(".".to_string());
+        }
+        let path = Path::new(raw);
+        let full = if path.is_absolute() {
+            path.to_path_buf()
+        } else if let Ok(cwd) = std::env::current_dir() {
+            if cwd.starts_with(&self.root) {
+                cwd.join(path)
+            } else {
+                self.root.join(path)
+            }
+        } else {
+            self.root.join(path)
+        };
+        let rel = full
+            .strip_prefix(&self.root)
+            .map_err(|_| RepoError::invalid_input(format!("path is outside repository: {raw}")))?;
+        if rel.as_os_str().is_empty() {
+            return Ok(".".to_string());
+        }
+        normalize_repo_path(&rel.to_string_lossy())
+    }
+
+    fn pathspec_matches(
+        &self,
+        rel: &str,
+        head_files: &HashMap<String, TrackedFile>,
+        working_files: &HashSet<String>,
+    ) -> bool {
+        if rel.is_empty() || rel == "." {
+            return true;
+        }
+        let full = self.root.join(rel);
+        if full.is_dir() {
+            return true;
+        }
+        working_files.contains(rel) || head_files.contains_key(rel)
     }
 
     pub(crate) fn status_unlocked(&self, opts: ScanOptions) -> RepoResult<WorkingStatus> {
@@ -4720,6 +4783,52 @@ mod tests {
             fs::read_to_string(dir.path().join("note.txt")).unwrap(),
             "dirty\n"
         );
+    }
+
+    #[test]
+    fn add_nonexistent_path_errors() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("readme.txt"), "hello\n").unwrap();
+        repo.commit("baseline").unwrap();
+
+        let err = repo.add(&["redme.txt".into()], false, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("pathspec 'redme.txt' did not match any files"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn add_tracked_deletion_pathspec_matches() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("gone.txt"), "bye\n").unwrap();
+        repo.commit("baseline").unwrap();
+        fs::remove_file(dir.path().join("gone.txt")).unwrap();
+
+        repo.add(&["gone.txt".into()], false, false).unwrap();
+        let staging = repo.load_staging_unlocked().unwrap();
+        assert!(staging.entries.get("gone.txt").unwrap().deleted);
+    }
+
+    #[test]
+    fn add_update_unchanged_tracked_path_succeeds() {
+        let (dir, repo) = sample_repo();
+        fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        repo.commit("baseline").unwrap();
+
+        repo.add(&["a.txt".into()], true, false).unwrap();
+        let staging = repo.load_staging_unlocked().unwrap();
+        assert!(!staging.active);
+    }
+
+    #[test]
+    fn add_empty_directory_succeeds() {
+        let (dir, repo) = sample_repo();
+        fs::create_dir(dir.path().join("empty")).unwrap();
+        repo.commit("baseline").unwrap();
+
+        repo.add(&["empty".into()], false, false).unwrap();
     }
 
     #[test]

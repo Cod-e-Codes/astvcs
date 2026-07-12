@@ -3067,6 +3067,25 @@ fn partial_commit_only_stages_paths() {
 }
 
 #[test]
+fn cli_add_nonexistent_path_errors() {
+    let dir = TempDir::new().unwrap();
+    Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("readme.txt"), "hello\n").unwrap();
+    assert_astvcs_ok(
+        &run_astvcs(Some(dir.path()), &["commit", "-m", "baseline"]),
+        "baseline",
+    );
+
+    let out = run_astvcs(Some(dir.path()), &["add", "redme.txt"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("pathspec 'redme.txt' did not match any files"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn cli_add_dot_stages_tracked_changes() {
     let dir = TempDir::new().unwrap();
     Repo::init_with_identity(dir.path()).unwrap();
