@@ -707,21 +707,10 @@ fn deletion_covers_primary(
 }
 
 fn touches_same_insert_site(a: &Mutation, b: &Mutation) -> bool {
+    if insert_subtree_pair_same_site(a, b) {
+        return true;
+    }
     match (a, b) {
-        (
-            Mutation::InsertSubtree {
-                parent: p1,
-                before: b1,
-                before_occurrence: o1,
-                ..
-            },
-            Mutation::InsertSubtree {
-                parent: p2,
-                before: b2,
-                before_occurrence: o2,
-                ..
-            },
-        ) => p1 == p2 && b1 == b2 && o1 == o2,
         (
             Mutation::DeleteSubtree { node_id: n1, .. },
             Mutation::DeleteSubtree { node_id: n2, .. },
@@ -730,6 +719,76 @@ fn touches_same_insert_site(a: &Mutation, b: &Mutation) -> bool {
         | (Mutation::InsertSubtree { before, .. }, Mutation::DeleteSubtree { node_id, .. }) => {
             *before == Some(*node_id)
         }
+        _ => false,
+    }
+}
+
+fn substantive_sibling_insert(node: &crate::graph::Node) -> bool {
+    matches!(
+        node.kind,
+        NodeKind::Function
+            | NodeKind::Declaration
+            | NodeKind::Statement
+            | NodeKind::Struct
+            | NodeKind::Enum
+            | NodeKind::Impl
+            | NodeKind::Field
+            | NodeKind::Parameter
+            | NodeKind::Loop
+            | NodeKind::Conditional
+    )
+}
+
+fn same_anchor_inserts_disjoint(a: &crate::graph::Node, b: &crate::graph::Node) -> bool {
+    a.id != b.id && substantive_sibling_insert(a) && substantive_sibling_insert(b)
+}
+
+fn insert_subtree_pair_disjoint(a: &Mutation, b: &Mutation) -> bool {
+    match (a, b) {
+        (
+            Mutation::InsertSubtree {
+                parent: p1,
+                before: b1,
+                before_occurrence: o1,
+                node: n1,
+                ..
+            },
+            Mutation::InsertSubtree {
+                parent: p2,
+                before: b2,
+                before_occurrence: o2,
+                node: n2,
+                ..
+            },
+        ) => {
+            if p1 != p2 || b1 != b2 || o1 != o2 {
+                true
+            } else {
+                same_anchor_inserts_disjoint(n1, n2)
+            }
+        }
+        _ => false,
+    }
+}
+
+fn insert_subtree_pair_same_site(a: &Mutation, b: &Mutation) -> bool {
+    match (a, b) {
+        (
+            Mutation::InsertSubtree {
+                parent: p1,
+                before: b1,
+                before_occurrence: o1,
+                node: n1,
+                ..
+            },
+            Mutation::InsertSubtree {
+                parent: p2,
+                before: b2,
+                before_occurrence: o2,
+                node: n2,
+                ..
+            },
+        ) => p1 == p2 && b1 == b2 && o1 == o2 && !same_anchor_inserts_disjoint(n1, n2),
         _ => false,
     }
 }
@@ -756,7 +815,7 @@ fn mutations_merge_equivalent(a: &Mutation, b: &Mutation) -> bool {
                 node: n2,
                 ..
             },
-        ) if p1 == p2 && n1.kind == n2.kind && n1.payload == n2.payload && b1 == b2 && bo1 == bo2
+        ) if p1 == p2 && n1.id == n2.id && b1 == b2 && bo1 == bo2
     )
 }
 
@@ -905,18 +964,9 @@ fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
         {
             true
         }
-        (
-            Mutation::InsertSubtree {
-                parent: p1,
-                before: b1,
-                ..
-            },
-            Mutation::InsertSubtree {
-                parent: p2,
-                before: b2,
-                ..
-            },
-        ) => p1 != p2 || b1 != b2,
+        (Mutation::InsertSubtree { .. }, Mutation::InsertSubtree { .. }) => {
+            insert_subtree_pair_disjoint(a, b)
+        }
         _ => false,
     }
 }
@@ -1638,6 +1688,84 @@ pub fn connect(cfg: &Config) -> Result<(), String> {
 "#,
             &["validate", "validate(cfg)?"],
         );
+    }
+
+    #[test]
+    fn comment_literal_merge_roundtrips_semantically() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn main() {\n    println!(\"Hello, World!\");\n}\n";
+        let left_s = "fn main() {\n    println!(\"Hello, World!\"); // waddup fool\n}\n";
+        let right_s = "fn main() {\n    println!(\"sup?\");\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected merge");
+        };
+        let text = unparse(&merged);
+        let reparsed = parse_rust(&text).unwrap();
+        assert!(
+            FileContent::Ast(merged.clone()).semantic_eq(&FileContent::Ast(reparsed)),
+            "roundtrip mismatch: {text}"
+        );
+        assert!(text.contains("sup?"));
+        assert!(text.contains("waddup fool"));
+    }
+
+    #[test]
+    fn two_sided_tail_append_inserts_both_survive_merge() {
+        use crate::unparser::unparse;
+
+        let base_s = "struct Store {}\nimpl Store {\n    fn new() -> Self { Self {} }\n    fn add(&mut self) {}\n}\n";
+        let left_s = "struct Store {}\nimpl Store {\n    fn new() -> Self { Self {} }\n    fn add(&mut self) {}\n    fn list(&self) -> Vec<String> { vec![] }\n}\n";
+        let right_s = "struct Store {}\nimpl Store {\n    fn new() -> Self { Self {} }\n    fn add(&mut self) {}\n    fn complete(&mut self, id: u64) {}\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(text.contains("fn list"), "missing list(): {text}");
+        assert!(text.contains("fn complete"), "missing complete(): {text}");
+    }
+
+    #[test]
+    fn root_trailing_comment_survives_unrelated_merge() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn main() {}\n";
+        let left_s = "fn main() {}\n// left comment\n";
+        let right_s = "fn other() {}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        assert!(
+            text.contains("// left comment"),
+            "trailing comment text lost: {text:?}"
+        );
+        assert!(text.contains("fn other"));
     }
 
     #[test]

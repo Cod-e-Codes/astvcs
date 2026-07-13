@@ -163,6 +163,30 @@ fn translate(
         }
     }
 
+    if kind == NodeKind::Comment && !child_ids.is_empty() && ts_node.next_sibling().is_none() {
+        let mut cursor = ts_node.walk();
+        if cursor.goto_last_child() {
+            let last_child_ts = cursor.node();
+            let tail_start = last_leaf_end_byte(last_child_ts);
+            if tail_start < ts_node.end_byte() {
+                let tail = source[tail_start..ts_node.end_byte()].to_string();
+                if !tail.is_empty() {
+                    let old_last_id = *child_ids.last().unwrap();
+                    if let Some(old) = nodes.get(&old_last_id).cloned()
+                        && old.is_leaf()
+                    {
+                        let new_payload = format!("{}{}", old.payload, tail);
+                        let new_node = Node::new(old.kind.clone(), new_payload, vec![]);
+                        let new_id = new_node.id;
+                        nodes.remove(&old_last_id);
+                        nodes.insert(new_id, new_node);
+                        *child_ids.last_mut().unwrap() = new_id;
+                    }
+                }
+            }
+        }
+    }
+
     let node = Node::new(kind, payload, child_ids.clone());
     let node_id = node.id;
     nodes.insert(node_id, node);
@@ -181,6 +205,14 @@ fn translate(
 mod tests {
     use super::*;
     use crate::frontend::languages::SourceLanguage;
+
+    #[test]
+    fn eof_line_comment_roundtrip() {
+        use crate::unparser::unparse;
+        let src = "fn main() {}\n// left comment\n";
+        let graph = parse_rust(src).unwrap();
+        assert_eq!(unparse(&graph), src);
+    }
 
     #[test]
     fn parses_simple_function() {
