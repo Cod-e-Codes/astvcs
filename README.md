@@ -33,7 +33,9 @@ Three-way merge applies both sides when alignment finds disjoint structural edit
 
 Default diffs use compact intent labels and keep internal node IDs hidden. Pass `--details` for raw mutations and complete structural diagnostics, or `-v` for the same details plus operational notices.
 
-To inspect how nodes were paired, run `astvcs diff --view` (optionally with a path, `--staged`, `--state`, or three-way flags). It opens a local HTML page on the change summary, with next and previous change navigation and lazy unchanged branches. The page uses the real alignment export, not a mock overlay.
+To inspect how nodes were paired, run `astvcs diff --view` (optionally with a path, `--staged`, `--state`, or three-way flags). It opens a local HTML page on the change summary, with next and previous change navigation and lazy unchanged branches. The page uses the real alignment export, not a mock overlay:
+
+![astvcs diff --view showing a prepend-comment intent on lib.rs with change-first navigation and collapsed unchanged nodes](docs/images/diff-view.png)
 
 ## Documentation
 

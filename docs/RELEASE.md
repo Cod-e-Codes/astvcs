@@ -33,5 +33,3 @@ First public release of astvcs: local-first structural version control with tree
 - Per-path merge resolution; client hooks under `.astvcs/hooks/` (`--no-verify` on selected commands)
 - `gc`, `fsck`, `repack`; symlink and executable modes; path rename detection
 - Repository advisory locking; one-way `import-git` snapshot aid (not git-compatible)
-
-Not in this release: Git object compatibility or bidirectional sync, conflict markers in files, interactive rebase, annotated tags, or managed hosting.
