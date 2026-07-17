@@ -201,7 +201,7 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -400,15 +400,18 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
         let barrier_holder = Arc::clone(&barrier);
         let astvcs_holder = astvcs.clone();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
 
         let holder = thread::spawn(move || {
             let _guard = RepoLockGuard::acquire(&astvcs_holder).unwrap();
             barrier_holder.wait();
-            thread::sleep(Duration::from_millis(200));
+            // Keep the lock until the PUT has finished observing contention.
+            let _ = release_rx.recv();
         });
 
         barrier.wait();
         let (status, body) = put(&server.base_url, "/v1/refs/heads/main", &state_id, None);
+        release_tx.send(()).unwrap();
         holder.join().unwrap();
         assert_eq!(status, 503);
         assert_eq!(body.trim(), "repository locked");
