@@ -287,15 +287,29 @@ impl AstGraph {
                 node_id,
                 new_name,
                 parent,
+                occurrence,
             } => {
-                self.edit_payload(*node_id, new_name.clone(), *parent, &mut cascades)?;
+                self.edit_payload(
+                    *node_id,
+                    new_name.clone(),
+                    *parent,
+                    *occurrence,
+                    &mut cascades,
+                )?;
             }
             Mutation::EditPayload {
                 node_id,
                 new_payload,
                 parent,
+                occurrence,
             } => {
-                self.edit_payload(*node_id, new_payload.clone(), *parent, &mut cascades)?;
+                self.edit_payload(
+                    *node_id,
+                    new_payload.clone(),
+                    *parent,
+                    *occurrence,
+                    &mut cascades,
+                )?;
             }
             Mutation::ReorderChildren { parent, new_order } => {
                 self.splice_children(
@@ -364,6 +378,7 @@ impl AstGraph {
         node_id: NodeId,
         new_payload: String,
         scope_parent: Option<NodeId>,
+        occurrence: Option<u32>,
         cascades: &mut Vec<(NodeId, NodeId)>,
     ) -> Result<(), String> {
         let node = self
@@ -392,13 +407,15 @@ impl AstGraph {
                 ));
             }
             self.nodes.insert(new_id, new_node);
-            self.migrate_child_trivia(parent, node_id, new_id);
+            if let Some(occ) = occurrence {
+                self.migrate_child_trivia_at(parent, node_id, new_id, occ);
+            } else {
+                self.migrate_child_trivia(parent, node_id, new_id);
+            }
             self.splice_children(
                 parent,
                 |children| {
-                    if let Some(pos) = children.iter().position(|c| *c == node_id) {
-                        children[pos] = new_id;
-                    }
+                    replace_child_occurrence(children, node_id, new_id, occurrence);
                     Ok(())
                 },
                 cascades,
@@ -413,9 +430,7 @@ impl AstGraph {
             self.splice_children(
                 parent,
                 |children| {
-                    if let Some(pos) = children.iter().position(|c| *c == node_id) {
-                        children[pos] = new_id;
-                    }
+                    replace_child_occurrence(children, node_id, new_id, occurrence);
                     Ok(())
                 },
                 cascades,
@@ -500,6 +515,22 @@ impl AstGraph {
         }
         self.rebuild_parents();
         Ok(())
+    }
+
+    fn migrate_child_trivia_at(
+        &mut self,
+        parent: NodeId,
+        old_child: NodeId,
+        new_child: NodeId,
+        occurrence: u32,
+    ) {
+        let slot = TriviaSlot::before_child(parent, old_child, occurrence);
+        if let Some(leading) = self.trivia.remove(&slot) {
+            self.trivia.insert(
+                TriviaSlot::before_child(parent, new_child, occurrence),
+                leading,
+            );
+        }
     }
 
     fn rekey_trivia_parent(&mut self, old_parent: NodeId, new_parent: NodeId) {
@@ -625,6 +656,30 @@ fn child_occurrence_at(children: &[NodeId], child: NodeId) -> u32 {
     children[..index].iter().filter(|c| **c == child).count() as u32
 }
 
+/// Replace the `occurrence`-th copy of `old` with `new` (0-based). When `occurrence` is
+/// `None` or the slot is missing, falls back to the first match.
+fn replace_child_occurrence(
+    children: &mut [NodeId],
+    old: NodeId,
+    new: NodeId,
+    occurrence: Option<u32>,
+) {
+    let target = occurrence.unwrap_or(0) as usize;
+    let mut seen = 0usize;
+    for child in children.iter_mut() {
+        if *child == old {
+            if seen == target {
+                *child = new;
+                return;
+            }
+            seen += 1;
+        }
+    }
+    if let Some(pos) = children.iter().position(|c| *c == old) {
+        children[pos] = new;
+    }
+}
+
 fn insert_child_before(
     children: &mut Vec<NodeId>,
     node_id: NodeId,
@@ -739,19 +794,23 @@ pub fn remap_mutation(mutation: &Mutation, table: &HashMap<NodeId, NodeId>) -> M
             node_id,
             new_name,
             parent,
+            occurrence,
         } => Mutation::RenameIdentifier {
             node_id: redirect_map(*node_id, table),
             new_name: new_name.clone(),
             parent: parent.map(|id| redirect_map(id, table)),
+            occurrence: *occurrence,
         },
         Mutation::EditPayload {
             node_id,
             new_payload,
             parent,
+            occurrence,
         } => Mutation::EditPayload {
             node_id: redirect_map(*node_id, table),
             new_payload: new_payload.clone(),
             parent: parent.map(|id| redirect_map(id, table)),
+            occurrence: *occurrence,
         },
         Mutation::ReorderChildren { parent, new_order } => Mutation::ReorderChildren {
             parent: redirect_map(*parent, table),
@@ -849,6 +908,7 @@ mod tests {
             node_id: one_id,
             new_payload: "2".into(),
             parent: Some(let_parent),
+            occurrence: None,
         })
         .unwrap();
         g.validate().unwrap();
@@ -864,6 +924,7 @@ mod tests {
             node_id: x_id,
             new_name: "renamed".into(),
             parent: Some(block_a_id),
+            occurrence: None,
         })
         .unwrap();
         assert!(g.nodes.values().any(|n| n.payload == "renamed"));

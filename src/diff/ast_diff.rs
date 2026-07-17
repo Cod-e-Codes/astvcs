@@ -48,6 +48,25 @@ pub struct DiffResult {
     pub mutations: Vec<Mutation>,
 }
 
+/// Shared graphs and output buffers for recursive structural diff.
+struct DiffSession<'a> {
+    old: &'a AstGraph,
+    new: &'a AstGraph,
+    out: &'a mut Vec<Mutation>,
+    alignment: &'a mut Vec<AlignEdge>,
+}
+
+/// Sibling list state while matching children under one parent pair.
+struct SiblingMatchFrame<'a> {
+    old_children: &'a [NodeId],
+    new_children: &'a [NodeId],
+    old_node_id: NodeId,
+    new_node_id: NodeId,
+    matched_old: &'a mut [bool],
+    matched_new: &'a mut [bool],
+    scope_occurrence: Option<u32>,
+}
+
 /// Compute structural mutations transforming `old` into `new`.
 pub fn diff_graphs(old: &AstGraph, new: &AstGraph) -> DiffResult {
     DiffResult {
@@ -67,15 +86,13 @@ pub fn diff_graphs_detailed(old: &AstGraph, new: &AstGraph) -> DetailedDiffResul
         parent_old: None,
         parent_new: None,
     });
-    diff_subtree(
+    let mut sess = DiffSession {
         old,
         new,
-        old.root,
-        new.root,
-        None,
-        &mut mutations,
-        &mut alignment,
-    );
+        out: &mut mutations,
+        alignment: &mut alignment,
+    };
+    diff_subtree(&mut sess, old.root, new.root, None, None);
     if old.root_trailing_trivia != new.root_trailing_trivia {
         mutations.push(Mutation::SetRootTrailingTrivia {
             trailing: new.root_trailing_trivia.clone(),
@@ -200,6 +217,8 @@ fn is_redundant_list_separator_insert(
 }
 
 /// Re-pair content-addressed siblings by ordinal position when LCS pairs the wrong occurrence.
+/// When one side has fewer copies (an occurrence was edited to a new id), prefer pairing the
+/// remaining identical ids at the same list index so the edited slot stays index-aligned.
 fn repair_occurrence_aware_matches(
     old_children: &[NodeId],
     new_children: &[NodeId],
@@ -245,11 +264,54 @@ fn repair_occurrence_aware_matches(
         for &ni in &new_idx {
             matched_new[ni] = false;
         }
-        for k in 0..old_idx.len().min(new_idx.len()) {
-            matched_old[old_idx[k]] = true;
-            matched_new[new_idx[k]] = true;
+
+        let mut used_old = vec![false; old_idx.len()];
+        let mut used_new = vec![false; new_idx.len()];
+        // Prefer same-index pairs first so [A, A] vs [A', A] keeps A@1 with A@1.
+        for (oi_pos, &oi) in old_idx.iter().enumerate() {
+            if let Some((ni_pos, _)) = new_idx
+                .iter()
+                .enumerate()
+                .find(|(ni_pos, ni)| !used_new[*ni_pos] && **ni == oi)
+            {
+                matched_old[oi] = true;
+                matched_new[new_idx[ni_pos]] = true;
+                used_old[oi_pos] = true;
+                used_new[ni_pos] = true;
+            }
+        }
+        // Then pair remaining identical ids by minimizing index distance.
+        for (oi_pos, &oi) in old_idx.iter().enumerate() {
+            if used_old[oi_pos] {
+                continue;
+            }
+            let Some((ni_pos, _)) = new_idx
+                .iter()
+                .enumerate()
+                .filter(|(ni_pos, _)| !used_new[*ni_pos])
+                .min_by_key(|(_, ni)| oi.abs_diff(**ni))
+            else {
+                break;
+            };
+            matched_old[oi] = true;
+            matched_new[new_idx[ni_pos]] = true;
+            used_old[oi_pos] = true;
+            used_new[ni_pos] = true;
         }
     }
+}
+
+fn sibling_occurrence_at_index(children: &[NodeId], index: usize) -> u32 {
+    let id = children[index];
+    children[..index].iter().filter(|c| **c == id).count() as u32
+}
+
+fn duplicate_sibling_occurrence(children: &[NodeId], index: usize) -> Option<u32> {
+    let id = children[index];
+    if children.iter().filter(|c| **c == id).count() <= 1 {
+        return None;
+    }
+    Some(sibling_occurrence_at_index(children, index))
 }
 
 fn ordered_matched_sibling_pairs(
@@ -506,117 +568,105 @@ fn unmatched_indices(matched: &[bool]) -> Vec<usize> {
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn apply_role_match(
-    old: &AstGraph,
-    new: &AstGraph,
-    old_children: &[NodeId],
-    new_children: &[NodeId],
-    old_node_id: NodeId,
-    new_node_id: NodeId,
+    sess: &mut DiffSession<'_>,
+    frame: &mut SiblingMatchFrame<'_>,
     oi: usize,
     ni: usize,
-    matched_old: &mut [bool],
-    matched_new: &mut [bool],
-    out: &mut Vec<Mutation>,
     method: AlignMethod,
-    alignment: &mut Vec<AlignEdge>,
 ) {
-    let oc = old.get(&old_children[oi]).unwrap();
-    let nc = new.get(&new_children[ni]).unwrap();
+    let oc = sess.old.get(&frame.old_children[oi]).unwrap();
+    let nc = sess.new.get(&frame.new_children[ni]).unwrap();
     if oc.kind != nc.kind || oc.children.len() != nc.children.len() {
         return;
     }
-    matched_old[oi] = true;
-    matched_new[ni] = true;
-    alignment.push(AlignEdge {
-        old_id: Some(old_children[oi]),
-        new_id: Some(new_children[ni]),
+    frame.matched_old[oi] = true;
+    frame.matched_new[ni] = true;
+    sess.alignment.push(AlignEdge {
+        old_id: Some(frame.old_children[oi]),
+        new_id: Some(frame.new_children[ni]),
         kind: AlignKind::Match,
         method: Some(method),
-        parent_old: Some(old_node_id),
-        parent_new: Some(new_node_id),
+        parent_old: Some(frame.old_node_id),
+        parent_new: Some(frame.new_node_id),
     });
-    if old_children[oi] != new_children[ni] && oi != ni {
-        out.push(Mutation::MoveNode {
-            node_id: old_children[oi],
-            new_parent: old_node_id,
-            before: insert_anchor_new(new_children, ni),
+    let child_occurrence =
+        duplicate_sibling_occurrence(frame.old_children, oi).or(frame.scope_occurrence);
+    if frame.old_children[oi] != frame.new_children[ni]
+        && oi != ni
+        && duplicate_sibling_occurrence(frame.old_children, oi).is_none()
+    {
+        sess.out.push(Mutation::MoveNode {
+            node_id: frame.old_children[oi],
+            new_parent: frame.old_node_id,
+            before: insert_anchor_new(frame.new_children, ni),
         });
     }
     diff_subtree(
-        old,
-        new,
-        old_children[oi],
-        new_children[ni],
-        Some(old_node_id),
-        out,
-        alignment,
+        sess,
+        frame.old_children[oi],
+        frame.new_children[ni],
+        Some(frame.old_node_id),
+        child_occurrence,
     );
     diff_child_trivia(
-        old,
-        new,
-        old_node_id,
-        new_node_id,
-        old_children[oi],
-        new_children[ni],
-        out,
+        sess.old,
+        sess.new,
+        frame.old_node_id,
+        frame.new_node_id,
+        frame.old_children[oi],
+        frame.new_children[ni],
+        sess.out,
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn apply_key_match(
-    old: &AstGraph,
-    new: &AstGraph,
-    old_children: &[NodeId],
-    new_children: &[NodeId],
-    old_node_id: NodeId,
-    new_node_id: NodeId,
+    sess: &mut DiffSession<'_>,
+    frame: &mut SiblingMatchFrame<'_>,
     oi: usize,
     ni: usize,
-    matched_old: &mut [bool],
-    matched_new: &mut [bool],
-    out: &mut Vec<Mutation>,
     method: AlignMethod,
-    alignment: &mut Vec<AlignEdge>,
 ) {
-    let oc = old.get(&old_children[oi]).unwrap();
-    let nc = new.get(&new_children[ni]).unwrap();
+    let oc = sess.old.get(&frame.old_children[oi]).unwrap();
+    let nc = sess.new.get(&frame.new_children[ni]).unwrap();
     if oc.kind == nc.kind && !oc.is_leaf() {
-        matched_old[oi] = true;
-        matched_new[ni] = true;
-        alignment.push(AlignEdge {
-            old_id: Some(old_children[oi]),
-            new_id: Some(new_children[ni]),
+        frame.matched_old[oi] = true;
+        frame.matched_new[ni] = true;
+        sess.alignment.push(AlignEdge {
+            old_id: Some(frame.old_children[oi]),
+            new_id: Some(frame.new_children[ni]),
             kind: AlignKind::Match,
             method: Some(method),
-            parent_old: Some(old_node_id),
-            parent_new: Some(new_node_id),
+            parent_old: Some(frame.old_node_id),
+            parent_new: Some(frame.new_node_id),
         });
-        if old_children[oi] != new_children[ni] && oi != ni {
-            out.push(Mutation::MoveNode {
-                node_id: old_children[oi],
-                new_parent: old_node_id,
-                before: insert_anchor_new(new_children, ni),
+        let child_occurrence =
+            duplicate_sibling_occurrence(frame.old_children, oi).or(frame.scope_occurrence);
+        if frame.old_children[oi] != frame.new_children[ni]
+            && oi != ni
+            && duplicate_sibling_occurrence(frame.old_children, oi).is_none()
+        {
+            sess.out.push(Mutation::MoveNode {
+                node_id: frame.old_children[oi],
+                new_parent: frame.old_node_id,
+                before: insert_anchor_new(frame.new_children, ni),
             });
         }
         diff_subtree(
-            old,
-            new,
-            old_children[oi],
-            new_children[ni],
-            Some(old_node_id),
-            out,
-            alignment,
+            sess,
+            frame.old_children[oi],
+            frame.new_children[ni],
+            Some(frame.old_node_id),
+            child_occurrence,
         );
         diff_child_trivia(
-            old,
-            new,
-            old_node_id,
-            new_node_id,
-            old_children[oi],
-            new_children[ni],
-            out,
+            sess.old,
+            sess.new,
+            frame.old_node_id,
+            frame.new_node_id,
+            frame.old_children[oi],
+            frame.new_children[ni],
+            sess.out,
         );
     }
 }
@@ -650,20 +700,18 @@ fn unique_fingerprint_pairs(
 }
 
 fn diff_subtree(
-    old: &AstGraph,
-    new: &AstGraph,
+    sess: &mut DiffSession<'_>,
     old_id: NodeId,
     new_id: NodeId,
     context_parent_old: Option<NodeId>,
-    out: &mut Vec<Mutation>,
-    alignment: &mut Vec<AlignEdge>,
+    scope_occurrence: Option<u32>,
 ) {
-    let old_node = old.get(&old_id).unwrap();
-    let new_node = new.get(&new_id).unwrap();
+    let old_node = sess.old.get(&old_id).unwrap();
+    let new_node = sess.new.get(&new_id).unwrap();
 
     if old_id == new_id {
         if old_node.kind == new_node.kind && !(old_node.is_leaf() && new_node.is_leaf()) {
-            diff_children(old, new, old_id, new_id, out, alignment);
+            diff_children(sess, old_id, new_id, scope_occurrence);
         }
         return;
     }
@@ -674,57 +722,59 @@ fn diff_subtree(
         && old_node.payload != new_node.payload
     {
         if old_node.kind == NodeKind::Identifier {
-            out.push(Mutation::RenameIdentifier {
+            sess.out.push(Mutation::RenameIdentifier {
                 node_id: old_id,
                 new_name: new_node.payload.clone(),
                 parent: context_parent_old,
+                occurrence: scope_occurrence,
             });
         } else {
-            out.push(Mutation::EditPayload {
+            sess.out.push(Mutation::EditPayload {
                 node_id: old_id,
                 new_payload: new_node.payload.clone(),
                 parent: context_parent_old,
+                occurrence: scope_occurrence,
             });
         }
         return;
     }
 
     if old_node.kind == new_node.kind && !(old_node.is_leaf() && new_node.is_leaf()) {
-        diff_children(old, new, old_id, new_id, out, alignment);
+        diff_children(sess, old_id, new_id, scope_occurrence);
         return;
     }
 
-    if old.parent_of(&old_id).is_some() {
-        out.push(Mutation::DeleteSubtree {
-            parent: old.parent_of(&old_id).unwrap(),
+    if sess.old.parent_of(&old_id).is_some() {
+        sess.out.push(Mutation::DeleteSubtree {
+            parent: sess.old.parent_of(&old_id).unwrap(),
             node_id: old_id,
         });
     }
-    if let Some(parent) = new.parent_of(&new_id) {
-        let old_parent = find_corresponding_parent(old, new, parent);
-        let descendants = new.collect_subtree(new_id);
-        let top = new.get(&new_id).unwrap().clone();
-        let new_parent_children = new.get(&parent).unwrap().children.clone();
+    if let Some(parent) = sess.new.parent_of(&new_id) {
+        let old_parent = find_corresponding_parent(sess.old, sess.new, parent);
+        let descendants = sess.new.collect_subtree(new_id);
+        let top = sess.new.get(&new_id).unwrap().clone();
+        let new_parent_children = sess.new.get(&parent).unwrap().children.clone();
         let index = new_parent_children
             .iter()
             .position(|c| *c == new_id)
             .unwrap_or(0);
         let (before, before_occurrence) = resolve_insert_before_in_old(
-            old,
-            new,
-            &old.get(&old_parent).unwrap().children,
+            sess.old,
+            sess.new,
+            &sess.old.get(&old_parent).unwrap().children,
             &new_parent_children,
             &vec![true; new_parent_children.len()],
             index,
             &top,
         );
-        out.push(Mutation::InsertSubtree {
+        sess.out.push(Mutation::InsertSubtree {
             parent: old_parent,
             before,
             before_occurrence,
             node: top,
             descendants,
-            trivia: insert_trivia(new, parent, new_id, old_parent),
+            trivia: insert_trivia(sess.new, parent, new_id, old_parent),
         });
     }
 }
@@ -766,19 +816,21 @@ fn resolve_path_in_old(old: &AstGraph, path: &[usize]) -> Option<NodeId> {
 }
 
 fn diff_children(
-    old: &AstGraph,
-    new: &AstGraph,
+    sess: &mut DiffSession<'_>,
     old_node_id: NodeId,
     new_node_id: NodeId,
-    out: &mut Vec<Mutation>,
-    alignment: &mut Vec<AlignEdge>,
+    scope_occurrence: Option<u32>,
 ) {
+    let old = sess.old;
+    let new = sess.new;
     let old_children = old.get(&old_node_id).unwrap().children.clone();
     let new_children = new.get(&new_node_id).unwrap().children.clone();
 
     if old_children == new_children {
-        for &id in &old_children {
-            alignment.push(AlignEdge {
+        for (i, &id) in old_children.iter().enumerate() {
+            let child_occurrence =
+                duplicate_sibling_occurrence(&old_children, i).or(scope_occurrence);
+            sess.alignment.push(AlignEdge {
                 old_id: Some(id),
                 new_id: Some(id),
                 kind: AlignKind::Match,
@@ -786,19 +838,29 @@ fn diff_children(
                 parent_old: Some(old_node_id),
                 parent_new: Some(new_node_id),
             });
-            diff_subtree(old, new, id, id, Some(old_node_id), out, alignment);
-            diff_child_trivia(old, new, old_node_id, new_node_id, id, id, out);
+            diff_subtree(sess, id, id, Some(old_node_id), child_occurrence);
+            diff_child_trivia(
+                sess.old,
+                sess.new,
+                old_node_id,
+                new_node_id,
+                id,
+                id,
+                sess.out,
+            );
         }
         return;
     }
 
     if same_id_multiset(&old_children, &new_children) && old_children != new_children {
-        out.push(Mutation::ReorderChildren {
+        sess.out.push(Mutation::ReorderChildren {
             parent: old_node_id,
             new_order: new_children.clone(),
         });
-        for id in &old_children {
-            alignment.push(AlignEdge {
+        for (i, id) in old_children.iter().enumerate() {
+            let child_occurrence =
+                duplicate_sibling_occurrence(&old_children, i).or(scope_occurrence);
+            sess.alignment.push(AlignEdge {
                 old_id: Some(*id),
                 new_id: Some(*id),
                 kind: AlignKind::Match,
@@ -806,9 +868,17 @@ fn diff_children(
                 parent_old: Some(old_node_id),
                 parent_new: Some(new_node_id),
             });
-            diff_subtree(old, new, *id, *id, Some(old_node_id), out, alignment);
+            diff_subtree(sess, *id, *id, Some(old_node_id), child_occurrence);
             if new_children.contains(id) {
-                diff_child_trivia(old, new, old_node_id, new_node_id, *id, *id, out);
+                diff_child_trivia(
+                    sess.old,
+                    sess.new,
+                    old_node_id,
+                    new_node_id,
+                    *id,
+                    *id,
+                    sess.out,
+                );
             }
         }
         return;
@@ -838,7 +908,7 @@ fn diff_children(
         for (oi, ni) in lcs_pairs(&old_struct, &new_struct) {
             matched_old[oi] = true;
             matched_new[ni] = true;
-            alignment.push(AlignEdge {
+            sess.alignment.push(AlignEdge {
                 old_id: Some(old_children[oi]),
                 new_id: Some(new_children[ni]),
                 kind: AlignKind::Match,
@@ -847,22 +917,20 @@ fn diff_children(
                 parent_new: Some(new_node_id),
             });
             diff_subtree(
-                old,
-                new,
+                sess,
                 old_children[oi],
                 new_children[ni],
                 Some(old_node_id),
-                out,
-                alignment,
+                duplicate_sibling_occurrence(&old_children, oi).or(scope_occurrence),
             );
             diff_child_trivia(
-                old,
-                new,
+                sess.old,
+                sess.new,
                 old_node_id,
                 new_node_id,
                 old_children[oi],
                 new_children[ni],
-                out,
+                sess.out,
             );
         }
 
@@ -871,19 +939,19 @@ fn diff_children(
                 continue;
             }
             apply_key_match(
-                old,
-                new,
-                &old_children,
-                &new_children,
-                old_node_id,
-                new_node_id,
+                sess,
+                &mut SiblingMatchFrame {
+                    old_children: &old_children,
+                    new_children: &new_children,
+                    old_node_id,
+                    new_node_id,
+                    matched_old: &mut matched_old,
+                    matched_new: &mut matched_new,
+                    scope_occurrence,
+                },
                 oi,
                 ni,
-                &mut matched_old,
-                &mut matched_new,
-                out,
                 AlignMethod::Key,
-                alignment,
             );
         }
 
@@ -892,19 +960,19 @@ fn diff_children(
                 continue;
             }
             apply_role_match(
-                old,
-                new,
-                &old_children,
-                &new_children,
-                old_node_id,
-                new_node_id,
+                sess,
+                &mut SiblingMatchFrame {
+                    old_children: &old_children,
+                    new_children: &new_children,
+                    old_node_id,
+                    new_node_id,
+                    matched_old: &mut matched_old,
+                    matched_new: &mut matched_new,
+                    scope_occurrence,
+                },
                 oi,
                 ni,
-                &mut matched_old,
-                &mut matched_new,
-                out,
                 AlignMethod::Role,
-                alignment,
             );
         }
 
@@ -916,19 +984,19 @@ fn diff_children(
                     continue;
                 }
                 apply_role_match(
-                    old,
-                    new,
-                    &old_children,
-                    &new_children,
-                    old_node_id,
-                    new_node_id,
+                    sess,
+                    &mut SiblingMatchFrame {
+                        old_children: &old_children,
+                        new_children: &new_children,
+                        old_node_id,
+                        new_node_id,
+                        matched_old: &mut matched_old,
+                        matched_new: &mut matched_new,
+                        scope_occurrence,
+                    },
                     oi,
                     ni,
-                    &mut matched_old,
-                    &mut matched_new,
-                    out,
                     AlignMethod::Lcs,
-                    alignment,
                 );
             }
 
@@ -937,19 +1005,19 @@ fn diff_children(
                     continue;
                 }
                 apply_key_match(
-                    old,
-                    new,
-                    &old_children,
-                    &new_children,
-                    old_node_id,
-                    new_node_id,
+                    sess,
+                    &mut SiblingMatchFrame {
+                        old_children: &old_children,
+                        new_children: &new_children,
+                        old_node_id,
+                        new_node_id,
+                        matched_old: &mut matched_old,
+                        matched_new: &mut matched_new,
+                        scope_occurrence,
+                    },
                     oi,
                     ni,
-                    &mut matched_old,
-                    &mut matched_new,
-                    out,
                     AlignMethod::Lcs,
-                    alignment,
                 );
             }
         }
@@ -967,7 +1035,7 @@ fn diff_children(
         for (oi, ni) in
             ordered_matched_sibling_pairs(&old_children, &new_children, &matched_old, &matched_new)
         {
-            alignment.push(AlignEdge {
+            sess.alignment.push(AlignEdge {
                 old_id: Some(old_children[oi]),
                 new_id: Some(new_children[ni]),
                 kind: AlignKind::Match,
@@ -976,22 +1044,20 @@ fn diff_children(
                 parent_new: Some(new_node_id),
             });
             diff_subtree(
-                old,
-                new,
+                sess,
                 old_children[oi],
                 new_children[ni],
                 Some(old_node_id),
-                out,
-                alignment,
+                duplicate_sibling_occurrence(&old_children, oi).or(scope_occurrence),
             );
             diff_child_trivia(
-                old,
-                new,
+                sess.old,
+                sess.new,
                 old_node_id,
                 new_node_id,
                 old_children[oi],
                 new_children[ni],
-                out,
+                sess.out,
             );
         }
 
@@ -1000,19 +1066,19 @@ fn diff_children(
                 continue;
             }
             apply_role_match(
-                old,
-                new,
-                &old_children,
-                &new_children,
-                old_node_id,
-                new_node_id,
+                sess,
+                &mut SiblingMatchFrame {
+                    old_children: &old_children,
+                    new_children: &new_children,
+                    old_node_id,
+                    new_node_id,
+                    matched_old: &mut matched_old,
+                    matched_new: &mut matched_new,
+                    scope_occurrence,
+                },
                 oi,
                 ni,
-                &mut matched_old,
-                &mut matched_new,
-                out,
                 AlignMethod::Lcs,
-                alignment,
             );
         }
 
@@ -1021,19 +1087,19 @@ fn diff_children(
                 continue;
             }
             apply_key_match(
-                old,
-                new,
-                &old_children,
-                &new_children,
-                old_node_id,
-                new_node_id,
+                sess,
+                &mut SiblingMatchFrame {
+                    old_children: &old_children,
+                    new_children: &new_children,
+                    old_node_id,
+                    new_node_id,
+                    matched_old: &mut matched_old,
+                    matched_new: &mut matched_new,
+                    scope_occurrence,
+                },
                 oi,
                 ni,
-                &mut matched_old,
-                &mut matched_new,
-                out,
                 AlignMethod::Lcs,
-                alignment,
             );
         }
     }
@@ -1048,7 +1114,7 @@ fn diff_children(
     ) {
         matched_old[oi] = true;
         matched_new[ni] = true;
-        alignment.push(AlignEdge {
+        sess.alignment.push(AlignEdge {
             old_id: Some(old_children[oi]),
             new_id: Some(new_children[ni]),
             kind: AlignKind::Match,
@@ -1056,30 +1122,28 @@ fn diff_children(
             parent_old: Some(old_node_id),
             parent_new: Some(new_node_id),
         });
-        if oi != ni {
-            out.push(Mutation::MoveSubtree {
+        if oi != ni && duplicate_sibling_occurrence(&old_children, oi).is_none() {
+            sess.out.push(Mutation::MoveSubtree {
                 node_id: old_children[oi],
                 new_parent: old_node_id,
                 before: insert_anchor_new(&new_children, ni),
             });
         }
         diff_subtree(
-            old,
-            new,
+            sess,
             old_children[oi],
             new_children[ni],
             Some(old_node_id),
-            out,
-            alignment,
+            duplicate_sibling_occurrence(&old_children, oi).or(scope_occurrence),
         );
         diff_child_trivia(
-            old,
-            new,
+            sess.old,
+            sess.new,
             old_node_id,
             new_node_id,
             old_children[oi],
             new_children[ni],
-            out,
+            sess.out,
         );
     }
 
@@ -1095,7 +1159,7 @@ fn diff_children(
         let new_child = new_children[ni];
         matched_old[oi] = true;
         matched_new[ni] = true;
-        alignment.push(AlignEdge {
+        sess.alignment.push(AlignEdge {
             old_id: Some(*old_child),
             new_id: Some(new_child),
             kind: AlignKind::Match,
@@ -1103,8 +1167,8 @@ fn diff_children(
             parent_old: Some(old_node_id),
             parent_new: Some(new_node_id),
         });
-        if oi != ni {
-            out.push(Mutation::MoveNode {
+        if oi != ni && duplicate_sibling_occurrence(&old_children, oi).is_none() {
+            sess.out.push(Mutation::MoveNode {
                 node_id: *old_child,
                 new_parent: old_node_id,
                 before: insert_anchor_new(&new_children, ni),
@@ -1115,22 +1179,20 @@ fn diff_children(
             ));
         }
         diff_subtree(
-            old,
-            new,
+            sess,
             *old_child,
             new_child,
             Some(old_node_id),
-            out,
-            alignment,
+            duplicate_sibling_occurrence(&old_children, oi).or(scope_occurrence),
         );
         diff_child_trivia(
-            old,
-            new,
+            sess.old,
+            sess.new,
             old_node_id,
             new_node_id,
             *old_child,
             new_child,
-            out,
+            sess.out,
         );
     }
 
@@ -1148,7 +1210,7 @@ fn diff_children(
         let nc = new.get(&new_child).unwrap();
         matched_old[oi] = true;
         matched_new[ni] = true;
-        alignment.push(AlignEdge {
+        sess.alignment.push(AlignEdge {
             old_id: Some(*old_child),
             new_id: Some(new_child),
             kind: AlignKind::Match,
@@ -1156,8 +1218,8 @@ fn diff_children(
             parent_old: Some(old_node_id),
             parent_new: Some(new_node_id),
         });
-        if oi != ni {
-            out.push(Mutation::MoveNode {
+        if oi != ni && duplicate_sibling_occurrence(&old_children, oi).is_none() {
+            sess.out.push(Mutation::MoveNode {
                 node_id: *old_child,
                 new_parent: old_node_id,
                 before: insert_anchor_new(&new_children, ni),
@@ -1167,33 +1229,36 @@ fn diff_children(
                 oi.abs_diff(ni)
             ));
         }
+        let child_occurrence = duplicate_sibling_occurrence(&old_children, oi).or(scope_occurrence);
         if oc.kind == NodeKind::Identifier {
-            out.push(Mutation::RenameIdentifier {
+            sess.out.push(Mutation::RenameIdentifier {
                 node_id: *old_child,
                 new_name: nc.payload.clone(),
                 parent: Some(old_node_id),
+                occurrence: child_occurrence,
             });
         } else {
-            out.push(Mutation::EditPayload {
+            sess.out.push(Mutation::EditPayload {
                 node_id: *old_child,
                 new_payload: nc.payload.clone(),
                 parent: Some(old_node_id),
+                occurrence: child_occurrence,
             });
         }
         diff_child_trivia(
-            old,
-            new,
+            sess.old,
+            sess.new,
             old_node_id,
             new_node_id,
             *old_child,
             new_child,
-            out,
+            sess.out,
         );
     }
 
     for (oi, old_child) in old_children.iter().enumerate() {
         if !matched_old[oi] {
-            alignment.push(AlignEdge {
+            sess.alignment.push(AlignEdge {
                 old_id: Some(*old_child),
                 new_id: None,
                 kind: AlignKind::Delete,
@@ -1201,7 +1266,7 @@ fn diff_children(
                 parent_old: Some(old_node_id),
                 parent_new: None,
             });
-            out.push(Mutation::DeleteSubtree {
+            sess.out.push(Mutation::DeleteSubtree {
                 parent: old_node_id,
                 node_id: *old_child,
             });
@@ -1211,7 +1276,7 @@ fn diff_children(
     let mut pending_inserts = Vec::new();
     for (ni, new_child) in new_children.iter().enumerate() {
         if !matched_new[ni] {
-            alignment.push(AlignEdge {
+            sess.alignment.push(AlignEdge {
                 old_id: None,
                 new_id: Some(*new_child),
                 kind: AlignKind::Insert,
@@ -1244,7 +1309,7 @@ fn diff_children(
             ni,
             &top,
         );
-        out.push(Mutation::InsertSubtree {
+        sess.out.push(Mutation::InsertSubtree {
             parent: old_node_id,
             before,
             before_occurrence,

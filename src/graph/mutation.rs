@@ -39,12 +39,22 @@ pub enum Mutation {
         new_name: String,
         /// Parent whose child list contains `node_id`. Required when the node is shared.
         parent: Option<NodeId>,
+        /// Which occurrence of `node_id` under `parent` (0-based), or which duplicate
+        /// ancestor sibling was matched when the edit is nested inside a repeated subtree.
+        /// When `None`, apply uses the first match (legacy).
+        #[serde(default)]
+        occurrence: Option<u32>,
     },
     EditPayload {
         node_id: NodeId,
         new_payload: String,
         /// Parent whose child list contains `node_id`. Required when the node is shared.
         parent: Option<NodeId>,
+        /// Which occurrence of `node_id` under `parent` (0-based), or which duplicate
+        /// ancestor sibling was matched when the edit is nested inside a repeated subtree.
+        /// When `None`, apply uses the first match (legacy).
+        #[serde(default)]
+        occurrence: Option<u32>,
     },
     /// Replace the full child order under `parent`.
     ReorderChildren {

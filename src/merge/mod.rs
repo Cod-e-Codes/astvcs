@@ -652,7 +652,7 @@ fn overlap_reason(base: &AstGraph, a: &Mutation, b: &Mutation) -> Option<Overlap
     if mutations_merge_equivalent(a, b) {
         return None;
     }
-    if are_disjoint_edits(a, b) {
+    if are_disjoint_edits(base, a, b) {
         return None;
     }
     let ia = intent::classify_mutation(Some(base), a);
@@ -877,6 +877,8 @@ fn omit_shared_punctuation_insert(
 }
 
 /// Apply side-unique mutations only; shared equivalent edits are omitted (not applied twice).
+/// Payload edits that share a `node_id` but target different occurrences are applied highest
+/// occurrence first so earlier slots do not renumber later ones.
 fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutation> {
     let mut combined = Vec::new();
     for lm in left {
@@ -897,10 +899,67 @@ fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutati
         }
         combined.push(rm.clone());
     }
+    combined.sort_by(|a, b| match (a, b) {
+        (
+            Mutation::EditPayload {
+                node_id: n1,
+                occurrence: o1,
+                ..
+            },
+            Mutation::EditPayload {
+                node_id: n2,
+                occurrence: o2,
+                ..
+            },
+        )
+        | (
+            Mutation::RenameIdentifier {
+                node_id: n1,
+                occurrence: o1,
+                ..
+            },
+            Mutation::RenameIdentifier {
+                node_id: n2,
+                occurrence: o2,
+                ..
+            },
+        )
+        | (
+            Mutation::EditPayload {
+                node_id: n1,
+                occurrence: o1,
+                ..
+            },
+            Mutation::RenameIdentifier {
+                node_id: n2,
+                occurrence: o2,
+                ..
+            },
+        )
+        | (
+            Mutation::RenameIdentifier {
+                node_id: n1,
+                occurrence: o1,
+                ..
+            },
+            Mutation::EditPayload {
+                node_id: n2,
+                occurrence: o2,
+                ..
+            },
+        ) if n1 == n2 => o2.cmp(o1),
+        _ => std::cmp::Ordering::Equal,
+    });
     combined
 }
 
-fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
+fn parent_has_duplicate_child(base: &AstGraph, parent: NodeId, child: NodeId) -> bool {
+    base.get(&parent)
+        .map(|n| n.children.iter().filter(|c| **c == child).count() > 1)
+        .unwrap_or(false)
+}
+
+fn are_disjoint_edits(base: &AstGraph, a: &Mutation, b: &Mutation) -> bool {
     match (a, b) {
         (Mutation::RenameIdentifier { .. }, Mutation::InsertSubtree { .. })
         | (Mutation::InsertSubtree { .. }, Mutation::RenameIdentifier { .. })
@@ -936,10 +995,42 @@ fn are_disjoint_edits(a: &Mutation, b: &Mutation) -> bool {
         ) if p1 == p2 && c1 == c2 && o1 == o2 => false,
         (Mutation::SetRootTrailingTrivia { .. }, Mutation::SetRootTrailingTrivia { .. }) => false,
         (Mutation::EditPayload { node_id: a, .. }, Mutation::EditPayload { node_id: b, .. })
-        | (
+            if a != b =>
+        {
+            true
+        }
+        (
+            Mutation::EditPayload {
+                node_id: a,
+                parent: Some(p1),
+                occurrence: o1,
+                ..
+            },
+            Mutation::EditPayload {
+                node_id: b,
+                parent: Some(p2),
+                occurrence: o2,
+                ..
+            },
+        ) if a == b && p1 == p2 && o1 != o2 && parent_has_duplicate_child(base, *p1, *a) => true,
+        (
             Mutation::RenameIdentifier { node_id: a, .. },
             Mutation::RenameIdentifier { node_id: b, .. },
         ) if a != b => true,
+        (
+            Mutation::RenameIdentifier {
+                node_id: a,
+                parent: Some(p1),
+                occurrence: o1,
+                ..
+            },
+            Mutation::RenameIdentifier {
+                node_id: b,
+                parent: Some(p2),
+                occurrence: o2,
+                ..
+            },
+        ) if a == b && p1 == p2 && o1 != o2 && parent_has_duplicate_child(base, *p1, *a) => true,
         (Mutation::MoveNode { node_id: a, .. }, Mutation::EditPayload { node_id: b, .. })
         | (Mutation::EditPayload { node_id: b, .. }, Mutation::MoveNode { node_id: a, .. })
         | (Mutation::MoveSubtree { node_id: a, .. }, Mutation::EditPayload { node_id: b, .. })
@@ -1128,7 +1219,9 @@ mod tests {
     }
 
     #[test]
-    fn identical_literal_siblings_disjoint_edits_conflict() {
+    fn identical_literal_siblings_disjoint_edits_merge() {
+        use crate::unparser::unparse;
+
         let base_s = "fn demo() {\n    let v = vec![0, 0, 0, 0, 0];\n}\n";
         let left_s = "fn demo() {\n    let v = vec![1, 0, 0, 0, 0];\n}\n";
         let right_s = "fn demo() {\n    let v = vec![0, 0, 0, 0, 2];\n}\n";
@@ -1140,9 +1233,46 @@ mod tests {
             &FileContent::Ast(left),
             &FileContent::Ast(right),
         );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge of disjoint duplicate-literal edits: {outcome:?}");
+        };
+        let text = unparse(&merged);
+        assert!(
+            text.contains('1')
+                && text.contains('2')
+                && text.chars().filter(|c| *c == '0').count() >= 3,
+            "merged should keep both occurrence edits: {text:?}"
+        );
+        assert!(
+            text.find('1')
+                .zip(text.rfind('2'))
+                .is_some_and(|(i, j)| i < j),
+            "first and last slots should both change: {text:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_if_sibling_disjoint_edits_conflict() {
+        let base_s = "fn demo(flag: bool) {\n    if flag {\n        1;\n    }\n    if flag {\n        1;\n    }\n}\n";
+        let left_s = "fn demo(flag: bool) {\n    if flag {\n        9;\n    }\n    if flag {\n        1;\n    }\n}\n";
+        let right_s = "fn demo(flag: bool) {\n    if flag {\n        1;\n    }\n    if flag {\n        9;\n    }\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let left_diff = diff_graphs(&base, &left);
+        let right_diff = diff_graphs(&base, &right);
+        assert_ne!(
+            left_diff.mutations, right_diff.mutations,
+            "occurrence tagging must distinguish edits to different duplicate siblings"
+        );
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
         assert!(
             matches!(outcome, MergeOutcome::Conflict(_)),
-            "content-addressed literals cannot distinguish first vs last zero: {outcome:?}"
+            "nested edits inside duplicate sibling trees cannot apply both slots safely: {outcome:?}"
         );
     }
 

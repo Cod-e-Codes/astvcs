@@ -27,6 +27,7 @@ metadata:
 - Path-level renames use `detect_path_renames` and surface as `EditIntent::RenamePath` in `status`/`diff` (exact content or same-extension AST edit-only pairing).
 - Intra-file moves use `Mutation::MoveSubtree` after LCS when structure fingerprints match uniquely; fingerprints include editable-leaf payloads so same-shape siblings with different literals can disambiguate. `MoveNode` remains for role/key LCS repositioning.
 - After LCS, unmatched structural siblings pair by kind with a child-count + index-distance score (not first-match scan order); editable leaves use index-distance only.
+- `EditPayload` / `RenameIdentifier` carry optional `occurrence` (like `SetTrivia`) so duplicate content-addressed siblings under the same parent stay distinct across merge; stamp it from the matched sibling slot (and inherit an outer duplicate-sibling scope when descending). List-slot edits merge; nested leaf edits inside duplicated trees still conflict (see merge notes).
 - Trivia-only edits use `SetTrivia` / `SetRootTrailingTrivia`. Same-id nodes still recurse into children; the reorder path diffs child trivia after `ReorderChildren`.
 - Trailing comment text often lives in leading trivia before the next sibling token, not in the comment node payload.
 - `diff_graphs` stays mutation-only for merge. `diff_graphs_detailed` shares the same recursion and records `AlignEdge` / `AlignMethod` for the HTML viewer (`src/diff/view.rs`, `diff --view`). Do not invent confidence scores; label the pass that produced each match.
@@ -50,6 +51,7 @@ metadata:
 - `MoveSubtree`/`MoveNode` are disjoint from payload edits on the same `node_id` during merge.
 - Disjoint sibling payload edits under the same parent should merge when they touch different nodes.
 - Identical mutations on both branches (byte-for-byte equal) must not report overlap via `SameIntent`. Omit shared merge-equivalent mutations from the combined apply batch (do not apply even once). `InsertSubtree` mutations are merge-equivalent only when parent, `before`, `before_occurrence`, and inserted subtree id match. Substantive sibling inserts (functions, fields, declarations, and similar) at the same anchor with different subtree ids are disjoint and all apply; competing literal or punctuation inserts at the same anchor still overlap. Omit shared phantom commas only at the same insert site.
+- `EditPayload` / `RenameIdentifier` with the same `node_id` but different `occurrence` are disjoint when that node is duplicated under the scoped parent (list slots). Nested edits inside a duplicated subtree still conflict on the shared leaf id.
 - `redirect` / `redirect_map` in `graph/dag.rs` follow one cascade hop per step and stop on cycles; multi-mutation `apply_batch` depends on this when rebasing `MoveNode` parent ids.
 - Shared fixtures for every AST frontend live in `src/merge/language_merge_cases.rs`; extend them when adding a language or changing merge overlap rules.
 - Conflicting `SetTrivia` on the same slot should report a structural conflict.
