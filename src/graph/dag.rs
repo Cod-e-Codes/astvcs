@@ -526,10 +526,26 @@ impl AstGraph {
     ) {
         let slot = TriviaSlot::before_child(parent, old_child, occurrence);
         if let Some(leading) = self.trivia.remove(&slot) {
-            self.trivia.insert(
-                TriviaSlot::before_child(parent, new_child, occurrence),
-                leading,
-            );
+            // `new_child` is a fresh id that appears once under `parent`.
+            self.trivia
+                .insert(TriviaSlot::before_child(parent, new_child, 0), leading);
+        }
+        // Removing one copy of `old_child` shifts later duplicate-slot trivia down.
+        // Remove all sources first so descending inserts cannot clobber unmoved slots.
+        let to_shift: Vec<(u32, String)> = self
+            .trivia
+            .iter()
+            .filter(|(s, _)| {
+                s.parent == parent && s.child == old_child && s.occurrence > occurrence
+            })
+            .map(|(s, text)| (s.occurrence - 1, text.clone()))
+            .collect();
+        self.trivia.retain(|s, _| {
+            !(s.parent == parent && s.child == old_child && s.occurrence > occurrence)
+        });
+        for (new_occ, text) in to_shift {
+            self.trivia
+                .insert(TriviaSlot::before_child(parent, old_child, new_occ), text);
         }
     }
 

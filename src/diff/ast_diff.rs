@@ -104,19 +104,26 @@ pub fn diff_graphs_detailed(old: &AstGraph, new: &AstGraph) -> DetailedDiffResul
     }
 }
 
+fn occurrence_at_index(children: &[NodeId], index: usize) -> u32 {
+    let child = children[index];
+    children[..index].iter().filter(|c| **c == child).count() as u32
+}
+
 fn diff_child_trivia(
     old: &AstGraph,
     new: &AstGraph,
     old_parent: NodeId,
     new_parent: NodeId,
-    old_child: NodeId,
-    new_child: NodeId,
+    old_index: usize,
+    new_index: usize,
     out: &mut Vec<Mutation>,
 ) {
-    let old_children = old.get(&old_parent).unwrap().children.clone();
-    let new_children = new.get(&new_parent).unwrap().children.clone();
-    let old_occ = child_occurrence_at(&old_children, old_child);
-    let new_occ = child_occurrence_at(&new_children, new_child);
+    let old_children = &old.get(&old_parent).unwrap().children;
+    let new_children = &new.get(&new_parent).unwrap().children;
+    let old_child = old_children[old_index];
+    let new_child = new_children[new_index];
+    let old_occ = occurrence_at_index(old_children, old_index);
+    let new_occ = occurrence_at_index(new_children, new_index);
     let old_leading = old.get_trivia(old_parent, old_child, old_occ);
     let new_leading = new.get_trivia(new_parent, new_child, new_occ);
     if old_leading != new_leading {
@@ -614,8 +621,8 @@ fn apply_role_match(
         sess.new,
         frame.old_node_id,
         frame.new_node_id,
-        frame.old_children[oi],
-        frame.new_children[ni],
+        oi,
+        ni,
         sess.out,
     );
 }
@@ -664,8 +671,8 @@ fn apply_key_match(
             sess.new,
             frame.old_node_id,
             frame.new_node_id,
-            frame.old_children[oi],
-            frame.new_children[ni],
+            oi,
+            ni,
             sess.out,
         );
     }
@@ -839,15 +846,7 @@ fn diff_children(
                 parent_new: Some(new_node_id),
             });
             diff_subtree(sess, id, id, Some(old_node_id), child_occurrence);
-            diff_child_trivia(
-                sess.old,
-                sess.new,
-                old_node_id,
-                new_node_id,
-                id,
-                id,
-                sess.out,
-            );
+            diff_child_trivia(sess.old, sess.new, old_node_id, new_node_id, i, i, sess.out);
         }
         return;
     }
@@ -869,14 +868,14 @@ fn diff_children(
                 parent_new: Some(new_node_id),
             });
             diff_subtree(sess, *id, *id, Some(old_node_id), child_occurrence);
-            if new_children.contains(id) {
+            if let Some(ni) = new_children.iter().position(|c| c == id) {
                 diff_child_trivia(
                     sess.old,
                     sess.new,
                     old_node_id,
                     new_node_id,
-                    *id,
-                    *id,
+                    i,
+                    ni,
                     sess.out,
                 );
             }
@@ -928,8 +927,8 @@ fn diff_children(
                 sess.new,
                 old_node_id,
                 new_node_id,
-                old_children[oi],
-                new_children[ni],
+                oi,
+                ni,
                 sess.out,
             );
         }
@@ -1055,8 +1054,8 @@ fn diff_children(
                 sess.new,
                 old_node_id,
                 new_node_id,
-                old_children[oi],
-                new_children[ni],
+                oi,
+                ni,
                 sess.out,
             );
         }
@@ -1141,8 +1140,8 @@ fn diff_children(
             sess.new,
             old_node_id,
             new_node_id,
-            old_children[oi],
-            new_children[ni],
+            oi,
+            ni,
             sess.out,
         );
     }
@@ -1190,8 +1189,8 @@ fn diff_children(
             sess.new,
             old_node_id,
             new_node_id,
-            *old_child,
-            new_child,
+            oi,
+            ni,
             sess.out,
         );
     }
@@ -1250,8 +1249,8 @@ fn diff_children(
             sess.new,
             old_node_id,
             new_node_id,
-            *old_child,
-            new_child,
+            oi,
+            ni,
             sess.out,
         );
     }

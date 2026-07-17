@@ -652,6 +652,9 @@ fn overlap_reason(base: &AstGraph, a: &Mutation, b: &Mutation) -> Option<Overlap
     if mutations_merge_equivalent(a, b) {
         return None;
     }
+    if let Some(reason) = nested_duplicate_scope_overlap(base, a, b) {
+        return Some(reason);
+    }
     if are_disjoint_edits(base, a, b) {
         return None;
     }
@@ -685,6 +688,68 @@ fn overlap_reason(base: &AstGraph, a: &Mutation, b: &Mutation) -> Option<Overlap
             _ => None,
         },
     }
+}
+
+/// Occurrence on EditPayload/RenameIdentifier that is not a real duplicate list slot under the
+/// scoped parent is an inherited sibling-scope tag (nested edit inside a duplicated tree).
+fn is_inherited_scope_occurrence(
+    base: &AstGraph,
+    parent: NodeId,
+    node: NodeId,
+    occurrence: Option<u32>,
+) -> bool {
+    occurrence.is_some() && !parent_has_duplicate_child(base, parent, node)
+}
+
+fn duplicated_sibling_anchor(base: &AstGraph, node: NodeId) -> Option<NodeId> {
+    let mut current = node;
+    while let Some(parent) = base.parent_of(&current) {
+        if parent_has_duplicate_child(base, parent, current) {
+            return Some(parent);
+        }
+        current = parent;
+    }
+    None
+}
+
+fn payload_edit_scope(mutation: &Mutation) -> Option<(NodeId, NodeId, Option<u32>)> {
+    match mutation {
+        Mutation::EditPayload {
+            node_id,
+            parent: Some(parent),
+            occurrence,
+            ..
+        }
+        | Mutation::RenameIdentifier {
+            node_id,
+            parent: Some(parent),
+            occurrence,
+            ..
+        } => Some((*node_id, *parent, *occurrence)),
+        _ => None,
+    }
+}
+
+/// Nested edits under different occurrences of a duplicated sibling tree cannot both apply safely.
+fn nested_duplicate_scope_overlap(
+    base: &AstGraph,
+    a: &Mutation,
+    b: &Mutation,
+) -> Option<OverlapReason> {
+    let (n1, p1, o1) = payload_edit_scope(a)?;
+    let (n2, p2, o2) = payload_edit_scope(b)?;
+    if o1 == o2 {
+        return None;
+    }
+    if !is_inherited_scope_occurrence(base, p1, n1, o1)
+        || !is_inherited_scope_occurrence(base, p2, n2, o2)
+    {
+        return None;
+    }
+    let anchor = duplicated_sibling_anchor(base, n1)
+        .or_else(|| duplicated_sibling_anchor(base, n2))
+        .unwrap_or(p1);
+    Some(OverlapReason::SameTouchedParent(anchor))
 }
 
 fn deletion_covers_primary(
@@ -1249,6 +1314,33 @@ mod tests {
                 .is_some_and(|(i, j)| i < j),
             "first and last slots should both change: {text:?}"
         );
+        assert!(
+            text.contains("vec![1, 0, 0, 0, 2]"),
+            "merged list must keep comma spacing: {text:?}"
+        );
+        parse_rust(&text).expect("merged source must parse");
+    }
+
+    #[test]
+    fn call_arg_identical_literal_siblings_preserve_spacing() {
+        use crate::unparser::unparse;
+
+        let base = parse_rust("fn demo() {\n    f(0, 0, 0);\n}\n").unwrap();
+        let left = parse_rust("fn demo() {\n    f(1, 0, 0);\n}\n").unwrap();
+        let right = parse_rust("fn demo() {\n    f(0, 0, 2);\n}\n").unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge: {outcome:?}");
+        };
+        let text = unparse(&merged);
+        assert!(
+            text.contains("f(1, 0, 2)"),
+            "merged call args must keep comma spacing: {text:?}"
+        );
     }
 
     #[test]
@@ -1274,6 +1366,32 @@ mod tests {
             matches!(outcome, MergeOutcome::Conflict(_)),
             "nested edits inside duplicate sibling trees cannot apply both slots safely: {outcome:?}"
         );
+    }
+
+    #[test]
+    fn duplicate_block_distinct_field_edits_conflict_not_panic() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn demo() {\n    if true {\n        let x = 1;\n        let y = 2;\n    }\n    if true {\n        let x = 1;\n        let y = 2;\n    }\n}\n";
+        let left_s = "fn demo() {\n    if true {\n        let x = 9;\n        let y = 2;\n    }\n    if true {\n        let x = 1;\n        let y = 2;\n    }\n}\n";
+        let right_s = "fn demo() {\n    if true {\n        let x = 1;\n        let y = 2;\n    }\n    if true {\n        let x = 1;\n        let y = 8;\n    }\n}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        assert!(
+            matches!(outcome, MergeOutcome::Conflict(_)),
+            "distinct leaves under duplicated sibling trees must conflict, not produce a broken graph: {outcome:?}"
+        );
+        // Ensure a mistaken clean merge would not be unparseable.
+        if let MergeOutcome::Merged(FileContent::Ast(merged)) = &outcome {
+            merged.validate().expect("merged graph must validate");
+            let _ = unparse(merged);
+        }
     }
 
     #[test]
