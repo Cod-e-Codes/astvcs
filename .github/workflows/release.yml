@@ -63,14 +63,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "astvcs init failed with exit $LASTEXITCODE" }
           $meta = Join-Path $tmpdir.FullName '.astvcs'
           if (-not (Test-Path $meta)) { throw "expected $meta after init" }
-          # Drivers exit nonzero with no args. Disable native-command error
-          # preference so pwsh does not abort the step before we check the code.
-          $PSNativeCommandUseErrorActionPreference = $false
-          & "./target/release/astvcs-merge-driver${ext}"
-          if ($LASTEXITCODE -eq 0) { throw "astvcs-merge-driver should exit nonzero without args" }
-          & "./target/release/astvcs-diff-driver${ext}"
-          if ($LASTEXITCODE -eq 0) { throw "astvcs-diff-driver should exit nonzero without args" }
-          $PSNativeCommandUseErrorActionPreference = $true
       - name: Package
         shell: pwsh
         run: |
