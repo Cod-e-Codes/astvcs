@@ -188,7 +188,7 @@ Mutations locate children by `node_id`, not stored indices.
 
 Failed merges roll back atomically: HEAD, branch tips, working tree, and `index.json` are unchanged. Focused conflict output lists paths, both sides' intents, and overlap reasons. Merge and pull include `--resolve` syntax; rebase includes `rebase --continue --resolve`; revert labels the reverted parent and current HEAD; cherry-pick and stash omit unsupported resolution flags. Repeated overlap examples are limited per path with an omitted count. `--details` restores state IDs, raw mutations from each side, and every overlapping pair (same node, deletion covering a nested edit, same insert site, or same intent). Use `merge --dry-run` to preview, and `diff --base --left --right` to inspect both sides.
 
-When conflicts cannot be merged structurally, `merge --resolve path:ours|theirs` picks the full file from HEAD or the other branch for that path only. astvcs does not write conflict markers into the working tree.
+When conflicts cannot be merged structurally, `merge --resolve path:ours|theirs` picks the full file from HEAD or the other branch for that path only. The standalone CLI does not write conflict markers into the working tree. The optional Git merge driver does write `<<<<<<<` markers into `%A` on structural conflict (see [git-integration.md](git-integration.md)).
 
 ## Network sync
 
@@ -298,7 +298,7 @@ tests/
 
 `import-git` is a one-way migration aid: it reads a local git repository via the `git` CLI and imports the **HEAD tree snapshot** into an astvcs repository as a single commit. It uses `git rev-parse`, `git ls-tree -r HEAD`, and `git cat-file` subprocess calls only (no libgit2). UTF-8 text paths are written to the working tree and committed with normal `commit` semantics (author identity required). The import commit includes only paths read from git HEAD; unrelated files on disk are not swept in. NUL-containing or invalid UTF-8 blobs are skipped with `warning:` on stderr and are not committed even when a same-named file exists on disk. Symlinks (git mode `120000`) are imported when the target is valid UTF-8. Submodule entries (mode `160000`) are skipped with a warning. The astvcs tree is synced to the git snapshot: paths tracked at astvcs HEAD but absent from git HEAD are removed from disk before commit. If the target repository has no `.astvcs` directory, `import-git` runs `init` first.
 
-**Git merge and diff drivers.** Two additional binaries (`astvcs-merge-driver`, `astvcs-diff-driver`) call the same `merge_files` / `diff_graphs` library paths used by the standalone CLI, with no `.astvcs/` access. On structural conflict the merge driver exits nonzero and leaves `%A` unchanged (no `<<<<<<<` markers). Setup and limitations are in [git-integration.md](git-integration.md). Drivers do not change repository model semantics; they are a packaging surface for existing Git workflows.
+**Git merge and diff drivers.** Two additional binaries (`astvcs-merge-driver`, `astvcs-diff-driver`) call the same `merge_files` / `diff_graphs` library paths used by the standalone CLI, with no `.astvcs/` access. On structural conflict for text/AST paths the merge driver exits nonzero and writes `<<<<<<<` markers into `%A`. Setup and limitations are in [git-integration.md](git-integration.md). Drivers do not change repository model semantics; they are a packaging surface for existing Git workflows.
 
 **Non-goals (v1 and beyond for full git parity):**
 
@@ -445,9 +445,10 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `history_long_random_repo` | Long random history (`#[ignore]`; `HISTORY_SEED`, `HISTORY_OPS`, `tests/history_smoke.rs`) |
 | `git_and_astvcs_disjoint_calc_edits_diverge` | Differential: astvcs merges disjoint function-body edits where Git text merge conflicts (`tests/diff_git.rs`, requires `git` on PATH) |
 | `git_and_astvcs_same_line_edits_both_conflict`, `git_and_astvcs_rename_with_body_edit_both_merge` | Differential agreement cases (`tests/diff_git.rs`) |
-| `merge_driver_resolves_disjoint_structural_edits`, `merge_driver_conflicts_on_overlapping_literal_edits` | `astvcs-merge-driver` clean merge and conflict leave-%A / unmerged note (`tests/git_drivers.rs`) |
+| `merge_driver_resolves_disjoint_structural_edits`, `merge_driver_conflicts_on_overlapping_literal_edits` | `astvcs-merge-driver` clean merge and conflict marker write (`tests/git_drivers.rs`) |
 | `diff_driver_prints_structural_intents`, `diff_driver_omits_binary_content` | `astvcs-diff-driver` intent output and binary omission (`tests/git_drivers.rs`) |
 | `git_invokes_merge_driver_on_disjoint_edits` | End-to-end Git merge with driver registered (`tests/git_drivers.rs`, requires `git` on PATH) |
+| `git_invokes_merge_driver_writes_markers_on_conflict` | End-to-end Git conflict leaves markers in the worktree (`tests/git_drivers.rs`, requires `git` on PATH) |
 
 **Property and history harnesses.** `tests/props.rs` and `tests/history_smoke.rs` share helpers in `tests/common/`. Override proptest case count with `PROPTEST_CASES` (default 64).
 

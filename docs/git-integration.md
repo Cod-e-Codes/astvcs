@@ -22,10 +22,10 @@ there, a comment added above a function) merge cleanly even when they land
 on the same or adjacent lines and would conflict under Git's line-based
 ort/recursive strategies. Edits that genuinely overlap (both sides
 change the same literal) fail the driver with a nonzero exit so Git marks
-the path unmerged. The driver leaves `%A` unchanged and does not write
-`<<<<<<<` conflict markers; resolve with `git status`,
-`git checkout --ours|--theirs -- <path>`, or by editing the file, then
-`git add`.
+the path unmerged. For text/AST paths the driver overwrites `%A` with a
+standard `<<<<<<< ours` / `=======` / `>>>>>>> theirs` file so the working
+tree matches normal Git conflict UX. Resolve by editing the markers (or
+`git checkout --ours|--theirs -- <path>`), then `git add`.
 
 **Diff driver (`astvcs-diff-driver`):** `git diff`, `git show`, and
 `git log -p` on a configured path print astvcs's compact structural edit
@@ -54,9 +54,9 @@ This produces three binaries in `target/release/`:
 Put all three on your `PATH` (or reference them by absolute path in the Git
 config below). Prebuilt platform archives on
 [GitHub Releases](https://github.com/Cod-e-Codes/astvcs/releases) include
-all three binaries starting with the first tagged release that ships this
-integration; check the archive contents if you are on an older release
-(`v0.1.0` packaged only the main `astvcs` binary).
+all three binaries starting with `v0.1.1`. The `v0.1.0` archives contain only
+the main CLI. Conflict-marker writes on structural failure require `v0.1.2` or
+newer (or a current build from `main`).
 
 ## Set up the merge driver
 
@@ -72,7 +72,9 @@ git config --global merge.astvcs.driver "astvcs-merge-driver %O %A %B %P"
 `%O`, `%A`, `%B`, and `%P` are Git's placeholders for the common ancestor,
 current branch's version, other branch's version, and the file's repository
 path, substituted by Git before it runs the command. `%A` is the path Git
-expects the merge result written back to.
+expects the merge result written back to. You may also pass `%L` before `%P`
+(`astvcs-merge-driver %O %A %B %L %P`) to set the conflict marker length
+(default 7).
 
 If the binaries are not on `PATH`, use an absolute path instead. On Windows,
 prefer forward slashes (or quote the path) so Git's shell does not treat
@@ -157,10 +159,9 @@ if a path's Git attributes are misconfigured across a type change), the
 driver reports an error and exits nonzero without rewriting `%A`, rather
 than silently mismatching the file type Git expects at `%A`.
 
-**No `<<<<<<<` markers on structural conflict.** On overlap the driver
-exits nonzero and leaves `%A` as the clean ours blob Git passed in (ort
-does not pre-fill markers there). `git status` still shows the path as
-unmerged. Writing marker files is out of scope for v1 of these drivers.
+**Binary conflicts leave `%A` unchanged.** Text and AST conflicts get
+marker files; binary (or symlink) conflicts exit nonzero without writing
+`<<<<<<<` markers.
 
 **The diff driver does not implement `git diff --stat` byte/line counts**
 the way textconv would; it prints a summary block per file. For scripts

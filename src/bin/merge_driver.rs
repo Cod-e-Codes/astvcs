@@ -22,11 +22,11 @@
 //!       recursive = binary
 //!
 //! Exit code 0 means %A now holds the clean merge result and git stages it.
-//! Any nonzero exit code means git treats the path as unmerged. On conflict
-//! this driver leaves %A unchanged (typically the clean "ours" blob Git
-//! passed in). It does not write `<<<<<<<` conflict markers. Resolve with
-//! `git status`, `git checkout --ours/--theirs -- <path>`, or by editing
-//! the working tree, then `git add`.
+//! Any nonzero exit code means git treats the path as unmerged. On a
+//! structural conflict this driver overwrites %A with a standard
+//! `<<<<<<<` / `=======` / `>>>>>>>` marker file (ours then theirs) so the
+//! working tree matches normal Git conflict UX. Binary conflicts leave %A
+//! unchanged and still exit nonzero.
 
 use astvcs::frontend::load_working_content;
 use astvcs::merge::{ConflictResolutionStyle, MergeOutcome, merge_files};
@@ -34,10 +34,13 @@ use astvcs::trace;
 use std::fs;
 use std::process::ExitCode;
 
+const DEFAULT_MARKER_SIZE: usize = 7;
+
 struct Args {
     base_path: String,
     ours_path: String,
     theirs_path: String,
+    marker_size: usize,
     display_path: String,
 }
 
@@ -45,16 +48,34 @@ fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     let base_path = argv
         .next()
-        .ok_or("usage: astvcs-merge-driver <%O base> <%A ours> <%B theirs> [%P path]")?;
+        .ok_or("usage: astvcs-merge-driver <%O base> <%A ours> <%B theirs> [%L size] [%P path]")?;
     let ours_path = argv.next().ok_or("missing %A (ours/current) path")?;
     let theirs_path = argv.next().ok_or("missing %B (theirs/other) path")?;
-    // %P is optional: git always passes it per the setup instructions above,
-    // but a person invoking this by hand for testing may not.
-    let display_path = argv.next().unwrap_or_else(|| ours_path.clone());
+
+    // Optional %L (digits) then optional %P. Config may pass only %P.
+    let mut marker_size = DEFAULT_MARKER_SIZE;
+    let mut display_path = ours_path.clone();
+    if let Some(fourth) = argv.next() {
+        if fourth.chars().all(|c| c.is_ascii_digit()) {
+            marker_size = fourth
+                .parse()
+                .map_err(|_| format!("invalid conflict marker size %L: {fourth}"))?;
+            if marker_size == 0 {
+                return Err("conflict marker size %L must be >= 1".into());
+            }
+            if let Some(path) = argv.next() {
+                display_path = path;
+            }
+        } else {
+            display_path = fourth;
+        }
+    }
+
     Ok(Args {
         base_path,
         ours_path,
         theirs_path,
+        marker_size,
         display_path,
     })
 }
@@ -87,6 +108,34 @@ manually (merge drivers cannot rewrite a path's file type)",
     }
 }
 
+fn content_to_text(content: &astvcs::frontend::FileContent) -> Option<String> {
+    use astvcs::frontend::FileContent;
+    match content {
+        FileContent::Ast(graph) => Some(astvcs::unparse(graph)),
+        FileContent::Text(text) => Some(text.content.clone()),
+        FileContent::Binary(_) | FileContent::Symlink(_) => None,
+    }
+}
+
+fn ensure_trailing_newline(mut text: String) -> String {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+fn format_conflict_markers(ours: &str, theirs: &str, marker_size: usize) -> String {
+    let mark = |ch: char| ch.to_string().repeat(marker_size);
+    let ours = ensure_trailing_newline(ours.to_string());
+    let theirs = ensure_trailing_newline(theirs.to_string());
+    format!(
+        "{start} ours\n{ours}{sep}\n{theirs}{end} theirs\n",
+        start = mark('<'),
+        sep = mark('='),
+        end = mark('>'),
+    )
+}
+
 fn run() -> Result<bool, String> {
     let args = parse_args()?;
 
@@ -107,8 +156,6 @@ fn run() -> Result<bool, String> {
             Ok(true)
         }
         MergeOutcome::Conflict(conflict) => {
-            // Leave %A untouched. With ort, %A is usually clean "ours", not a
-            // marker file. Nonzero exit still marks the path unmerged in Git.
             eprintln!(
                 "{}",
                 conflict.format_focused_report_with_labels(
@@ -118,10 +165,29 @@ fn run() -> Result<bool, String> {
                     ConflictResolutionStyle::None,
                 )
             );
-            eprintln!(
-                "astvcs: structural merge could not resolve {}; left {} unchanged (Git will mark the path unmerged; this driver does not write conflict markers)",
-                args.display_path, args.ours_path
-            );
+
+            match (content_to_text(&ours), content_to_text(&theirs)) {
+                (Some(ours_text), Some(theirs_text)) => {
+                    let marked =
+                        format_conflict_markers(&ours_text, &theirs_text, args.marker_size);
+                    fs::write(&args.ours_path, marked).map_err(|e| {
+                        format!(
+                            "failed to write conflict markers to {}: {e}",
+                            args.ours_path
+                        )
+                    })?;
+                    eprintln!(
+                        "astvcs: structural merge could not resolve {}; wrote conflict markers to {}",
+                        args.display_path, args.ours_path
+                    );
+                }
+                _ => {
+                    eprintln!(
+                        "astvcs: structural merge could not resolve {}; left {} unchanged (binary or non-text conflict; Git will mark the path unmerged)",
+                        args.display_path, args.ours_path
+                    );
+                }
+            }
             Ok(false)
         }
     }

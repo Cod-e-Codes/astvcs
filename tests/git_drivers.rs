@@ -96,7 +96,6 @@ fn merge_driver_conflicts_on_overlapping_literal_edits() {
         "theirs.rs",
         "fn calc(x: i32) -> i32 {\n    x + 5\n}\n",
     );
-    let ours_before = fs::read_to_string(&ours).expect("read ours");
 
     let out = run_merge(&base, &ours, &theirs, "calc.rs");
     assert!(
@@ -109,11 +108,18 @@ fn merge_driver_conflicts_on_overlapping_literal_edits() {
         "expected focused conflict report: {stderr}"
     );
     assert!(
-        stderr.contains("left") && stderr.contains("unchanged") && stderr.contains("unmerged"),
-        "expected leave-%A / unmerged note: {stderr}"
+        stderr.contains("wrote conflict markers"),
+        "expected marker write note: {stderr}"
     );
     let ours_after = fs::read_to_string(&ours).expect("read ours after conflict");
-    assert_eq!(ours_before, ours_after, "conflict must leave %A untouched");
+    assert!(
+        ours_after.contains("<<<<<<< ours")
+            && ours_after.contains("=======")
+            && ours_after.contains(">>>>>>> theirs")
+            && ours_after.contains("x + 2")
+            && ours_after.contains("x + 5"),
+        "expected conflict markers with both sides in:\n{ours_after}"
+    );
 }
 
 #[test]
@@ -246,6 +252,80 @@ fn git_invokes_merge_driver_on_disjoint_edits() {
     assert!(
         merged.contains("qty") && merged.contains("item + qty"),
         "expected both edits in:\n{merged}"
+    );
+}
+
+#[test]
+fn git_invokes_merge_driver_writes_markers_on_conflict() {
+    if !git_available() {
+        eprintln!("skipping git merge-driver conflict e2e: git not on PATH");
+        return;
+    }
+
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path();
+    init_git_repo(root);
+
+    fs::write(
+        root.join("calc.rs"),
+        "fn calc(x: i32) -> i32 {\n    x + 1\n}\n",
+    )
+    .expect("write base");
+    fs::write(root.join(".gitattributes"), "*.rs merge=astvcs\n").expect("write attrs");
+    git_commit_all(root, "base");
+
+    run_git(root, &["checkout", "-b", "theirs"]);
+    fs::write(
+        root.join("calc.rs"),
+        "fn calc(x: i32) -> i32 {\n    x + 5\n}\n",
+    )
+    .expect("write theirs");
+    git_commit_all(root, "theirs");
+
+    run_git(root, &["checkout", "main"]);
+    fs::write(
+        root.join("calc.rs"),
+        "fn calc(x: i32) -> i32 {\n    x + 2\n}\n",
+    )
+    .expect("write ours");
+    git_commit_all(root, "ours");
+
+    let driver_path = merge_driver_bin().to_string_lossy().replace('\\', "/");
+    run_git(
+        root,
+        &[
+            "config",
+            "merge.astvcs.driver",
+            &format!("\"{driver_path}\" %O %A %B %P"),
+        ],
+    );
+
+    let merge = Command::new("git")
+        .args(["merge", "theirs", "--no-edit"])
+        .current_dir(root)
+        .output()
+        .expect("git merge");
+    assert!(
+        !merge.status.success(),
+        "git merge should conflict on overlapping literals"
+    );
+    let status = Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(root)
+        .output()
+        .expect("git status");
+    let status_out = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status_out.contains("calc.rs"),
+        "expected conflicted path in status: {status_out}"
+    );
+    let calc = fs::read_to_string(root.join("calc.rs")).expect("read calc");
+    assert!(
+        calc.contains("<<<<<<<")
+            && calc.contains(">>>>>>>")
+            && calc.contains("x + 2")
+            && calc.contains("x + 5"),
+        "expected marker file in working tree:\n{calc}"
     );
 }
 

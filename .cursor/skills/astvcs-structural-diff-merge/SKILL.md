@@ -56,7 +56,7 @@ metadata:
 - `redirect` / `redirect_map` in `graph/dag.rs` follow one cascade hop per step and stop on cycles; multi-mutation `apply_batch` depends on this when rebasing `MoveNode` parent ids.
 - Shared fixtures for every AST frontend live in `src/merge/language_merge_cases.rs`; extend them when adding a language or changing merge overlap rules.
 - Conflicting `SetTrivia` on the same slot should report a structural conflict.
-- Do not write conflict markers into the working tree.
+- Standalone CLI: do not write conflict markers into the working tree. The Git merge driver writes markers into `%A` on structural conflict (see [docs/git-integration.md](../../../docs/git-integration.md)).
 
 ### Debugging
 
