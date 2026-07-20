@@ -25,7 +25,7 @@
 //! Any nonzero exit code means git treats the path as unmerged. On a
 //! structural conflict this driver overwrites %A with a standard
 //! `<<<<<<<` / `=======` / `>>>>>>>` marker file (ours then theirs) so the
-//! working tree matches normal Git conflict UX. Binary conflicts leave %A
+//! working tree contains standard conflict markers. Binary conflicts leave %A
 //! unchanged and still exit nonzero.
 
 use astvcs::frontend::load_working_content;

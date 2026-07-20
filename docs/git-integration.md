@@ -12,7 +12,7 @@ repository. The two modes do not conflict: nothing here touches `.astvcs/`, and
 a directory can use the Git integration, the standalone astvcs CLI, both, or
 neither.
 
-## What this gets you
+## Behavior
 
 **Merge driver (`astvcs-merge-driver`):** when `git merge`, `git rebase`,
 `git cherry-pick`, or `git pull` hits a conflict on a configured path, Git
@@ -23,9 +23,9 @@ on the same or adjacent lines and would conflict under Git's line-based
 ort/recursive strategies. Edits that genuinely overlap (both sides
 change the same literal) fail the driver with a nonzero exit so Git marks
 the path unmerged. For text/AST paths the driver overwrites `%A` with a
-standard `<<<<<<< ours` / `=======` / `>>>>>>> theirs` file so the working
-tree matches normal Git conflict UX. Resolve by editing the markers (or
-`git checkout --ours|--theirs -- <path>`), then `git add`.
+standard `<<<<<<< ours` / `=======` / `>>>>>>> theirs` file. Resolve by
+editing the markers (or `git checkout --ours|--theirs -- <path>`), then
+`git add`.
 
 **Diff driver (`astvcs-diff-driver`):** `git diff`, `git show`, and
 `git log -p` on a configured path print astvcs's compact structural edit

@@ -4,7 +4,7 @@ Structural version control for a working tree of source files.
 
 Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges **structural** edits. Other paths are stored as UTF-8 text with a line-oriented diff, or as binary bytes when the content is not valid UTF-8.
 
-The structural diff and merge engine is the core product. It ships two ways: a standalone local-first CLI under `.astvcs/`, and optional Git merge/diff drivers that reuse the same engine inside an existing Git repo (see [docs/git-integration.md](docs/git-integration.md)).
+The structural diff and merge engine is what astvcs is built around. It ships as a standalone local-first CLI under `.astvcs/`, and as optional Git merge/diff drivers that call the same engine inside an existing Git repo (see [docs/git-integration.md](docs/git-integration.md)).
 
 ## What this is
 
