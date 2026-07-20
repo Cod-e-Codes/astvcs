@@ -1,6 +1,6 @@
 use crate::diff::{DiffResult, TextEdit, diff_graphs, diff_text};
 use crate::frontend::FileContent;
-use crate::graph::{AstGraph, Mutation, NodeId, NodeKind};
+use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
 use crate::intent::{self};
 use crate::store::{FileMode, TrackedFile};
 
@@ -955,13 +955,23 @@ fn omit_shared_punctuation_insert(
         && punctuation_insert_at(right, *parent, *before, *before_occurrence)
 }
 
-/// Apply side-unique mutations only; shared equivalent edits are omitted (not applied twice).
-/// Payload edits that share a `node_id` but target different occurrences are applied highest
-/// occurrence first so earlier slots do not renumber later ones.
+/// Combine left and right mutation batches for apply.
+///
+/// Shared merge-equivalent mutations are applied once (kept from the left batch), except
+/// shared phantom punctuation inserts which stay omitted entirely. Distinct same-site
+/// inserts keep ours-then-theirs order; separator trivia is attached to the 2nd+ insert so
+/// newly adjacent siblings do not abut with an empty leading gap. Payload edits that share a
+/// `node_id` but target different occurrences are applied highest occurrence first so earlier
+/// slots do not renumber later ones.
 fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutation> {
     let mut combined = Vec::new();
     for lm in left {
         if right.iter().any(|rm| mutations_merge_equivalent(lm, rm)) {
+            // Shared once; never apply shared phantom punctuation.
+            if is_punctuation_token_insert(lm) || omit_shared_punctuation_insert(lm, left, right) {
+                continue;
+            }
+            combined.push(lm.clone());
             continue;
         }
         if omit_shared_punctuation_insert(lm, left, right) {
@@ -978,6 +988,7 @@ fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutati
         }
         combined.push(rm.clone());
     }
+    attach_same_site_insert_separators(&mut combined);
     combined.sort_by(|a, b| match (a, b) {
         (
             Mutation::EditPayload {
@@ -1030,6 +1041,104 @@ fn combine_mutation_batches(left: &[Mutation], right: &[Mutation]) -> Vec<Mutati
         _ => std::cmp::Ordering::Equal,
     });
     combined
+}
+
+fn same_site_insert_key(m: &Mutation) -> Option<(NodeId, Option<NodeId>, Option<u32>)> {
+    match m {
+        Mutation::InsertSubtree {
+            parent,
+            before,
+            before_occurrence,
+            ..
+        } if !is_punctuation_token_insert(m) => Some((*parent, *before, *before_occurrence)),
+        _ => None,
+    }
+}
+
+fn separator_for_same_site_anchor(
+    mutations: &[Mutation],
+    parent: NodeId,
+    before: Option<NodeId>,
+    before_occurrence: Option<u32>,
+) -> String {
+    let Some(before_id) = before else {
+        return "\n".to_string();
+    };
+    let want_occ = before_occurrence.unwrap_or(0);
+    for m in mutations {
+        if let Mutation::SetTrivia {
+            parent: p,
+            child,
+            occurrence,
+            leading,
+        } = m
+            && *p == parent
+            && *child == before_id
+            && *occurrence == want_occ
+            && !leading.is_empty()
+        {
+            return leading.clone();
+        }
+    }
+    "\n".to_string()
+}
+
+fn insert_root_has_leading(trivia: &[TriviaRecord], parent: NodeId, node_id: NodeId) -> bool {
+    trivia
+        .iter()
+        .any(|t| t.parent == parent && t.child == node_id && !t.leading.is_empty())
+}
+
+/// When several non-punctuation inserts share one anchor, the 2nd+ inserts need leading
+/// separator trivia. Diff records that gap on the *following* sibling (often via SetTrivia
+/// on the shared anchor), so neither insert carries the boundary between the two new nodes.
+fn attach_same_site_insert_separators(mutations: &mut [Mutation]) {
+    use std::collections::HashMap;
+
+    let mut site_counts: HashMap<(NodeId, Option<NodeId>, Option<u32>), usize> = HashMap::new();
+    for m in mutations.iter() {
+        if let Some(key) = same_site_insert_key(m) {
+            *site_counts.entry(key).or_insert(0) += 1;
+        }
+    }
+    let multi_sites: HashMap<_, _> = site_counts.into_iter().filter(|(_, n)| *n >= 2).collect();
+    if multi_sites.is_empty() {
+        return;
+    }
+
+    let snapshot: Vec<Mutation> = mutations.to_vec();
+    let mut seen: HashMap<(NodeId, Option<NodeId>, Option<u32>), usize> = HashMap::new();
+    for m in mutations.iter_mut() {
+        let Some(key) = same_site_insert_key(m) else {
+            continue;
+        };
+        if !multi_sites.contains_key(&key) {
+            continue;
+        }
+        let Mutation::InsertSubtree {
+            parent,
+            before,
+            before_occurrence,
+            node,
+            trivia,
+            ..
+        } = m
+        else {
+            continue;
+        };
+        let n = seen.entry(key).or_insert(0);
+        *n += 1;
+        if *n == 1 || insert_root_has_leading(trivia, *parent, node.id) {
+            continue;
+        }
+        let sep = separator_for_same_site_anchor(&snapshot, *parent, *before, *before_occurrence);
+        trivia.push(TriviaRecord {
+            parent: *parent,
+            child: node.id,
+            occurrence: 0,
+            leading: sep,
+        });
+    }
 }
 
 fn parent_has_duplicate_child(base: &AstGraph, parent: NodeId, child: NodeId) -> bool {
@@ -2127,6 +2236,50 @@ fn validate(cfg: &Config) -> Result<(), String> {
         );
     }
 
+    fn count_child_kind(graph: &AstGraph, kind: &NodeKind) -> usize {
+        graph
+            .nodes
+            .values()
+            .map(|n| {
+                n.children
+                    .iter()
+                    .filter(|c| graph.get(c).is_some_and(|ch| &ch.kind == kind))
+                    .count()
+            })
+            .sum()
+    }
+
+    fn assert_python_decorator_names(graph: &AstGraph, expected: &[&str]) {
+        let decorator_kind = NodeKind::Unknown("decorator".into());
+        let wrapper_kind = NodeKind::Unknown("decorated_definition".into());
+        let wrapper = graph
+            .nodes
+            .values()
+            .find(|n| n.kind == wrapper_kind)
+            .expect("decorated_definition wrapper");
+        let mut names = Vec::new();
+        for child_id in &wrapper.children {
+            let Some(child) = graph.get(child_id) else {
+                continue;
+            };
+            if child.kind != decorator_kind {
+                continue;
+            }
+            let mut found = None;
+            for desc in graph.collect_subtree(*child_id) {
+                if desc.kind == NodeKind::Identifier {
+                    found = Some(desc.payload.clone());
+                    break;
+                }
+            }
+            names.push(found.expect("decorator should contain an identifier"));
+        }
+        assert_eq!(
+            names, expected,
+            "decorator identifiers mismatch for unparsed tree"
+        );
+    }
+
     #[test]
     fn two_sided_distinct_decorator_inserts_both_survive_merge() {
         use crate::frontend::parse_source;
@@ -2150,10 +2303,21 @@ fn validate(cfg: &Config) -> Result<(), String> {
             panic!("expected clean merge, got {outcome:?}");
         };
         let text = unparse(&merged);
-        parse_source("m.py", &text).expect("merged source must parse");
-        assert!(text.contains("@a"), "missing @a: {text}");
-        assert!(text.contains("@b"), "missing @b: {text}");
-        assert!(text.contains("@x"), "missing @x: {text}");
+        assert!(
+            !text.contains("@a@b") && !text.contains("@a@b@x"),
+            "decorators must not abut (silent matmul risk): {text:?}"
+        );
+        assert!(
+            text.contains("@a\n@b\n@x"),
+            "expected newline-separated decorators, got {text:?}"
+        );
+        let reparsed = parse_source("m.py", &text).expect("merged source must parse");
+        assert_eq!(
+            count_child_kind(&reparsed, &NodeKind::Unknown("decorator".into())),
+            3,
+            "expected three decorator nodes after reparse: {text:?}"
+        );
+        assert_python_decorator_names(&reparsed, &["a", "b", "x"]);
         let a_pos = text.find("@a").expect("@a");
         let b_pos = text.find("@b").expect("@b");
         assert!(a_pos < b_pos, "expected ours-then-theirs order, got {text}");
@@ -2180,9 +2344,20 @@ fn validate(cfg: &Config) -> Result<(), String> {
             panic!("expected clean merge, got {outcome:?}");
         };
         let text = unparse(&merged);
-        parse_rust(&text).expect("merged source must parse");
-        assert!(text.contains("#[a]"), "missing #[a]: {text}");
-        assert!(text.contains("#[b]"), "missing #[b]: {text}");
+        assert!(
+            !text.contains("#[a]#[b]"),
+            "attributes must not abut: {text:?}"
+        );
+        assert!(
+            text.contains("#[a]\n#[b]"),
+            "expected newline-separated attributes, got {text:?}"
+        );
+        let reparsed = parse_rust(&text).expect("merged source must parse");
+        assert_eq!(
+            count_child_kind(&reparsed, &NodeKind::Unknown("attribute_item".into())),
+            2,
+            "expected two attribute_item nodes after reparse: {text:?}"
+        );
         let a_pos = text.find("#[a]").expect("#[a]");
         let b_pos = text.find("#[b]").expect("#[b]");
         assert!(a_pos < b_pos, "expected ours-then-theirs order, got {text}");
@@ -2254,10 +2429,20 @@ fn validate(cfg: &Config) -> Result<(), String> {
             panic!("expected clean merge, got {outcome:?}");
         };
         let text = unparse(&merged);
-        parse_source("M.java", &text).expect("merged source must parse");
-        assert!(text.contains("@A"), "missing @A: {text}");
-        assert!(text.contains("@B"), "missing @B: {text}");
-        assert!(text.contains("@X"), "missing @X: {text}");
+        assert!(
+            !text.contains("@A@B") && !text.contains("@A@B@X"),
+            "annotations must not abut: {text:?}"
+        );
+        assert!(
+            text.contains("@A @B @X"),
+            "expected space-separated annotations, got {text:?}"
+        );
+        let reparsed = parse_source("M.java", &text).expect("merged source must parse");
+        assert_eq!(
+            count_child_kind(&reparsed, &NodeKind::Unknown("marker_annotation".into())),
+            3,
+            "expected three marker_annotation nodes after reparse: {text:?}"
+        );
         let a_pos = text.find("@A").expect("@A");
         let b_pos = text.find("@B").expect("@B");
         assert!(a_pos < b_pos, "expected ours-then-theirs order, got {text}");

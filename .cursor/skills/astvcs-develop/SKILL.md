@@ -45,7 +45,7 @@ cargo build --release
 ### Release packaging
 
 - `astvcs --version` prints `CARGO_PKG_VERSION` from `Cargo.toml` (clap `#[command(version = env!("CARGO_PKG_VERSION"))]` on the root `Parser` in `src/main.rs`).
-- Push a tag matching `v*` (for example `v0.1.3`) to trigger `.github/workflows/release.yml`.
+- Push a tag matching `v*` (for example `v0.1.4`) to trigger `.github/workflows/release.yml`.
 - The workflow matrix builds on `ubuntu-latest` and `windows-latest` with `cargo build --release --locked`, runs smoke tests (`astvcs --version`, `astvcs init` creating `.astvcs`, all three release binaries present via `Test-Path`), packages `astvcs-linux-x86_64.tar.gz` and `astvcs-windows-x86_64.zip` containing `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver`, and attaches them to a GitHub Release via `softprops/action-gh-release`.
 - Windows jobs enable symlink creation (same registry step as `ci.yml`) so smoke tests can create symlinks if needed.
 - Draft release notes from [`docs/RELEASE.md`](../../../docs/RELEASE.md). Do not publish to crates.io.

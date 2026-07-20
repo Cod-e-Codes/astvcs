@@ -177,7 +177,10 @@ matching the standalone astvcs CLI's handling of the same content kinds.
 substantive sibling inserts at one anchor (for example both sides appending
 different functions at EOF, or both adding different decorators/attributes
 to a definition that already has a wrapper) merge cleanly; combined apply
-order is ours then theirs (HEAD/`%A` side before the incoming side). Competing
+order is ours then theirs (HEAD/`%A` side before the incoming side). Shared
+anchor `SetTrivia` from both sides is applied once, and separator trivia is
+synthesized between multiple same-site inserts so siblings do not abut
+(Python `@a@b@x` would otherwise parse as matrix-multiplication). Competing
 literal or punctuation inserts at one site still conflict. First-time wraps
 that introduce a language wrapper (Python `decorated_definition`, Java
 `modifiers`) still conflict. Entity-level matching (Weave-style) is out of
