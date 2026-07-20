@@ -788,20 +788,34 @@ fn touches_same_insert_site(a: &Mutation, b: &Mutation) -> bool {
     }
 }
 
+/// Sibling-list inserts that can both apply at one anchor when their subtree ids differ.
+///
+/// Content-addressed `node.id` already encodes kind + payload + children, so distinct ids
+/// mean structurally distinct inserts. Competing literal/punctuation leaves stay out of this
+/// list and still overlap at a shared site.
+///
+/// Unknown kind strings are the exact tree-sitter names that reach `NodeKind::Unknown` via
+/// `NodeKind::from_ts_kind` (passthrough). Verified insert roots from current frontends:
+/// Python `decorator`, Rust `attribute_item`, Java `marker_annotation` / `annotation`.
+/// First-time wrappers such as Python `decorated_definition` and Java `modifiers` stay out.
 fn substantive_sibling_insert(node: &crate::graph::Node) -> bool {
-    matches!(
-        node.kind,
+    match &node.kind {
         NodeKind::Function
-            | NodeKind::Declaration
-            | NodeKind::Statement
-            | NodeKind::Struct
-            | NodeKind::Enum
-            | NodeKind::Impl
-            | NodeKind::Field
-            | NodeKind::Parameter
-            | NodeKind::Loop
-            | NodeKind::Conditional
-    )
+        | NodeKind::Declaration
+        | NodeKind::Statement
+        | NodeKind::Struct
+        | NodeKind::Enum
+        | NodeKind::Impl
+        | NodeKind::Field
+        | NodeKind::Parameter
+        | NodeKind::Loop
+        | NodeKind::Conditional => true,
+        NodeKind::Unknown(kind) => matches!(
+            kind.as_str(),
+            "decorator" | "attribute_item" | "marker_annotation" | "annotation"
+        ),
+        _ => false,
+    }
 }
 
 fn same_anchor_inserts_disjoint(a: &crate::graph::Node, b: &crate::graph::Node) -> bool {
@@ -2062,6 +2076,222 @@ fn validate(cfg: &Config) -> Result<(), String> {
 }
 "#,
             &["validate", "if let Err(e) = validate(cfg)"],
+        );
+    }
+
+    #[test]
+    fn two_sided_module_eof_function_inserts_both_survive_merge() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn base() {}\n";
+        let left_s = "fn base() {}\nfn left() {}\n";
+        let right_s = "fn base() {}\nfn right() {}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(text.contains("fn left"), "missing left(): {text}");
+        assert!(text.contains("fn right"), "missing right(): {text}");
+        // Ours-then-theirs apply order at a shared EOF anchor.
+        let left_pos = text.find("fn left").expect("left");
+        let right_pos = text.find("fn right").expect("right");
+        assert!(
+            left_pos < right_pos,
+            "expected ours-then-theirs order, got {text}"
+        );
+    }
+
+    fn assert_only_insert_kinds(base: &AstGraph, next: &AstGraph, expected: &NodeKind) {
+        let diff = diff_graphs(base, next);
+        let kinds: Vec<_> = diff
+            .mutations
+            .iter()
+            .filter_map(|m| match m {
+                Mutation::InsertSubtree { node, .. } => Some(node.kind.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![expected.clone()],
+            "unexpected InsertSubtree kinds from real parse/diff: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn two_sided_distinct_decorator_inserts_both_survive_merge() {
+        use crate::frontend::parse_source;
+        use crate::unparser::unparse;
+
+        let base_s = "@x\ndef f():\n    pass\n";
+        let left_s = "@a\n@x\ndef f():\n    pass\n";
+        let right_s = "@b\n@x\ndef f():\n    pass\n";
+        let base = parse_source("m.py", base_s).unwrap();
+        let left = parse_source("m.py", left_s).unwrap();
+        let right = parse_source("m.py", right_s).unwrap();
+        // Lock the tree-sitter kind string that lands in Unknown(...).
+        assert_only_insert_kinds(&base, &left, &NodeKind::Unknown("decorator".into()));
+        assert_only_insert_kinds(&base, &right, &NodeKind::Unknown("decorator".into()));
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_source("m.py", &text).expect("merged source must parse");
+        assert!(text.contains("@a"), "missing @a: {text}");
+        assert!(text.contains("@b"), "missing @b: {text}");
+        assert!(text.contains("@x"), "missing @x: {text}");
+        let a_pos = text.find("@a").expect("@a");
+        let b_pos = text.find("@b").expect("@b");
+        assert!(a_pos < b_pos, "expected ours-then-theirs order, got {text}");
+    }
+
+    #[test]
+    fn two_sided_distinct_attribute_inserts_both_survive_merge() {
+        use crate::unparser::unparse;
+
+        let base_s = "fn f() {}\n";
+        let left_s = "#[a]\nfn f() {}\n";
+        let right_s = "#[b]\nfn f() {}\n";
+        let base = parse_rust(base_s).unwrap();
+        let left = parse_rust(left_s).unwrap();
+        let right = parse_rust(right_s).unwrap();
+        assert_only_insert_kinds(&base, &left, &NodeKind::Unknown("attribute_item".into()));
+        assert_only_insert_kinds(&base, &right, &NodeKind::Unknown("attribute_item".into()));
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_rust(&text).expect("merged source must parse");
+        assert!(text.contains("#[a]"), "missing #[a]: {text}");
+        assert!(text.contains("#[b]"), "missing #[b]: {text}");
+        let a_pos = text.find("#[a]").expect("#[a]");
+        let b_pos = text.find("#[b]").expect("#[b]");
+        assert!(a_pos < b_pos, "expected ours-then-theirs order, got {text}");
+    }
+
+    #[test]
+    fn first_decorator_wrap_on_bare_function_still_conflicts() {
+        use crate::frontend::parse_source;
+
+        // Wrapping an undecorated def becomes delete+insert of decorated_definition,
+        // not a sibling decorator prepend; that remains a real same-site conflict.
+        let base_s = "def f():\n    pass\n";
+        let left_s = "@a\ndef f():\n    pass\n";
+        let right_s = "@b\ndef f():\n    pass\n";
+        let base = parse_source("m.py", base_s).unwrap();
+        let left = parse_source("m.py", left_s).unwrap();
+        let right = parse_source("m.py", right_s).unwrap();
+        assert_only_insert_kinds(
+            &base,
+            &left,
+            &NodeKind::Unknown("decorated_definition".into()),
+        );
+        assert_only_insert_kinds(
+            &base,
+            &right,
+            &NodeKind::Unknown("decorated_definition".into()),
+        );
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Conflict(conflict) = outcome else {
+            panic!("expected conflict for competing decorated_definition wraps, got {outcome:?}");
+        };
+        assert!(
+            conflict.overlapping.iter().any(|o| matches!(
+                &o.reason,
+                OverlapReason::SameIntent(s) if s.contains("decorated_definition")
+            )),
+            "expected SameIntent(decorated_definition), got {:?}",
+            conflict.overlapping
+        );
+    }
+
+    #[test]
+    fn two_sided_distinct_java_annotation_inserts_both_survive_merge() {
+        use crate::frontend::parse_source;
+        use crate::unparser::unparse;
+
+        let base_s = "class C { @X void f() {} }\n";
+        let left_s = "class C { @A @X void f() {} }\n";
+        let right_s = "class C { @B @X void f() {} }\n";
+        let base = parse_source("M.java", base_s).unwrap();
+        let left = parse_source("M.java", left_s).unwrap();
+        let right = parse_source("M.java", right_s).unwrap();
+        assert_only_insert_kinds(&base, &left, &NodeKind::Unknown("marker_annotation".into()));
+        assert_only_insert_kinds(
+            &base,
+            &right,
+            &NodeKind::Unknown("marker_annotation".into()),
+        );
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Merged(FileContent::Ast(merged)) = outcome else {
+            panic!("expected clean merge, got {outcome:?}");
+        };
+        let text = unparse(&merged);
+        parse_source("M.java", &text).expect("merged source must parse");
+        assert!(text.contains("@A"), "missing @A: {text}");
+        assert!(text.contains("@B"), "missing @B: {text}");
+        assert!(text.contains("@X"), "missing @X: {text}");
+        let a_pos = text.find("@A").expect("@A");
+        let b_pos = text.find("@B").expect("@B");
+        assert!(a_pos < b_pos, "expected ours-then-theirs order, got {text}");
+    }
+
+    #[test]
+    fn first_java_modifiers_wrap_still_conflicts() {
+        use crate::frontend::parse_source;
+
+        // First annotation on a bare method inserts a `modifiers` wrapper, not a sibling
+        // marker_annotation; competing first wrappers stay conflicting.
+        let base_s = "class C { void f() {} }\n";
+        let left_s = "class C { @A void f() {} }\n";
+        let right_s = "class C { @B void f() {} }\n";
+        let base = parse_source("M.java", base_s).unwrap();
+        let left = parse_source("M.java", left_s).unwrap();
+        let right = parse_source("M.java", right_s).unwrap();
+        assert_only_insert_kinds(&base, &left, &NodeKind::Unknown("modifiers".into()));
+        assert_only_insert_kinds(&base, &right, &NodeKind::Unknown("modifiers".into()));
+        let outcome = merge_files(
+            &FileContent::Ast(base),
+            &FileContent::Ast(left),
+            &FileContent::Ast(right),
+        );
+        let MergeOutcome::Conflict(conflict) = outcome else {
+            panic!("expected conflict for competing modifiers wraps, got {outcome:?}");
+        };
+        assert!(
+            conflict.overlapping.iter().any(|o| matches!(
+                &o.reason,
+                OverlapReason::SameIntent(s) if s.contains("modifiers")
+            )),
+            "expected SameIntent(modifiers), got {:?}",
+            conflict.overlapping
         );
     }
 }

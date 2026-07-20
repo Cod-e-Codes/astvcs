@@ -173,8 +173,13 @@ that parse `--stat`/`--numstat` output, keep using Git's default diff
 `binary file - content diff omitted` / whole-file replace on conflict,
 matching the standalone astvcs CLI's handling of the same content kinds.
 
-**Same-kind insertions at one site still conflict.** Both sides appending
-different functions at end-of-file, or both adding different decorators to
-the same method, are treated as overlapping same-intent edits (same class of
-case as Mergiraf today). Entity-level matching (Weave-style) is out of scope
-for these drivers; they reuse the existing node-level merge engine unchanged.
+**Same-site inserts are content-aware, not only kind-aware.** Distinct
+substantive sibling inserts at one anchor (for example both sides appending
+different functions at EOF, or both adding different decorators/attributes
+to a definition that already has a wrapper) merge cleanly; combined apply
+order is ours then theirs (HEAD/`%A` side before the incoming side). Competing
+literal or punctuation inserts at one site still conflict. First-time wraps
+that introduce a language wrapper (Python `decorated_definition`, Java
+`modifiers`) still conflict. Entity-level matching (Weave-style) is out of
+scope for these drivers; they reuse the existing node-level merge engine
+unchanged.

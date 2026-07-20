@@ -32,6 +32,12 @@
 | `rename_vs_parent_delete_reports_overlap` | Rename vs parent delete overlap report |
 | `identical_mutations_are_not_overlapping` | Byte-identical mutation pairs are not overlapping (unit, `merge/mod.rs`) |
 | `cross_branch_identical_mutations_merge_cleanly` | Shared identical diff artifacts on both branches do not block merge (unit, `merge/mod.rs`) |
+| `two_sided_module_eof_function_inserts_both_survive_merge` | Distinct EOF function inserts merge in ours-then-theirs order (unit, `merge/mod.rs`) |
+| `two_sided_distinct_decorator_inserts_both_survive_merge` | Distinct Python decorator prepends on an already-decorated def merge (unit, `merge/mod.rs`) |
+| `two_sided_distinct_attribute_inserts_both_survive_merge` | Distinct Rust `#[attr]` inserts before a function merge (unit, `merge/mod.rs`) |
+| `two_sided_distinct_java_annotation_inserts_both_survive_merge` | Distinct Java `marker_annotation` prepends merge (unit, `merge/mod.rs`) |
+| `first_decorator_wrap_on_bare_function_still_conflicts` | Competing first-time `decorated_definition` wraps still conflict (unit, `merge/mod.rs`) |
+| `first_java_modifiers_wrap_still_conflicts` | Competing first-time Java `modifiers` wraps still conflict (unit, `merge/mod.rs`) |
 | `identical_reparse_with_duplicate_sibling_node_ids_is_empty` | Three-parameter Rust reparse emits no phantom comma diff (unit, `diff/ast_diff.rs`) |
 | `disjoint_body_edits_do_not_emit_phantom_comma_inserts` | Body-only edits do not diff phantom parameter commas (unit, `diff/ast_diff.rs`) |
 | `parameter_count_change_diff_applies_roundtrip` | Adding a parameter diffs and applies to valid source (unit, `diff/ast_diff.rs`) |
