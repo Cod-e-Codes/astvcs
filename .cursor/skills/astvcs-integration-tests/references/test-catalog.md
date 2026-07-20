@@ -164,3 +164,8 @@
 | `history_long_random_repo` | Long random history (`#[ignore]`; `HISTORY_SEED`, `HISTORY_OPS`) |
 | `git_and_astvcs_disjoint_calc_edits_diverge` | astvcs merges disjoint body edits where Git text merge conflicts (`tests/diff_git.rs`) |
 | `git_and_astvcs_same_line_edits_both_conflict` | Git and astvcs both conflict on same-line edits (`tests/diff_git.rs`) |
+| `merge_driver_resolves_disjoint_structural_edits` | `astvcs-merge-driver` merges rename + operator edit (`tests/git_drivers.rs`) |
+| `merge_driver_conflicts_on_overlapping_literal_edits` | Driver leaves `%A` untouched on genuine overlap (`tests/git_drivers.rs`) |
+| `diff_driver_prints_structural_intents` | `astvcs-diff-driver` prints compact rename intents (`tests/git_drivers.rs`) |
+| `diff_driver_omits_binary_content` | Diff driver omits binary payloads (`tests/git_drivers.rs`) |
+| `git_invokes_merge_driver_on_disjoint_edits` | Git calls merge driver via `.gitattributes` (`tests/git_drivers.rs`, needs `git`) |

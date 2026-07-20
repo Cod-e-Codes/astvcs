@@ -12,6 +12,14 @@ path = "src/lib.rs"
 name = "astvcs"
 path = "src/main.rs"
 
+[[bin]]
+name = "astvcs-merge-driver"
+path = "src/bin/merge_driver.rs"
+
+[[bin]]
+name = "astvcs-diff-driver"
+path = "src/bin/diff_driver.rs"
+
 [dependencies]
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }

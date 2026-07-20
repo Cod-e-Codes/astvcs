@@ -26,10 +26,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            bin_name: astvcs-linux-x86_64
             archive: astvcs-linux-x86_64.tar.gz
           - os: windows-latest
-            bin_name: astvcs-windows-x86_64.exe
             archive: astvcs-windows-x86_64.zip
     steps:
       - uses: actions/checkout@v7
@@ -44,11 +42,14 @@ jobs:
       - name: Smoke test
         shell: pwsh
         run: |
-          $bin = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-            './target/release/astvcs.exe'
-          } else {
-            './target/release/astvcs'
+          $isWin = $IsWindows -or $env:OS -eq 'Windows_NT'
+          $ext = if ($isWin) { '.exe' } else { '' }
+          $bins = @('astvcs', 'astvcs-merge-driver', 'astvcs-diff-driver')
+          foreach ($name in $bins) {
+            $path = "./target/release/${name}${ext}"
+            if (-not (Test-Path $path)) { throw "missing release binary: $path" }
           }
+          $bin = "./target/release/astvcs${ext}"
           $expected = (Select-String -Path Cargo.toml -Pattern '^version = ' | ForEach-Object {
             $_.Line -replace 'version = "(.+)"', '$1'
           })
@@ -62,16 +63,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "astvcs init failed with exit $LASTEXITCODE" }
           $meta = Join-Path $tmpdir.FullName '.astvcs'
           if (-not (Test-Path $meta)) { throw "expected $meta after init" }
+          # Drivers fail with a usage message when given no args; that still proves they start.
+          & "./target/release/astvcs-merge-driver${ext}"
+          if ($LASTEXITCODE -eq 0) { throw "astvcs-merge-driver should exit nonzero without args" }
+          & "./target/release/astvcs-diff-driver${ext}"
+          if ($LASTEXITCODE -eq 0) { throw "astvcs-diff-driver should exit nonzero without args" }
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-            Copy-Item target/release/astvcs.exe "dist/${{ matrix.bin_name }}"
-            Compress-Archive -Path "dist/${{ matrix.bin_name }}" -DestinationPath "dist/${{ matrix.archive }}"
+          $isWin = $IsWindows -or $env:OS -eq 'Windows_NT'
+          $ext = if ($isWin) { '.exe' } else { '' }
+          $names = @('astvcs', 'astvcs-merge-driver', 'astvcs-diff-driver')
+          foreach ($name in $names) {
+            Copy-Item "target/release/${name}${ext}" "dist/${name}${ext}"
+          }
+          if ($isWin) {
+            Compress-Archive -Path (Get-ChildItem dist -Filter '*.exe').FullName -DestinationPath "dist/${{ matrix.archive }}"
           } else {
-            Copy-Item target/release/astvcs "dist/${{ matrix.bin_name }}"
-            tar czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.bin_name }}"
+            tar czf "dist/${{ matrix.archive }}" -C dist @names
           }
       - uses: actions/upload-artifact@v4
         with:

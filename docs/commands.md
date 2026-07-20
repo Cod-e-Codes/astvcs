@@ -1,6 +1,6 @@
 # Commands
 
-Complete CLI reference for `astvcs`. For a project overview, see [README.md](../README.md). For repository internals (states, merge planning, locking, network transport), see [architecture.md](architecture.md). Runnable walkthroughs: [examples/README.md](../examples/README.md).
+Complete CLI reference for `astvcs`. For a project overview, see [README.md](../README.md). For repository internals (states, merge planning, locking, network transport), see [architecture.md](architecture.md). Optional Git merge/diff drivers: [git-integration.md](git-integration.md). Runnable walkthroughs: [examples/README.md](../examples/README.md).
 
 **Command groups:** `init`, `identity` · `status`, `add`, `diff`, `commit` · `branch`, `tag` · `merge`, `merge-base`, `checkout` · `reset`, `revert`, `rebase`, `cherry-pick`, `stash` · `log`, `blame`, `bisect` · `remote`, `fetch`, `pull`, `push`, `clone`, `serve`, `remote-serve` · `gc`, `fsck`, `repack` · `import-git`
 

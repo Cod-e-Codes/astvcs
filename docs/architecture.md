@@ -280,6 +280,9 @@ src/
     remote.rs    remote configuration
     serve.rs     HTTP repository server
   main.rs
+  bin/
+    merge_driver.rs   Git merge driver (astvcs-merge-driver)
+    diff_driver.rs    Git external diff driver (astvcs-diff-driver)
 examples/
   workflow-demo/  disjoint AST merge walkthrough
   merge-demo/     add/add, deletion, and config fixtures
@@ -287,11 +290,15 @@ examples/
   same-file-demo/ same-file disjoint AST merge (rename + insert)
 tests/
   integration.rs
+  git_drivers.rs
+  diff_git.rs
 ```
 
 ## Interoperability
 
 `import-git` is a one-way migration aid: it reads a local git repository via the `git` CLI and imports the **HEAD tree snapshot** into an astvcs repository as a single commit. It uses `git rev-parse`, `git ls-tree -r HEAD`, and `git cat-file` subprocess calls only (no libgit2). UTF-8 text paths are written to the working tree and committed with normal `commit` semantics (author identity required). The import commit includes only paths read from git HEAD; unrelated files on disk are not swept in. NUL-containing or invalid UTF-8 blobs are skipped with `warning:` on stderr and are not committed even when a same-named file exists on disk. Symlinks (git mode `120000`) are imported when the target is valid UTF-8. Submodule entries (mode `160000`) are skipped with a warning. The astvcs tree is synced to the git snapshot: paths tracked at astvcs HEAD but absent from git HEAD are removed from disk before commit. If the target repository has no `.astvcs` directory, `import-git` runs `init` first.
+
+**Git merge and diff drivers.** Two additional binaries (`astvcs-merge-driver`, `astvcs-diff-driver`) call the same `merge_files` / `diff_graphs` library paths used by the standalone CLI, with no `.astvcs/` access. Setup, limitations, and exit-code contracts are in [git-integration.md](git-integration.md). Drivers do not change repository model semantics; they are a packaging surface for existing Git workflows.
 
 **Non-goals (v1 and beyond for full git parity):**
 
@@ -299,10 +306,11 @@ tests/
 - No native `.git` directory mode for astvcs.
 - No bidirectional sync with git remotes or working trees.
 - No full commit history import (snapshot only in v1).
+- No entity-level (name+scope) merge rewrite; drivers keep node-level overlap rules.
 
 ## Testing
 
-Unit tests live beside modules under `src/`. `tests/integration.rs` exercises the CLI and library together.
+Unit tests live beside modules under `src/`. `tests/integration.rs` exercises the CLI and library together. `tests/git_drivers.rs` covers the Git driver binaries; `tests/diff_git.rs` compares standalone merge outcomes to plain Git.
 
 | Test | What it guards |
 |------|----------------|
@@ -437,6 +445,9 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `history_long_random_repo` | Long random history (`#[ignore]`; `HISTORY_SEED`, `HISTORY_OPS`, `tests/history_smoke.rs`) |
 | `git_and_astvcs_disjoint_calc_edits_diverge` | Differential: astvcs merges disjoint function-body edits where Git text merge conflicts (`tests/diff_git.rs`, requires `git` on PATH) |
 | `git_and_astvcs_same_line_edits_both_conflict`, `git_and_astvcs_rename_with_body_edit_both_merge` | Differential agreement cases (`tests/diff_git.rs`) |
+| `merge_driver_resolves_disjoint_structural_edits`, `merge_driver_conflicts_on_overlapping_literal_edits` | `astvcs-merge-driver` clean merge and conflict leave-%A (`tests/git_drivers.rs`) |
+| `diff_driver_prints_structural_intents`, `diff_driver_omits_binary_content` | `astvcs-diff-driver` intent output and binary omission (`tests/git_drivers.rs`) |
+| `git_invokes_merge_driver_on_disjoint_edits` | End-to-end Git merge with driver registered (`tests/git_drivers.rs`, requires `git` on PATH) |
 
 **Property and history harnesses.** `tests/props.rs` and `tests/history_smoke.rs` share helpers in `tests/common/`. Override proptest case count with `PROPTEST_CASES` (default 64).
 

@@ -12,11 +12,11 @@ The goal is version control that understands code structure where parsing succee
 
 ## What this is not
 
-- **Not Git-compatible.** No `.git` object database, no git wire protocol, no bidirectional sync with git repositories.
-- **No conflict markers in files.** Overlapping edits are reported; you resolve with `merge --resolve path:ours|theirs` or fix the tree before continuing.
+- **Not a drop-in Git replacement.** The standalone CLI uses its own `.astvcs/` store, not a `.git` object database, and has no git wire protocol or bidirectional sync with git remotes.
+- **No conflict markers in the standalone CLI.** Overlapping edits are reported; you resolve with `merge --resolve path:ours|theirs` or fix the tree before continuing.
 - **Not a hosted service.** Network sync is something you run yourself (`serve`, file paths, HTTP, HTTPS, or SSH).
 
-`import-git` is a one-way aid: it snapshots git HEAD into a single astvcs commit when migrating a tree. See the `import-git` row in [commands.md](docs/commands.md).
+Optional **Git merge and diff drivers** (`astvcs-merge-driver`, `astvcs-diff-driver`) reuse the same structural engine inside an existing Git repo with no migration. See [docs/git-integration.md](docs/git-integration.md). `import-git` is a one-way aid: it snapshots git HEAD into a single astvcs commit when migrating a tree. See the `import-git` row in [commands.md](docs/commands.md).
 
 ## How structure changes the diff
 
@@ -43,6 +43,7 @@ To inspect how nodes were paired, run `astvcs diff --view` (optionally with a pa
 |----------|------------|
 | [docs/commands.md](docs/commands.md) | Full CLI reference (every subcommand and flag) |
 | [docs/architecture.md](docs/architecture.md) | Repository model, diff/merge internals, locking, network, gc/fsck |
+| [docs/git-integration.md](docs/git-integration.md) | Optional Git merge/diff drivers (no `.astvcs/` required) |
 | [examples/README.md](examples/README.md) | Nine runnable fixture walkthroughs |
 | [docs/RELEASE.md](docs/RELEASE.md) | Tagged release packaging |
 
@@ -64,7 +65,7 @@ cargo build --release
 ./target/release/astvcs log
 ```
 
-On Windows the release binary is `target\release\astvcs.exe`.
+On Windows the release binary is `target\release\astvcs.exe`. The same build also produces `astvcs-merge-driver` and `astvcs-diff-driver` for optional Git wiring ([docs/git-integration.md](docs/git-integration.md)).
 
 Use `--repo <path>` to target another directory (parent directories are searched when `.astvcs` is not at that path). Pass `--details` for structural diagnostics, `-v` / `--verbose` for those details plus operational `notice:` lines on stderr, or `--json` for structured JSON errors on failure.
 
@@ -79,11 +80,13 @@ Prebuilt binaries for Linux and Windows are on [GitHub Releases](https://github.
 | Linux x86_64 | `astvcs-linux-x86_64.tar.gz` |
 | Windows x86_64 | `astvcs-windows-x86_64.zip` |
 
-Extract the archive, put the binary on your `PATH`, then verify:
+Extract the archive, put the binaries on your `PATH`, then verify:
 
 ```bash
 astvcs --version
 ```
+
+Archives from the first release that ships Git drivers include `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver`. The `v0.1.0` archives contain only the main `astvcs` binary.
 
 ## Build from source
 
@@ -95,13 +98,14 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request. Binary: `target/release/astvcs` on Unix, `target\release\astvcs.exe` on Windows.
+CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push to `main` and every pull request. Release build outputs: `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver` under `target/release/` (`.exe` on Windows).
 
 ## Scope at a glance
 
 **In scope today**
 
 - AST diff and three-way merge for supported languages; text and binary fallback for everything else; change-first `diff --view` HTML viewer
+- Optional Git merge/diff drivers (`astvcs-merge-driver`, `astvcs-diff-driver`) for existing Git repos ([docs/git-integration.md](docs/git-integration.md))
 - Staging index (`add`, `diff --staged`), branches, lightweight tags, author identity
 - `reset` (soft, mixed, hard), `revert`, `rebase`, `cherry-pick`, `stash`, `blame`, `bisect` on linear first-parent history
 - Remotes over local path, HTTP, HTTPS, or SSH; optional bearer auth; TLS on `serve`; shallow `clone` / `fetch` with `--depth`
@@ -111,9 +115,9 @@ CI runs the same checks on `ubuntu-latest` and `windows-latest` for every push t
 
 **Out of scope today**
 
-- Git object compatibility, full git history import, or bidirectional git sync
-- Conflict markers written into files; interactive rebase editor; annotated tags
-- Managed hosting; DAG bisect; merge-heavy bisect paths
+- Git object compatibility, full git history import, or bidirectional git sync (drivers reuse merge/diff only; they do not replace Git history)
+- Conflict markers written into standalone-CLI merges; interactive rebase editor; annotated tags
+- Entity-level merge (Weave-style name+scope matching); managed hosting; DAG bisect; merge-heavy bisect paths
 
 Unsupported extensions and parse failures fall back to text blobs; astvcs prints `warning:` to stderr when that happens.
 
