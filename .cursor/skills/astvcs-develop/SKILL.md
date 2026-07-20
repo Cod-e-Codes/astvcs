@@ -12,7 +12,7 @@ metadata:
 
 1. Read [docs/architecture.md](../../../docs/architecture.md) for repository model, AST diff, and merge behavior.
 2. Read [docs/commands.md](../../../docs/commands.md) for CLI flags and subcommands.
-3. Read [README.md](../../../README.md) for project overview, documentation map, quick start, and scope at a glance.
+3. Read [README.md](../../../README.md) for project overview, documentation map, quick start (standalone CLI and Git drivers), and scope at a glance.
 4. Identify which layer changed: `frontend/`, `graph/`, `diff/`, `intent/`, `merge/`, `store/`, `network/`, or CLI (`main.rs`, `store/repo.rs`).
 
 ## Act

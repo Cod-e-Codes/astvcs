@@ -1,6 +1,6 @@
 # Architecture
 
-Design reference for astvcs: on-disk layout, structural diff and merge, locking, network sync, and maintenance commands. For a project overview and quick start, see [README.md](../README.md). For every CLI flag and subcommand, see [commands.md](commands.md).
+Design reference for astvcs: on-disk layout, structural diff and merge, locking, network sync, and maintenance commands. For a project overview and quick start, see [README.md](../README.md). For every CLI flag and subcommand, see [commands.md](commands.md). Git merge/diff drivers (same engine, no `.astvcs/`): [git-integration.md](git-integration.md).
 
 ## Feature scope
 

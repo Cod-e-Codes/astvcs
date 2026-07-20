@@ -4,6 +4,8 @@ Structural version control for a working tree of source files.
 
 Where tree-sitter can parse a file, astvcs stores an abstract syntax tree and diffs and merges **structural** edits. Other paths are stored as UTF-8 text with a line-oriented diff, or as binary bytes when the content is not valid UTF-8.
 
+The structural diff and merge engine is the core product. It ships two ways: a standalone local-first CLI under `.astvcs/`, and optional Git merge/diff drivers that reuse the same engine inside an existing Git repo (see [docs/git-integration.md](docs/git-integration.md)).
+
 ## What this is
 
 astvcs is a **local-first** CLI: you work in a normal directory, and the tool tracks changes under `.astvcs/` using content-addressed states, a timeline, branches, and remotes. Command names follow the usual vocabulary (`init`, `status`, `commit`, `branch`, `merge`, `fetch`, and so on).
@@ -16,7 +18,7 @@ The goal is version control that understands code structure where parsing succee
 - **No conflict markers in the standalone CLI.** Overlapping edits are reported; you resolve with `merge --resolve path:ours|theirs` or fix the tree before continuing.
 - **Not a hosted service.** Network sync is something you run yourself (`serve`, file paths, HTTP, HTTPS, or SSH).
 
-Optional **Git merge and diff drivers** (`astvcs-merge-driver`, `astvcs-diff-driver`) reuse the same structural engine inside an existing Git repo with no migration. See [docs/git-integration.md](docs/git-integration.md). `import-git` is a one-way aid: it snapshots git HEAD into a single astvcs commit when migrating a tree. See the `import-git` row in [commands.md](docs/commands.md).
+Optional **Git merge and diff drivers** (`astvcs-merge-driver`, `astvcs-diff-driver`) are the same engine without `.astvcs/` or a migration. Setup: [docs/git-integration.md](docs/git-integration.md). `import-git` is a one-way aid: it snapshots git HEAD into a single astvcs commit when migrating a tree. See the `import-git` row in [commands.md](docs/commands.md).
 
 ## How structure changes the diff
 
@@ -51,7 +53,7 @@ Contributor Agent Skills live under [`.cursor/skills/`](.cursor/skills/) (`astvc
 
 ## Quick start
 
-Requires a built binary or a [release download](#install). Set author identity once (or use `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL`):
+**Standalone CLI** (requires a built binary or a [release download](#install)). Set author identity once (or use `ASTVCS_AUTHOR_NAME` / `ASTVCS_AUTHOR_EMAIL`):
 
 ```bash
 cargo build --release
@@ -65,7 +67,9 @@ cargo build --release
 ./target/release/astvcs log
 ```
 
-On Windows the release binary is `target\release\astvcs.exe`. The same build also produces `astvcs-merge-driver` and `astvcs-diff-driver` for optional Git wiring ([docs/git-integration.md](docs/git-integration.md)).
+On Windows the release binary is `target\release\astvcs.exe`. The same build also produces `astvcs-merge-driver` and `astvcs-diff-driver`.
+
+**Git drivers only:** build or install the three binaries, then follow [docs/git-integration.md](docs/git-integration.md) (`.gitattributes` + `git config`). No `astvcs init` required.
 
 Use `--repo <path>` to target another directory (parent directories are searched when `.astvcs` is not at that path). Pass `--details` for structural diagnostics, `-v` / `--verbose` for those details plus operational `notice:` lines on stderr, or `--json` for structured JSON errors on failure.
 
