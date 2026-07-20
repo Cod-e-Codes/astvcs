@@ -4,7 +4,7 @@ Copy this outline when drafting a GitHub Release for a new tag. Project overview
 
 ## Version
 
-`vX.Y.Z` (matches `Cargo.toml` `version` and `astvcs --version`)
+`v0.1.1` (matches `Cargo.toml` `version` and `astvcs --version`)
 
 ## Requirements
 
@@ -22,11 +22,13 @@ Download the platform archive from [GitHub Releases](https://github.com/Cod-e-Co
 
 Each archive contains three binaries: `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver` (`.exe` on Windows). The `v0.1.0` archives shipped only the main `astvcs` binary.
 
-Verify: `astvcs --version` should print the release version.
+Verify: `astvcs --version` should print `0.1.1`.
 
 ## Changelog
 
-Summarize user-facing changes since the previous tag. When drivers or packaging change, call out:
+### v0.1.1
 
-- Git merge/diff driver binaries and [git-integration.md](git-integration.md) setup
-- Archive contents (all three binaries vs main CLI only)
+- Add `astvcs-merge-driver` and `astvcs-diff-driver` for optional Git merge and external-diff wiring (see [git-integration.md](git-integration.md))
+- Release archives now include all three binaries (Linux x86_64 and Windows x86_64)
+- Drivers call the existing `merge_files` / `diff_graphs` paths; they do not read or write `.astvcs/`
+- Same-kind insertions at one site (for example both sides appending different functions at EOF) still conflict under the node-level overlap rules; that is unchanged from the standalone merge engine
