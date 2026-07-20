@@ -22,10 +22,11 @@
 //!       recursive = binary
 //!
 //! Exit code 0 means %A now holds the clean merge result and git stages it.
-//! Any nonzero exit code means git treats the path as conflicted: it leaves
-//! %A as a standard git conflict-marker file (git's own fallback merge,
-//! already written to %A before the driver ever runs) so git status and
-//! manual resolution still work exactly like they do without this driver.
+//! Any nonzero exit code means git treats the path as unmerged. On conflict
+//! this driver leaves %A unchanged (typically the clean "ours" blob Git
+//! passed in). It does not write `<<<<<<<` conflict markers. Resolve with
+//! `git status`, `git checkout --ours/--theirs -- <path>`, or by editing
+//! the working tree, then `git add`.
 
 use astvcs::frontend::load_working_content;
 use astvcs::merge::{ConflictResolutionStyle, MergeOutcome, merge_files};
@@ -106,9 +107,8 @@ fn run() -> Result<bool, String> {
             Ok(true)
         }
         MergeOutcome::Conflict(conflict) => {
-            // Leave %A untouched: git already wrote its own conflict-marker
-            // version there before invoking the driver, so a non-clean exit
-            // preserves normal `git status` / manual-resolution behavior.
+            // Leave %A untouched. With ort, %A is usually clean "ours", not a
+            // marker file. Nonzero exit still marks the path unmerged in Git.
             eprintln!(
                 "{}",
                 conflict.format_focused_report_with_labels(
@@ -119,7 +119,7 @@ fn run() -> Result<bool, String> {
                 )
             );
             eprintln!(
-                "astvcs: structural merge could not resolve {}; git's own conflict markers in {} are unchanged",
+                "astvcs: structural merge could not resolve {}; left {} unchanged (Git will mark the path unmerged; this driver does not write conflict markers)",
                 args.display_path, args.ours_path
             );
             Ok(false)

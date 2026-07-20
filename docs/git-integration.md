@@ -21,9 +21,11 @@ parts of the syntax tree (a renamed parameter here, a changed operator
 there, a comment added above a function) merge cleanly even when they land
 on the same or adjacent lines and would conflict under Git's line-based
 ort/recursive strategies. Edits that genuinely overlap (both sides
-change the same literal) still fail the driver and fall through to Git's
-own conflict-marker file, so `git status` and manual resolution work
-exactly as they always have.
+change the same literal) fail the driver with a nonzero exit so Git marks
+the path unmerged. The driver leaves `%A` unchanged and does not write
+`<<<<<<<` conflict markers; resolve with `git status`,
+`git checkout --ours|--theirs -- <path>`, or by editing the file, then
+`git add`.
 
 **Diff driver (`astvcs-diff-driver`):** `git diff`, `git show`, and
 `git log -p` on a configured path print astvcs's compact structural edit
@@ -152,8 +154,13 @@ Git's normal rename-detection and add/add handling first.
 **Symlink targets cannot be merge-driver output.** If a structural merge
 resolves to a changed symlink target (rare; this generally only happens
 if a path's Git attributes are misconfigured across a type change), the
-driver reports an error and leaves Git's conflict markers in place rather
+driver reports an error and exits nonzero without rewriting `%A`, rather
 than silently mismatching the file type Git expects at `%A`.
+
+**No `<<<<<<<` markers on structural conflict.** On overlap the driver
+exits nonzero and leaves `%A` as the clean ours blob Git passed in (ort
+does not pre-fill markers there). `git status` still shows the path as
+unmerged. Writing marker files is out of scope for v1 of these drivers.
 
 **The diff driver does not implement `git diff --stat` byte/line counts**
 the way textconv would; it prints a summary block per file. For scripts

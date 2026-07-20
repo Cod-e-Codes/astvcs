@@ -32,3 +32,5 @@ Verify: `astvcs --version` should print `0.1.1`.
 - Release archives now include all three binaries (Linux x86_64 and Windows x86_64)
 - Drivers call the existing `merge_files` / `diff_graphs` paths; they do not read or write `.astvcs/`
 - Same-kind insertions at one site (for example both sides appending different functions at EOF) still conflict under the node-level overlap rules; that is unchanged from the standalone merge engine
+
+Post-tag clarification (on `main`, after `v0.1.1`): on structural conflict the merge driver leaves `%A` unchanged and does not write `<<<<<<<` markers; Git still marks the path unmerged. The `v0.1.1` binaries and tagged docs still say otherwise in one stderr line / early doc wording.

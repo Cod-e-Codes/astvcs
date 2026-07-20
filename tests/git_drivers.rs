@@ -109,8 +109,8 @@ fn merge_driver_conflicts_on_overlapping_literal_edits() {
         "expected focused conflict report: {stderr}"
     );
     assert!(
-        stderr.contains("git's own conflict markers"),
-        "expected fallback note: {stderr}"
+        stderr.contains("left") && stderr.contains("unchanged") && stderr.contains("unmerged"),
+        "expected leave-%A / unmerged note: {stderr}"
     );
     let ours_after = fs::read_to_string(&ours).expect("read ours after conflict");
     assert_eq!(ours_before, ours_after, "conflict must leave %A untouched");
