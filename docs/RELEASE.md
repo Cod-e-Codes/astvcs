@@ -4,7 +4,7 @@ Copy this outline when drafting a GitHub Release for a new tag. Project overview
 
 ## Version
 
-`v0.1.4` (matches `Cargo.toml` `version` and `astvcs --version`)
+`v0.1.5` (matches `Cargo.toml` `version` and `astvcs --version`)
 
 ## Requirements
 
@@ -22,10 +22,14 @@ Download the platform archive from [GitHub Releases](https://github.com/Cod-e-Co
 
 Each archive contains three binaries: `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver` (`.exe` on Windows). The `v0.1.0` archives shipped only the main `astvcs` binary.
 
-Verify: `astvcs --version` should print `0.1.4`.
+Verify: `astvcs --version` should print `0.1.5`.
 
 ## Changelog
 
+### v0.1.5
+
+- Fix wide-list alignment: uniquely pair content-addressed NodeIds before structural LCS so several empty-payload Function siblings plus an EOF append no longer invent false overlaps
+- Add `examples/go-eof-insert-demo/` and language-merge coverage for that case
 ### v0.1.4
 
 - Fix same-site insert unparse: apply shared anchor `SetTrivia` once and synthesize separator trivia between multiple inserts at one site (avoids Python `@a@b@x` matmul corruption)
