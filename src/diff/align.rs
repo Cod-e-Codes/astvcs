@@ -18,7 +18,6 @@ fn index_buckets<T: Eq + Hash + Clone>(slice: &[T]) -> HashMap<T, Vec<usize>> {
 }
 
 /// Pair indices where the same value appears exactly once on each side.
-#[allow(dead_code)]
 pub fn pair_unique_bijective<T: Eq + Hash + Clone>(old: &[T], new: &[T]) -> Vec<(usize, usize)> {
     let old_buckets = index_buckets(old);
     let new_buckets = index_buckets(new);

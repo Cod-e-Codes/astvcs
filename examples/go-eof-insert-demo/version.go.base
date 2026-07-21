@@ -1,0 +1,50 @@
+package shared
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+var (
+	ClientVersion = "dev"
+	ServerVersion = "dev"
+	BuildTime     = "unknown"
+	GitCommit     = "unknown"
+)
+
+func GetVersionInfo() string {
+	return fmt.Sprintf("%s (build: %s, commit: %s)", ClientVersion, BuildTime, GitCommit)
+}
+
+func GetServerVersionInfo() string {
+	return fmt.Sprintf("%s (build: %s, commit: %s)", ServerVersion, BuildTime, GitCommit)
+}
+
+func CompareVersions(a, b string) int {
+	pa := parseVersionParts(a)
+	pb := parseVersionParts(b)
+	for i := 0; i < 3; i++ {
+		if pa[i] < pb[i] {
+			return -1
+		}
+		if pa[i] > pb[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func parseVersionParts(v string) [3]int {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.SplitN(v, ".", 3)
+	var result [3]int
+	for i := 0; i < len(parts) && i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return [3]int{}
+		}
+		result[i] = n
+	}
+	return result
+}

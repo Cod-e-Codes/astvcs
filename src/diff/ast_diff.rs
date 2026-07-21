@@ -1,4 +1,4 @@
-use crate::diff::align::{fingerprint_bucket_pairs, pair_in_order_by_key};
+use crate::diff::align::{fingerprint_bucket_pairs, pair_in_order_by_key, pair_unique_bijective};
 use crate::diff::lcs::lcs_pairs;
 use crate::graph::{AstGraph, Mutation, NodeId, NodeKind, TriviaRecord};
 use crate::trace;
@@ -902,9 +902,16 @@ fn diff_children(
     let wide_list = old_children.len() * new_children.len() > crate::diff::align::LCS_THRESHOLD;
 
     if wide_list {
-        let old_struct = child_struct_keys(old, &old_children);
-        let new_struct = child_struct_keys(new, &new_children);
-        for (oi, ni) in lcs_pairs(&old_struct, &new_struct) {
+        // Unique content-addressed identity first. Structural (kind, payload) LCS alone
+        // shifts when several siblings share the same key (empty-payload Functions)
+        // and one side appends or prepends another of that kind. Duplicate ids (commas,
+        // repeated literals) stay for later passes so occurrence repair still applies.
+        let mut id_pairs = pair_unique_bijective(&old_children, &new_children);
+        id_pairs.sort_unstable();
+        for (oi, ni) in id_pairs {
+            if matched_old[oi] || matched_new[ni] {
+                continue;
+            }
             matched_old[oi] = true;
             matched_new[ni] = true;
             sess.alignment.push(AlignEdge {
@@ -912,6 +919,40 @@ fn diff_children(
                 new_id: Some(new_children[ni]),
                 kind: AlignKind::Match,
                 method: Some(AlignMethod::Id),
+                parent_old: Some(old_node_id),
+                parent_new: Some(new_node_id),
+            });
+            diff_subtree(
+                sess,
+                old_children[oi],
+                new_children[ni],
+                Some(old_node_id),
+                duplicate_sibling_occurrence(&old_children, oi).or(scope_occurrence),
+            );
+            diff_child_trivia(
+                sess.old,
+                sess.new,
+                old_node_id,
+                new_node_id,
+                oi,
+                ni,
+                sess.out,
+            );
+        }
+
+        let old_struct = child_struct_keys(old, &old_children);
+        let new_struct = child_struct_keys(new, &new_children);
+        for (oi, ni) in lcs_pairs(&old_struct, &new_struct) {
+            if matched_old[oi] || matched_new[ni] {
+                continue;
+            }
+            matched_old[oi] = true;
+            matched_new[ni] = true;
+            sess.alignment.push(AlignEdge {
+                old_id: Some(old_children[oi]),
+                new_id: Some(new_children[ni]),
+                kind: AlignKind::Match,
+                method: Some(AlignMethod::Lcs),
                 parent_old: Some(old_node_id),
                 parent_new: Some(new_node_id),
             });
@@ -1828,6 +1869,41 @@ mod tests {
         let a = parse_rust(src).unwrap();
         let b = parse_rust(src).unwrap();
         assert!(diff_graphs(&a, &b).mutations.is_empty());
+    }
+
+    #[test]
+    fn go_eof_function_append_on_wide_list_is_insert_only() {
+        use crate::frontend::parse_source;
+
+        let base = parse_source(
+            "version.go",
+            include_str!("../../examples/go-eof-insert-demo/version.go.base"),
+        )
+        .unwrap();
+        let ours = parse_source(
+            "version.go",
+            include_str!("../../examples/go-eof-insert-demo/version.go.ours"),
+        )
+        .unwrap();
+        let diff = diff_graphs(&base, &ours);
+        assert!(
+            !diff.mutations.iter().any(|m| matches!(
+                m,
+                Mutation::MoveNode { .. } | Mutation::DeleteSubtree { .. }
+            )),
+            "append-only EOF function must not move or delete existing siblings: {:?}",
+            diff.mutations
+        );
+        assert!(
+            diff.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::InsertSubtree { .. })),
+            "expected InsertSubtree for appended function: {:?}",
+            diff.mutations
+        );
+        let mut working = base.clone();
+        working.apply_batch(&diff.mutations).unwrap();
+        assert_eq!(unparse(&working), unparse(&ours));
     }
 
     #[test]

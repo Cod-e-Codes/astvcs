@@ -203,6 +203,29 @@ try {
     Invoke-Astvcs $D @("merge", "feature", "--message", "merge feature") "same-file: merge"
     Write-Log (Get-Content $D\sample.rs -Raw)
 
+    # --- go-eof-insert-demo ---
+    & (Join-Path $PSScriptRoot "reset.ps1") 2>&1 | ForEach-Object { Write-Log $_ }
+    $D = "examples\go-eof-insert-demo"
+    Invoke-Astvcs "" @("init", $D) "go-eof: init"
+    Invoke-Astvcs $D $identity "go-eof: identity"
+    Invoke-Astvcs $D @("add", ".") "go-eof: add baseline"
+    Invoke-Astvcs $D @("commit", "--message", "baseline") "go-eof: baseline"
+    Invoke-Astvcs $D @("branch", "create", "feature") "go-eof: branch feature"
+    Invoke-Astvcs $D @("checkout", "--branch", "feature") "go-eof: checkout feature"
+    Copy-Item -Force "$D\version.go.theirs" "$D\version.go"
+    Invoke-Astvcs $D @("add", "version.go") "go-eof: stage feature"
+    Invoke-Astvcs $D @("commit", "--message", "append IsValidSemver") "go-eof: feature append"
+    Invoke-Astvcs $D @("checkout", "--branch", "main") "go-eof: checkout main"
+    Copy-Item -Force "$D\version.go.ours" "$D\version.go"
+    Invoke-Astvcs $D @("add", "version.go") "go-eof: stage main"
+    Invoke-Astvcs $D @("commit", "--message", "append IsDevBuild") "go-eof: main append"
+    Invoke-Astvcs $D @("merge", "feature", "--message", "merge feature") "go-eof: merge"
+    $mergedGo = Get-Content $D\version.go -Raw
+    Write-Log $mergedGo
+    if ($mergedGo -notmatch "IsDevBuild" -or $mergedGo -notmatch "IsValidSemver") {
+        throw "go-eof merge missing expected functions"
+    }
+
     # --- network-demo (file remote) ---
     & (Join-Path $PSScriptRoot "reset.ps1") 2>&1 | ForEach-Object { Write-Log $_ }
     $netRoot = "examples\network-demo"

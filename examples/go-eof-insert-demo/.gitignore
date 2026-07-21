@@ -1,0 +1,4 @@
+.astvcs/
+target/
+node_modules/
+*.png

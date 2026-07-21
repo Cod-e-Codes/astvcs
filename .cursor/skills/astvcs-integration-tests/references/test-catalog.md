@@ -16,6 +16,7 @@
 | `parse_all_supported_languages` | Every supported extension and special path parses |
 | `edit_roundtrip_preserves_structure_across_languages` | Parse, trivial edit, unparse, re-parse: structural stability and text matches edited source (Rust, Python, JS, JSON, TS, Go, HTML, CSS) |
 | `same_file_demo_disjoint_merge` | Same-file disjoint AST merge (alignment stress test) |
+| `go_eof_insert_demo_disjoint_merge` | Wide-list Go EOF append of distinct functions |
 | `disjoint_body_edits_merge_across_languages` | Every AST frontend: disjoint edits merge to parseable source via `merge_branch` (integration) |
 | `disjoint_body_edits_merge_across_languages` | Shared fixtures: `merge_files` round-trip per AST frontend (unit, `merge/language_merge_cases.rs`) |
 | `css_dimension_literals_roundtrip` | CSS `10px`/`11px` parse, diff, and merge in one rule block (unit, `frontend/treesitter.rs`) |

@@ -36,6 +36,10 @@ Reset-Fixture (Join-Path $root "same-file-demo")
 Write-FixtureFile (Join-Path $root "same-file-demo\sample.rs") "fn foo() {`n    let x = 1;`n}`n"
 Remove-Item -Force (Join-Path $root "same-file-demo\main.rs") -ErrorAction SilentlyContinue
 
+Reset-Fixture (Join-Path $root "go-eof-insert-demo")
+Copy-Item -Force (Join-Path $root "go-eof-insert-demo\version.go.base") (Join-Path $root "go-eof-insert-demo\version.go")
+Write-FixtureFile (Join-Path $root "go-eof-insert-demo\.astvcsignore") "version.go.base`nversion.go.ours`nversion.go.theirs`n"
+
 Reset-Fixture (Join-Path $root "network-demo")
 Write-FixtureFile (Join-Path $root "network-demo\note.txt") "v1`n"
 Remove-IfExists (Join-Path $root "network-demo\_upstream")

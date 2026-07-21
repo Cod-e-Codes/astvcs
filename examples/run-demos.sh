@@ -265,6 +265,30 @@ invoke_astvcs "$D" "same-file: three-way" diff --base "$base" --left main --righ
 invoke_astvcs "$D" "same-file: merge" merge feature --message "merge feature"
 write_log "$(cat "$REPO_ROOT/$D/sample.rs")"
 
+# --- go-eof-insert-demo ---
+"$SCRIPT_DIR/reset.sh" 2>&1 | while IFS= read -r line; do write_log "$line"; done
+D="examples/go-eof-insert-demo"
+invoke_astvcs "" "go-eof: init" init "$D"
+invoke_astvcs "$D" "go-eof: identity" "${IDENTITY[@]}"
+invoke_astvcs "$D" "go-eof: add baseline" add .
+invoke_astvcs "$D" "go-eof: baseline" commit --message baseline
+invoke_astvcs "$D" "go-eof: branch feature" branch create feature
+invoke_astvcs "$D" "go-eof: checkout feature" checkout --branch feature
+cp "$REPO_ROOT/$D/version.go.theirs" "$REPO_ROOT/$D/version.go"
+invoke_astvcs "$D" "go-eof: stage feature" add version.go
+invoke_astvcs "$D" "go-eof: feature append" commit --message "append IsValidSemver"
+invoke_astvcs "$D" "go-eof: checkout main" checkout --branch main
+cp "$REPO_ROOT/$D/version.go.ours" "$REPO_ROOT/$D/version.go"
+invoke_astvcs "$D" "go-eof: stage main" add version.go
+invoke_astvcs "$D" "go-eof: main append" commit --message "append IsDevBuild"
+invoke_astvcs "$D" "go-eof: merge" merge feature --message "merge feature"
+merged_go="$(cat "$REPO_ROOT/$D/version.go")"
+write_log "$merged_go"
+if ! grep -q "IsDevBuild" <<<"$merged_go" || ! grep -q "IsValidSemver" <<<"$merged_go"; then
+  echo "go-eof merge missing expected functions" >&2
+  exit 1
+fi
+
 # --- network-demo ---
 "$SCRIPT_DIR/reset.sh" 2>&1 | while IFS= read -r line; do write_log "$line"; done
 net_root="examples/network-demo"

@@ -35,6 +35,10 @@ reset_fixture "$root/same-file-demo"
 write_fixture_file "$root/same-file-demo/sample.rs" $'fn foo() {\n    let x = 1;\n}\n'
 rm -f "$root/same-file-demo/main.rs"
 
+reset_fixture "$root/go-eof-insert-demo"
+cp "$root/go-eof-insert-demo/version.go.base" "$root/go-eof-insert-demo/version.go"
+write_fixture_file "$root/go-eof-insert-demo/.astvcsignore" $'version.go.base\nversion.go.ours\nversion.go.theirs\n'
+
 reset_fixture "$root/network-demo"
 write_fixture_file "$root/network-demo/note.txt" $'v1\n'
 remove_if_exists "$root/network-demo/_upstream"

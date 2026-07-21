@@ -662,6 +662,48 @@ fn same_file_demo_disjoint_merge() {
 }
 
 #[test]
+fn go_eof_insert_demo_disjoint_merge() {
+    let dir = TempDir::new().unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/go-eof-insert-demo");
+    copy_fixture(&dir, &fixture).unwrap();
+    let base = fs::read_to_string(fixture.join("version.go.base")).unwrap();
+    let ours = fs::read_to_string(fixture.join("version.go.ours")).unwrap();
+    let theirs = fs::read_to_string(fixture.join("version.go.theirs")).unwrap();
+    let repo = Repo::init_with_identity(dir.path()).unwrap();
+    fs::write(dir.path().join("version.go"), &base).unwrap();
+    repo.commit("baseline").unwrap();
+    repo.create_branch("feature", None).unwrap();
+
+    fs::write(dir.path().join("version.go"), &ours).unwrap();
+    repo.commit("append IsDevBuild").unwrap();
+
+    repo.checkout_branch("feature").unwrap();
+    fs::write(dir.path().join("version.go"), &theirs).unwrap();
+    repo.commit("append IsValidSemver").unwrap();
+
+    repo.checkout_branch("main").unwrap();
+    let merged = repo.merge_branch("feature", "merge feature").unwrap();
+    let files = repo.load_state_files(&merged).unwrap();
+    let text = match &files["version.go"].content {
+        astvcs::FileContent::Ast(g) => unparse(g),
+        other => panic!("expected ast, got {other:?}"),
+    };
+    assert!(
+        text.contains("IsDevBuild"),
+        "merged source missing IsDevBuild: {text}"
+    );
+    assert!(
+        text.contains("IsValidSemver"),
+        "merged source missing IsValidSemver: {text}"
+    );
+    let disk = fs::read_to_string(dir.path().join("version.go")).unwrap();
+    assert!(
+        disk.contains("IsDevBuild") && disk.contains("IsValidSemver"),
+        "disk version.go missing both appends: {disk}"
+    );
+}
+
+#[test]
 fn disjoint_body_edits_merge_across_languages() {
     use astvcs::frontend::parse_source;
     use astvcs::merge::language_merge_cases;

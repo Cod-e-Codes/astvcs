@@ -248,6 +248,18 @@ pub fn language_merge_cases() -> &'static [LanguageMergeCase] {
             right_markers: &["19px"],
             forbidden: &[],
         },
+        // Wide sibling list (product > LCS_THRESHOLD) with several empty-payload
+        // Function siblings: both sides append a different function at EOF.
+        LanguageMergeCase {
+            label: "go-eof-near-duplicate-functions",
+            path: "version.go",
+            base: include_str!("../../examples/go-eof-insert-demo/version.go.base"),
+            left: include_str!("../../examples/go-eof-insert-demo/version.go.ours"),
+            right: include_str!("../../examples/go-eof-insert-demo/version.go.theirs"),
+            left_markers: &["IsDevBuild"],
+            right_markers: &["IsValidSemver"],
+            forbidden: &[],
+        },
     ];
     CASES
 }

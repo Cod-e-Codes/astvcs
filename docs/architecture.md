@@ -143,8 +143,9 @@ Materialization uses trivia-aware unparsing (see **Working tree materialization*
 
 1. Parse old and new sources into graphs.
 2. Align children between old and new. When sibling `NodeId` sequences are equal (identical reparse or unchanged list), pair by index and recurse without LCS. Otherwise use hash-anchor passes on wide sibling lists (`old.len() * new.len() > 48`), or the full-list LCS path:
-   - **Wide-list id pass**: LCS on structural `(kind, payload)` keys per child (not bare content-addressed `NodeId`), so duplicate punctuation tokens align by list position rather than shared hash identity.
-   - **Id pass**: `lcs_pairs` on the full sibling `NodeId` sequence (wide lists) or the same on narrow lists; duplicate content-addressed tokens are then **re-paired by ordinal position** (preferring same list index when one occurrence was edited away, otherwise minimizing index distance) so LCS subsequence skew does not leave a phantom separator unmatched.
+   - **Wide-list identity pass**: pair each content-addressed `NodeId` that appears exactly once on each side first, so unchanged unique siblings stay matched when another same-kind empty-payload sibling is appended or prepended (for example several Go `Function` nodes). Without this, LCS on `(kind, payload)` alone can shift every match by one. Duplicate ids (commas, repeated literals) are left for later passes.
+   - **Wide-list structural LCS**: LCS on structural `(kind, payload)` keys for remaining unmatched children (not bare `NodeId`), so edited parents that kept kind and payload can still pair when their child lists diverged.
+   - **Narrow-list id pass**: `lcs_pairs` on the full sibling `NodeId` sequence; duplicate content-addressed tokens are then **re-paired by ordinal position** (preferring same list index when one occurrence was edited away, otherwise minimizing index distance) so LCS subsequence skew does not leave a phantom separator unmatched.
    - **Key pass** (wide): in-order zip within each `(NodeKind, payload, child_count)` bucket; **role pass** (wide): same for `(NodeKind, child_count)`.
    - **Bounded LCS**: when the unmatched cross-product is at most 48, run full-list role then key LCS on the remainder (same anchor semantics as before).
    - **Fingerprint pass**: hash buckets of preorder structure signatures; pair when bucket size is 1 on each side.
@@ -288,6 +289,7 @@ examples/
   merge-demo/     add/add, deletion, and config fixtures
   identity-demo/  literal EditPayload, sibling literal merge, rename conflict
   same-file-demo/ same-file disjoint AST merge (rename + insert)
+  go-eof-insert-demo/ wide-list Go EOF append of distinct functions
 tests/
   integration.rs
   git_drivers.rs
@@ -319,6 +321,7 @@ Unit tests live beside modules under `src/`. `tests/integration.rs` exercises th
 | `rust_unparse_roundtrip_via_repo` | Commit and reload preserves Rust source bytes |
 | `go_unparse_roundtrip_via_repo` | Commit, reload, and checkout preserve Go source bytes including block closing newlines |
 | `same_file_demo_disjoint_merge` | Same-file rename + insert merge keeps formatting (stress test for alignment heuristics) |
+| `go_eof_insert_demo_disjoint_merge` | Wide-list Go near-duplicate functions: both sides append distinct EOF functions |
 | `cli_diff_view_writes_html_with_alignment` | `diff --view` writes temp HTML embedding path, intents, and alignment export |
 | `cli_diff_view_large_file_keeps_change_first_controls` | Generated large AST diff keeps change navigation and lazy unchanged-tree controls |
 | `viewer_javascript_indexes_all_file_modes_and_targets_insertions` | Executes shipped viewer logic for non-AST navigation and inserted-node targeting |

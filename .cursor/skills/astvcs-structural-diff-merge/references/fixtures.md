@@ -4,6 +4,7 @@
 |---------|------------------|-----------|
 | `examples/workflow-demo/` | `workflow_demo_prepend_and_disjoint_merge` | Staging (`add .`); prepend without move cascade; disjoint file merge |
 | `examples/same-file-demo/` | `same_file_demo_disjoint_merge` | Same-file rename + insert merge |
+| `examples/go-eof-insert-demo/` | `go_eof_insert_demo_disjoint_merge` | Wide-list Go EOF append of distinct functions |
 | `examples/merge-demo/` | `merge_demo_add_add_and_deletion`, `merge_demo_deletion_when_other_branch_unchanged` | Add/add, modify vs delete |
 | `examples/identity-demo/` | `identity_demo_payload_edit_disjoint_merge_and_conflict` | EditPayload, sibling literal merge, rename conflict |
 | `examples/network-demo/` | `network_file_remote_fetch_push_and_clone` | File remote clone, push |
@@ -20,7 +21,7 @@ Reset fixtures before manual CLI walks:
 ./examples/reset.sh
 ```
 
-Run all nine fixture walkthroughs non-interactively:
+Run all ten fixture walkthroughs non-interactively:
 
 ```bash
 ./examples/run-demos.sh

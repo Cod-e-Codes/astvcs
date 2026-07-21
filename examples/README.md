@@ -2,7 +2,7 @@
 
 Runnable walkthroughs for the astvcs CLI. Project overview and quick start: [README.md](../README.md). Full command reference: [docs/commands.md](../docs/commands.md).
 
-Nine fixtures cover structural merge scenarios, network sync, lifecycle commands, shallow clone, git import, and HTTP serve. Run from the astvcs repo root.
+Ten fixtures cover structural merge scenarios, network sync, lifecycle commands, shallow clone, git import, and HTTP serve. Run from the astvcs repo root.
 
 ```bash
 cargo build --release
@@ -42,6 +42,7 @@ Integration tests in `tests/integration.rs` cover the same scenarios in CI. The 
 |---------|------------------|---------------|
 | `workflow-demo/` | `workflow_demo_prepend_and_disjoint_merge` | Staging (`add .`); prepend comment without move cascade; branch; disjoint file merge |
 | `same-file-demo/` | `same_file_demo_disjoint_merge` | Same-file disjoint edits (rename + insert) merge without `--resolve`; formatting preserved |
+| `go-eof-insert-demo/` | `go_eof_insert_demo_disjoint_merge` | Near-duplicate Go functions plus multi-branch loop; both sides append different EOF functions |
 | `merge-demo/` | `merge_demo_add_add_and_deletion`, `merge_demo_deletion_when_other_branch_unchanged` | Add/add on a new file; modify vs delete |
 | `identity-demo/` | `identity_demo_payload_edit_disjoint_merge_and_conflict` | Literal edits as `EditPayload`; sibling literal merge; rename conflict |
 | `network-demo/` | `network_file_remote_fetch_push_and_clone` | File remote `clone`, identity, commit, `push` |
@@ -231,6 +232,35 @@ fn foo() {
 ```
 
 The integration test asserts this exact text on disk, including indentation and newlines.
+
+## Go EOF insert demo
+
+Regression for wide sibling lists: several empty-payload `Function` siblings (near-duplicate helpers plus a multi-branch loop) where both branches append a different function at EOF. Side copies `version.go.base`, `version.go.ours`, and `version.go.theirs` are listed in `.astvcsignore` so only `version.go` is tracked during the walkthrough.
+
+```powershell
+.\examples\reset.ps1
+$D = "examples\go-eof-insert-demo"
+.\target\release\astvcs.exe init $D
+.\target\release\astvcs.exe --repo $D identity set --name "Example" --email example@astvcs.local
+.\target\release\astvcs.exe --repo $D add .
+.\target\release\astvcs.exe --repo $D commit --message "baseline"
+
+.\target\release\astvcs.exe --repo $D branch create feature
+.\target\release\astvcs.exe --repo $D checkout --branch feature
+Copy-Item -Force $D\version.go.theirs $D\version.go
+.\target\release\astvcs.exe --repo $D add version.go
+.\target\release\astvcs.exe --repo $D commit --message "append IsValidSemver"
+
+.\target\release\astvcs.exe --repo $D checkout --branch main
+Copy-Item -Force $D\version.go.ours $D\version.go
+.\target\release\astvcs.exe --repo $D add version.go
+.\target\release\astvcs.exe --repo $D commit --message "append IsDevBuild"
+
+.\target\release\astvcs.exe --repo $D merge feature --message "merge feature"
+Get-Content $D\version.go
+```
+
+After merge, both `IsDevBuild` and `IsValidSemver` are present. The unit case `go-eof-near-duplicate-functions` in `language_merge_cases.rs` covers the same inputs through `merge_files`.
 
 ## Network demo (file remote)
 

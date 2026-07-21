@@ -44,7 +44,7 @@ assert!(out.status.success());
 - Add `.gitignore` in the fixture if generated artifacts appear during manual runs.
 - Document CLI steps in [examples/README.md](../../../examples/README.md) with a table row linking fixture, test name, and what it shows.
 - Use `./examples/reset.sh` in docs to restore baseline files (Windows: `.\examples\reset.ps1`).
-- After changing fixture walkthroughs, run `./examples/run-demos.sh` to replay all nine fixtures (includes `identity set`, staging, `reset --mixed`, file remote sync, lifecycle commands, shallow clone, optional `import-git`, and HTTP serve).
+- After changing fixture walkthroughs, run `./examples/run-demos.sh` to replay all ten fixtures (includes `identity set`, staging, `reset --mixed`, file remote sync, lifecycle commands, shallow clone, optional `import-git`, and HTTP serve).
 
 ### Assertions worth including
 
