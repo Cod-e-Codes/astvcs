@@ -30,6 +30,7 @@ Verify: `astvcs --version` should print `0.1.5`.
 
 - Fix wide-list alignment: uniquely pair content-addressed NodeIds before structural LCS so several empty-payload Function siblings plus an EOF append no longer invent false overlaps
 - Add `examples/go-eof-insert-demo/` and language-merge coverage for that case
+
 ### v0.1.4
 
 - Fix same-site insert unparse: apply shared anchor `SetTrivia` once and synthesize separator trivia between multiple inserts at one site (avoids Python `@a@b@x` matmul corruption)
