@@ -31,6 +31,7 @@ Verify: `astvcs --version` should print `0.1.6`.
 - Add Dependabot for Cargo and GitHub Actions (grouped tree-sitter, cargo-dev, and Actions updates)
 - Bump direct crates: clap, base64, ignore, similar, regex, serde, serde_json, tree-sitter
 - Bump GitHub Actions used by CI and release workflows
+- Serialize identity tests that touch `ASTVCS_AUTHOR_*` so parallel cargo test no longer races env overrides into repo-local identity checks
 
 ### v0.1.5
 
