@@ -4,7 +4,7 @@ Copy this outline when drafting a GitHub Release for a new tag. Project overview
 
 ## Version
 
-`v0.1.5` (matches `Cargo.toml` `version` and `astvcs --version`)
+`v0.1.6` (matches `Cargo.toml` `version` and `astvcs --version`)
 
 ## Requirements
 
@@ -22,9 +22,15 @@ Download the platform archive from [GitHub Releases](https://github.com/Cod-e-Co
 
 Each archive contains three binaries: `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver` (`.exe` on Windows). The `v0.1.0` archives shipped only the main `astvcs` binary.
 
-Verify: `astvcs --version` should print `0.1.5`.
+Verify: `astvcs --version` should print `0.1.6`.
 
 ## Changelog
+
+### v0.1.6
+
+- Add Dependabot for Cargo and GitHub Actions (grouped tree-sitter, cargo-dev, and Actions updates)
+- Bump direct crates: clap, base64, ignore, similar, regex, serde, serde_json, tree-sitter
+- Bump GitHub Actions used by CI and release workflows
 
 ### v0.1.5
 
