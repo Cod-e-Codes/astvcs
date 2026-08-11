@@ -218,6 +218,8 @@ mod tests {
 
     #[test]
     fn repo_local_identity_roundtrip() {
+        let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::clear();
         let dir = TempDir::new().unwrap();
         let repo = Repo::init(dir.path()).unwrap();
         setup_identity(&repo);
@@ -230,19 +232,16 @@ mod tests {
     #[test]
     fn env_overrides_repo_config() {
         let _guard = IDENTITY_TEST_LOCK.lock().unwrap();
+        let _env = AuthorEnvGuard::set([
+            ("ASTVCS_AUTHOR_NAME", "Env User"),
+            ("ASTVCS_AUTHOR_EMAIL", "env@example.com"),
+        ]);
         let dir = TempDir::new().unwrap();
         let repo = Repo::init(dir.path()).unwrap();
         setup_identity(&repo);
-        unsafe {
-            std::env::set_var("ASTVCS_AUTHOR_NAME", "Env User");
-            std::env::set_var("ASTVCS_AUTHOR_EMAIL", "env@example.com");
-        }
         let id = resolve_author_identity(&repo).unwrap();
         assert_eq!(id.name, "Env User");
-        unsafe {
-            std::env::remove_var("ASTVCS_AUTHOR_NAME");
-            std::env::remove_var("ASTVCS_AUTHOR_EMAIL");
-        }
+        assert_eq!(id.email, "env@example.com");
     }
 
     #[test]
