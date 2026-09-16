@@ -4,7 +4,7 @@ Copy this outline when drafting a GitHub Release for a new tag. Project overview
 
 ## Version
 
-`v0.1.6` (matches `Cargo.toml` `version` and `astvcs --version`)
+`v0.1.7` (matches `Cargo.toml` `version` and `astvcs --version`)
 
 ## Requirements
 
@@ -22,9 +22,14 @@ Download the platform archive from [GitHub Releases](https://github.com/Cod-e-Co
 
 Each archive contains three binaries: `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver` (`.exe` on Windows). The `v0.1.0` archives shipped only the main `astvcs` binary.
 
-Verify: `astvcs --version` should print `0.1.6`.
+Verify: `astvcs --version` should print `0.1.7`.
 
 ## Changelog
+
+### v0.1.7
+
+- Bump direct crates: reqwest, similar, tree-sitter, zstd
+- Bump dev-dependency rcgen
 
 ### v0.1.6
 

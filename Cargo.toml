@@ -1,6 +1,6 @@
 [package]
 name = "astvcs"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 license = "MIT"
 
@@ -26,14 +26,14 @@ clap = { version = "4.6.1", features = ["derive"] }
 hex = "0.4.3"
 ignore = "0.4.26"
 regex = "1.12.4"
-reqwest = { version = "0.13.4", features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13.5", features = ["blocking", "json", "rustls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
-similar = "3.1.1"
+similar = "3.2.0"
 subtle = "2.6.1"
 tiny_http = { version = "0.12.0", features = ["ssl-rustls"] }
-tree-sitter = "0.26.9"
+tree-sitter = "0.26.12"
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
 tree-sitter-c-sharp = "0.23.5"
@@ -54,10 +54,10 @@ tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
-zstd = "0.13.3"
+zstd = "0.14.0"
 
 [dev-dependencies]
 proptest = "1.11.0"
 rand = "0.10.2"
-rcgen = "0.14.8"
+rcgen = "0.14.10"
 tempfile = "3.27.0"
