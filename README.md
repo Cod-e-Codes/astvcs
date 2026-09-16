@@ -46,7 +46,7 @@ To inspect how nodes were paired, run `astvcs diff --view` (optionally with a pa
 | [docs/commands.md](docs/commands.md) | Full CLI reference (every subcommand and flag) |
 | [docs/architecture.md](docs/architecture.md) | Repository model, diff/merge internals, locking, network, gc/fsck |
 | [docs/git-integration.md](docs/git-integration.md) | Optional Git merge/diff drivers (no `.astvcs/` required) |
-| [examples/README.md](examples/README.md) | Nine runnable fixture walkthroughs |
+| [examples/README.md](examples/README.md) | Ten runnable fixture walkthroughs |
 | [docs/RELEASE.md](docs/RELEASE.md) | Tagged release packaging |
 
 Contributor Agent Skills live under [`.cursor/skills/`](.cursor/skills/) (`astvcs-develop`, `astvcs-output-ux`, `astvcs-structural-diff-merge`, `astvcs-add-tree-sitter-language`, `astvcs-integration-tests`).
