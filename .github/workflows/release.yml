@@ -90,11 +90,38 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          $md = Get-Content -Raw -Path docs/RELEASE.md
+          $start = $md.IndexOf("## Requirements")
+          $changelogAt = $md.IndexOf("## Changelog")
+          if ($start -lt 0 -or $changelogAt -lt 0) { throw "docs/RELEASE.md is missing Requirements or Changelog" }
+          $front = $md.Substring($start, $changelogAt - $start).TrimEnd()
+          $versions = [regex]::Matches($md, '(?m)^### (v\d+\.\d+\.\d+)') | ForEach-Object { $_.Groups[1].Value }
+          if ($versions.Count -lt 2) { throw "docs/RELEASE.md needs the current and previous changelog sections" }
+          $current = $versions[0]
+          $previous = $versions[1]
+          $pattern = "(?s)### " + [regex]::Escape($current) + "\r?\n(.*?)(?=\r?\n### v|\z)"
+          $section = [regex]::Match($md, $pattern)
+          if (-not $section.Success) { throw "missing changelog section for $current" }
+          $bullets = $section.Groups[1].Value.Trim()
+          $compare = "https://github.com/$env:GITHUB_REPOSITORY/compare/${previous}...${current}"
+          @(
+            $front
+            ""
+            "## Changelog"
+            ""
+            $bullets
+            ""
+            "**Full Changelog**: $compare"
+          ) -join "`n" | Set-Content -Path release-notes.md -Encoding utf8NoBOM
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: release-notes.md

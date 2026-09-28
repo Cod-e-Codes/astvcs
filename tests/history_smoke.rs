@@ -185,30 +185,31 @@ impl HistoryModel {
 
     fn diff_head(&mut self) -> Result<(), String> {
         let head = self.repo.head_state().map_err(|e| e.to_string())?;
-        let parent = self
+        if let Some(parent) = self
             .repo
             .load_timeline_entry(&head)
             .map_err(|e| e.to_string())?
             .parent
-            .ok_or_else(|| "head has no parent".to_string())?;
-        let head_files = self
-            .repo
-            .load_state_files(&head)
-            .map_err(|e| e.to_string())?;
-        let parent_files = self
-            .repo
-            .load_state_files(&parent)
-            .map_err(|e| e.to_string())?;
-        for path in head_files
-            .keys()
-            .chain(parent_files.keys())
-            .collect::<HashSet<_>>()
         {
-            if let (Some(old), Some(new)) = (parent_files.get(path), head_files.get(path))
-                && let (astvcs::FileContent::Ast(old_g), astvcs::FileContent::Ast(new_g)) =
-                    (&old.content, &new.content)
+            let head_files = self
+                .repo
+                .load_state_files(&head)
+                .map_err(|e| e.to_string())?;
+            let parent_files = self
+                .repo
+                .load_state_files(&parent)
+                .map_err(|e| e.to_string())?;
+            for path in head_files
+                .keys()
+                .chain(parent_files.keys())
+                .collect::<HashSet<_>>()
             {
-                let _diff = diff_graphs(old_g, new_g);
+                if let (Some(old), Some(new)) = (parent_files.get(path), head_files.get(path))
+                    && let (astvcs::FileContent::Ast(old_g), astvcs::FileContent::Ast(new_g)) =
+                        (&old.content, &new.content)
+                {
+                    let _diff = diff_graphs(old_g, new_g);
+                }
             }
         }
         std::fs::read_to_string(self.root.join(RUST_CALC_PATH))

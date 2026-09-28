@@ -14,7 +14,7 @@ metadata:
 ## Gather
 
 1. Confirm the extension is not already listed in [docs/architecture.md](../../../docs/architecture.md).
-2. Find a maintained `tree-sitter-*` crate on crates.io compatible with `tree-sitter = "0.26.12"`.
+2. Find a maintained `tree-sitter-*` crate on crates.io compatible with `tree-sitter = "0.27.0"`.
 3. Read `src/frontend/languages.rs`, `src/frontend/treesitter.rs`, and `supported_extensions()` in `src/lib.rs`.
 
 ## Act
