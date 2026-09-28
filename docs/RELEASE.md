@@ -4,7 +4,7 @@ Copy this outline when drafting a GitHub Release for a new tag. Project overview
 
 ## Version
 
-`v0.1.7` (matches `Cargo.toml` `version` and `astvcs --version`)
+`v0.1.8` (matches `Cargo.toml` `version` and `astvcs --version`)
 
 ## Requirements
 
@@ -22,9 +22,16 @@ Download the platform archive from [GitHub Releases](https://github.com/Cod-e-Co
 
 Each archive contains three binaries: `astvcs`, `astvcs-merge-driver`, and `astvcs-diff-driver` (`.exe` on Windows). The `v0.1.0` archives shipped only the main `astvcs` binary.
 
-Verify: `astvcs --version` should print `0.1.7`.
+Verify: `astvcs --version` should print `0.1.8`.
 
 ## Changelog
+
+### v0.1.8
+
+- Bump direct crate tree-sitter to 0.27.0
+- Bump lockfile crates clap to 4.6.7 and rand to 0.10.3
+- Skip parent diffs in the history driver when HEAD is the root commit so the long history test can finish
+- Publish GitHub Release notes from the current section of this file
 
 ### v0.1.7
 
